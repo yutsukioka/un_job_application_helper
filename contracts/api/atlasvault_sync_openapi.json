@@ -1,0 +1,1345 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AtlasVault Zero-Knowledge Sync API",
+    "version": "1.2.0",
+    "description": "Account/device-authorized ciphertext-only storage with conditional revisions, safe retries, bounded requests, throttling, and secret-free observability."
+  },
+  "x-atlasvault-c15-controls": {
+    "accountRequestLimit": 40,
+    "deviceRequestLimit": 24,
+    "bootstrapVerificationLimit": 64,
+    "accountVerificationLimit": 64,
+    "maxRetainedAccounts": 1024,
+    "maxLiveChallenges": 4096,
+    "maxChallengesPerDevice": 8,
+    "maxLiveSessions": 4096,
+    "maxSessionsPerDevice": 8,
+    "maxDevicesPerAccount": 256,
+    "maxRetainedVaults": 4096,
+    "maxRetainedVaultsPerAccount": 128,
+    "maxRetainedObjectsPerAccount": 16384,
+    "maxRetainedPatchesPerAccount": 65536,
+    "maxRetainedRevisionsPerAccount": 131072,
+    "maxRetainedBytes": 1073741824,
+    "maxRetainedBytesPerAccount": 268435456,
+    "reservedRetainedBytes": 268435456,
+    "rateWindowSeconds": 60,
+    "maxRequestBytes": 201326592,
+    "maxAccountRequestBytes": 65536,
+    "telemetryDimensions": [
+      "category",
+      "outcome",
+      "count"
+    ]
+  },
+  "paths": {
+    "/v1/accounts/{account_id}/devices/bootstrap": {
+      "post": {
+        "operationId": "bootstrapAccountDevice",
+        "summary": "Create an account from a self-signed initial device transition",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          },
+          {
+            "$ref": "#/components/parameters/BootstrapAdmission"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedDeviceRegistryTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "201": {
+            "description": "Account and initial public device registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/auth/challenges": {
+      "post": {
+        "operationId": "createAccountChallenge",
+        "summary": "Issue a one-time challenge for an active public device",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthenticationChallengeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "201": {
+            "description": "One-time device challenge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticationChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/sessions": {
+      "post": {
+        "operationId": "createAccountSession",
+        "summary": "Exchange a signed one-time challenge for an account-scoped session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionProofRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "201": {
+            "description": "Short-lived account and device session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/devices": {
+      "get": {
+        "operationId": "listAccountDevices",
+        "summary": "List the authenticated account's signed public-device registry",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Current signed public-device registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistryView"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addAccountDevice",
+        "summary": "Apply an add-only signed public-device transition",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedDeviceRegistryTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Updated signed public-device registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/metadata": {
+      "put": {
+        "operationId": "putEncryptedVaultMetadata",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EncryptedVaultMetadataEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque encrypted metadata accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EncryptedVaultMetadataEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getEncryptedVaultMetadata",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque encrypted metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EncryptedVaultMetadataEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/objects/{object_id}": {
+      "put": {
+        "operationId": "putOpaqueCiphertextObject",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque ciphertext object accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getOpaqueCiphertextObject",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque ciphertext object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/patches": {
+      "post": {
+        "operationId": "appendEncryptedPatch",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "201": {
+            "description": "Opaque encrypted patch accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listEncryptedPatches",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque encrypted patch page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/snapshots": {
+      "put": {
+        "operationId": "putEncryptedSnapshot",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque encrypted snapshot accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getEncryptedSnapshot",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "200": {
+            "description": "Opaque encrypted snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque-session-token"
+      }
+    },
+    "parameters": {
+      "AccountId": {
+        "name": "account_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^ava1-[0-9a-f]{64}$"
+        }
+      },
+      "BootstrapAdmission": {
+        "name": "X-AtlasVault-Bootstrap-Admission",
+        "in": "header",
+        "required": false,
+        "description": "One-time process-local admission bound to this account ID; absence or mismatch fails with 401.",
+        "schema": {
+          "type": "string",
+          "minLength": 70,
+          "maxLength": 70,
+          "pattern": "^avba1-[0-9a-f]{64}$"
+        }
+      },
+      "VaultId": {
+        "name": "vault_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$"
+        }
+      },
+      "ObjectId": {
+        "name": "object_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$"
+        }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "Quoted strong entity-tag for the opaque current revision, or * when creating an absent resource.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 130,
+          "pattern": "^(?:\\*|\"[A-Za-z0-9._~-]+\")$"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Opaque client operation identifier scoped to one resource operation.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[!-~]+$"
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque server-issued cursor for a stable patch-list snapshot.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "PageSize": {
+        "name": "page_size",
+        "in": "query",
+        "required": false,
+        "description": "Requested page size for the first page; later pages retain it in server cursor state.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "responses": {
+      "InvalidRequest": {
+        "description": "Request or signature is invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Account or device authentication failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Account, registry, conditional revision, or idempotency conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Opaque resource was not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
+      },
+      "RequestTooLarge": {
+        "description": "Request body exceeds the fixed ciphertext request ceiling",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Authenticated account or device request window is exhausted",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "description": "Request path, header, or body validation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RequestValidationFailure"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "FixedErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "RequestValidationFailure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "Invalid request."
+          }
+        }
+      },
+      "DeviceDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "device_id",
+          "signing_public_key",
+          "agreement_public_key",
+          "created_at",
+          "key_epoch"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-device-descriptor"
+          },
+          "version": {
+            "const": 1
+          },
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          },
+          "signing_public_key": {
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
+            "contentEncoding": "base64"
+          },
+          "agreement_public_key": {
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
+            "contentEncoding": "base64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          }
+        }
+      },
+      "SignedDeviceDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "descriptor",
+          "signature"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-signed-device-descriptor"
+          },
+          "version": {
+            "const": 1
+          },
+          "descriptor": {
+            "$ref": "#/components/schemas/DeviceDescriptor"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 88,
+            "maxLength": 88,
+            "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "DeviceRegistryTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "revision",
+          "parent_revision",
+          "operation",
+          "device",
+          "signer_device_id"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-device-registry-transition"
+          },
+          "version": {
+            "const": 1
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^ava1-[0-9a-f]{64}$"
+          },
+          "revision": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "parent_revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "operation": {
+            "const": "add"
+          },
+          "device": {
+            "$ref": "#/components/schemas/SignedDeviceDescriptor"
+          },
+          "signer_device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          }
+        }
+      },
+      "SignedDeviceRegistryTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "transition",
+          "signature"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-signed-device-registry-transition"
+          },
+          "version": {
+            "const": 1
+          },
+          "transition": {
+            "$ref": "#/components/schemas/DeviceRegistryTransition"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 88,
+            "maxLength": 88,
+            "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "AuthenticationChallengeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device_id"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          }
+        }
+      },
+      "AuthenticationChallenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "challenge_id",
+          "challenge",
+          "expires_in_seconds"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "pattern": "^avc1-[0-9a-f]{32}$"
+          },
+          "challenge": {
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
+            "contentEncoding": "base64"
+          },
+          "expires_in_seconds": {
+            "const": 120
+          }
+        }
+      },
+      "SessionProofRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device_id",
+          "challenge_id",
+          "signature"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          },
+          "challenge_id": {
+            "type": "string",
+            "pattern": "^avc1-[0-9a-f]{32}$"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 88,
+            "maxLength": 88,
+            "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "SessionGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token_type",
+          "access_token",
+          "expires_in_seconds"
+        ],
+        "properties": {
+          "token_type": {
+            "const": "Bearer"
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in_seconds": {
+            "const": 900
+          }
+        }
+      },
+      "DeviceRegistryView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "revision",
+          "devices"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-server-device-registry"
+          },
+          "version": {
+            "const": 1
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^ava1-[0-9a-f]{64}$"
+          },
+          "revision": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignedDeviceDescriptor"
+            }
+          }
+        }
+      },
+      "EncryptedVaultMetadataEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "vault_id",
+          "revision",
+          "key_epoch",
+          "nonce_b64",
+          "ciphertext_b64",
+          "aad_b64",
+          "signature_b64",
+          "content_sha256"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-encrypted-metadata-envelope"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "vault_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "not": {
+              "const": "*"
+            }
+          },
+          "key_epoch": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "nonce_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "ciphertext_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "aad_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "signature_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "OpaqueCiphertextEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "object_id",
+          "revision",
+          "parent_revision",
+          "key_epoch",
+          "nonce_b64",
+          "ciphertext_b64",
+          "aad_b64",
+          "signature_b64",
+          "tombstone",
+          "content_sha256"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-opaque-ciphertext-envelope"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "object_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "not": {
+              "const": "*"
+            }
+          },
+          "parent_revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "not": {
+              "const": "*"
+            }
+          },
+          "key_epoch": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "nonce_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "ciphertext_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "aad_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "signature_b64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          },
+          "tombstone": {
+            "type": "boolean"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "OpaqueCiphertextPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "objects",
+          "next_cursor"
+        ],
+        "properties": {
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
