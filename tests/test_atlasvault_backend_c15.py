@@ -45,6 +45,8 @@ DEVICE_REQUEST_LIMIT = 24
 ACCOUNT_REQUEST_LIMIT = 40
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
 MAX_RETAINED_ACCOUNTS = 1024
+MAX_LIVE_CHALLENGES = 4096
+MAX_DEVICES_PER_ACCOUNT = 256
 OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 
 
@@ -510,6 +512,8 @@ def test_c15_contract_declares_storage_controls() -> None:
         "accountRequestLimit": ACCOUNT_REQUEST_LIMIT,
         "deviceRequestLimit": DEVICE_REQUEST_LIMIT,
         "maxRetainedAccounts": MAX_RETAINED_ACCOUNTS,
+        "maxLiveChallenges": MAX_LIVE_CHALLENGES,
+        "maxDevicesPerAccount": MAX_DEVICES_PER_ACCOUNT,
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "rateWindowSeconds": 60,
         "telemetryDimensions": ["category", "outcome", "count"],

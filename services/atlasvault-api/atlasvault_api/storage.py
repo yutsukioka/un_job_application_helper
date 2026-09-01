@@ -13,7 +13,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 OPAQUE_ID_MAX_LENGTH = 128
-OPAQUE_ID_PATTERN = r"^[A-Za-z0-9._~-]+$"
+OPAQUE_ID_PATTERN = (
+    r"^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|"
+    r"\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|"
+    r"\.\.[A-Za-z0-9._~-]+)$"
+)
 REVISION_MAX_LENGTH = 128
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 DEFAULT_PAGE_SIZE = 100

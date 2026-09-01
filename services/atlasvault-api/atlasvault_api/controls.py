@@ -14,6 +14,8 @@ DEFAULT_DEVICE_REQUEST_LIMIT = 24
 DEFAULT_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_MAX_REQUEST_BYTES = 192 * 1024 * 1024
 DEFAULT_MAX_ACCOUNTS = 1024
+DEFAULT_MAX_CHALLENGES = 4096
+DEFAULT_MAX_DEVICES_PER_ACCOUNT = 256
 MAX_RETAINED_SECURITY_EVENTS = 256
 
 _CATEGORIES = frozenset({"account", "storage", "other"})
@@ -37,6 +39,8 @@ class AbuseControlPolicy:
     window_seconds: float = DEFAULT_RATE_WINDOW_SECONDS
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     max_accounts: int = DEFAULT_MAX_ACCOUNTS
+    max_challenges: int = DEFAULT_MAX_CHALLENGES
+    max_devices_per_account: int = DEFAULT_MAX_DEVICES_PER_ACCOUNT
 
     def __post_init__(self) -> None:
         if (
@@ -46,6 +50,8 @@ class AbuseControlPolicy:
             or self.window_seconds <= 0
             or self.max_request_bytes < 1
             or self.max_accounts < 1
+            or self.max_challenges < 1
+            or self.max_devices_per_account < 1
         ):
             raise ValueError("invalid abuse-control policy")
 
