@@ -939,6 +939,43 @@ def test_c15_challenge_issuance_does_not_scan_live_challenges() -> None:
     assert len(backend._challenges) == 1
 
 
+def test_c15_consumed_challenges_keep_expiry_slots_bounded() -> None:
+    now = [3_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+        abuse_policy=AbuseControlPolicy(
+            max_challenges=1,
+            max_challenges_per_device=1,
+        ),
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    proof = _challenge_proof(client, device, account_id=ACCOUNT_A)
+    proof["signature"] = _encode64(bytes(64))
+
+    rejected = client.post(f"/v1/accounts/{ACCOUNT_A}/sessions", json=proof)
+    assert rejected.status_code == 401
+    assert backend._challenges == {}
+    assert len(backend._challenge_expiries) == 1
+
+    limited = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": device.device_id},
+    )
+    assert limited.status_code == 429
+    assert len(backend._challenge_expiries) == 1
+
+    now[0] += 121
+    replacement = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": device.device_id},
+    )
+    assert replacement.status_code == 201, replacement.text
+    assert len(backend._challenge_expiries) == 1
+
+
 def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
     policy = AbuseControlPolicy(
         account_request_limit=11,

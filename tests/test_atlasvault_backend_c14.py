@@ -1353,3 +1353,32 @@ def test_c14_retained_storage_quotas_fail_before_mutation() -> None:
     )
     assert limited.status_code == 429
     assert backend.storage._vaults == {}
+
+
+def test_c14_duplicate_receipts_retain_only_attempt_fingerprints(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+) -> None:
+    backend, client, authorization = storage_client
+    envelope = _metadata(revision="receipt-fingerprint-r1", payload=b"opaque")
+    path = f"/v1/vaults/{VAULT_ID}/metadata"
+
+    for key in ("receipt-fingerprint-first", "receipt-fingerprint-duplicate"):
+        response = client.put(
+            path,
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key=key,
+            ),
+            json=envelope,
+        )
+        assert response.status_code == 200, response.text
+
+    state = backend.storage._vaults[(ACCOUNT_ID, VAULT_ID)]
+    assert len(state.receipts) == 2
+    for receipt in state.receipts.values():
+        attempt = vars(receipt.attempt)
+        assert set(attempt) == {"expected_revision", "envelope_fingerprint"}
+        assert isinstance(attempt["envelope_fingerprint"], bytes)
+        assert len(attempt["envelope_fingerprint"]) == hashlib.sha256().digest_size
+        assert receipt.response is state.metadata
