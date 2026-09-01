@@ -11,6 +11,11 @@ import '../cache_file_replacement.dart';
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';
 const _queueEnvelopeFormat = 'atlasvault-encrypted-transfer-queue';
+const _snapshotFormat = 'atlasvault-authenticated-collection-snapshot';
+const _snapshotPayloadFormat =
+    'atlasvault-authenticated-collection-snapshot-payload';
+const _snapshotAuthenticationAlgorithm = 'HMAC-SHA256';
+const _collectionStateFormat = 'atlasvault-encrypted-patch-collection-state';
 const _maximumQueueBytes = 128 * 1024 * 1024;
 const _maximumQueueOperations = 65536;
 const _maximumEnvelopeFieldBytes = 96 * 1024 * 1024;
@@ -60,6 +65,11 @@ int _positiveInteger(Object? value) {
   return value;
 }
 
+int _nonnegativeInteger(Object? value) {
+  if (value is! int || value < 0 || value > _maximumInteger) _invalid();
+  return value;
+}
+
 String _uuid(Object? value) {
   final text = _text(value, maximum: 36);
   if (!RegExp(
@@ -90,6 +100,35 @@ Uint8List _base64(Object? value, {int? exactLength, int minimumLength = 1}) {
 String _sha256Hex(List<int> value) {
   final digest = SHA256Digest().process(Uint8List.fromList(value));
   return digest.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}
+
+Object? _canonicalValue(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.map((key) {
+      if (key is! String) _invalid();
+      return key;
+    }).toList()..sort();
+    return <String, Object?>{
+      for (final key in keys) key: _canonicalValue(value[key]),
+    };
+  }
+  if (value is List) return value.map(_canonicalValue).toList(growable: false);
+  if (value == null || value is String || value is num || value is bool) {
+    return value;
+  }
+  _invalid();
+}
+
+Uint8List _canonicalJsonBytes(Object? value) =>
+    Uint8List.fromList(utf8.encode(jsonEncode(_canonicalValue(value))));
+
+bool _constantTimeEqual(List<int> left, List<int> right) {
+  if (left.length != right.length) return false;
+  var difference = 0;
+  for (var index = 0; index < left.length; index++) {
+    difference |= left[index] ^ right[index];
+  }
+  return difference == 0;
 }
 
 final class AtlasVaultOpaqueCiphertextEnvelope {
@@ -311,7 +350,10 @@ final class _EncryptedQueueFile {
     }
   }
 
-  Future<void> write(Map<String, Object?> state) async {
+  Future<void> write(
+    Map<String, Object?> state, {
+    FutureOr<void> Function()? beforeReplace,
+  }) async {
     try {
       final stateBytes = Uint8List.fromList(utf8.encode(jsonEncode(state)));
       if (stateBytes.isEmpty || stateBytes.length > _maximumQueueBytes) {
@@ -344,6 +386,7 @@ final class _EncryptedQueueFile {
       if (await staged.exists()) _invalid();
       try {
         await staged.writeAsBytes(encoded, flush: true);
+        if (beforeReplace != null) await beforeReplace();
         await replaceCacheFile(targetFile: file, stagedFile: staged);
       } finally {
         if (await staged.exists()) await staged.delete();
@@ -353,6 +396,434 @@ final class _EncryptedQueueFile {
     } catch (_) {
       _invalid();
     }
+  }
+}
+
+final class AtlasVaultAuthenticatedCollectionSnapshot {
+  AtlasVaultAuthenticatedCollectionSnapshot._({
+    required this.collectionId,
+    required this.collectionRevision,
+    required this.lastOrder,
+    required this.records,
+    required this.appliedFingerprints,
+    required this.authorSequences,
+    required this.authenticationTagBase64,
+    required this.canonicalPayloadSha256,
+  });
+
+  static Future<AtlasVaultAuthenticatedCollectionSnapshot> decode(
+    Map<String, Object?> value, {
+    required Uint8List authenticationKey,
+  }) async {
+    if (authenticationKey.length != 32) _invalid();
+    _exact(value, const <String>{
+      'format',
+      'version',
+      'payload',
+      'authentication',
+    });
+    if (value['format'] != _snapshotFormat || value['version'] != 1) {
+      _invalid();
+    }
+    final payload = _object(value['payload']);
+    final authentication = _object(value['authentication']);
+    _exact(authentication, const <String>{'algorithm', 'tag_b64'});
+    if (authentication['algorithm'] != _snapshotAuthenticationAlgorithm) {
+      _invalid();
+    }
+    final tag = _base64(authentication['tag_b64'], exactLength: 32);
+    final payloadBytes = _canonicalJsonBytes(payload);
+    final expected = await Hmac.sha256().calculateMac(
+      payloadBytes,
+      secretKey: SecretKey(authenticationKey),
+    );
+    if (!_constantTimeEqual(tag, expected.bytes)) _invalid();
+    _exact(payload, const <String>{
+      'format',
+      'version',
+      'collection_id',
+      'collection_revision',
+      'last_order',
+      'records',
+      'applied_fingerprints',
+      'author_sequences',
+      'record_count',
+      'live_record_count',
+      'tombstone_count',
+    });
+    if (payload['format'] != _snapshotPayloadFormat ||
+        payload['version'] != 1 ||
+        payload['last_order'] is! List ||
+        payload['records'] is! List) {
+      _invalid();
+    }
+    final revision = _positiveInteger(payload['collection_revision']);
+    final rawOrder = payload['last_order']! as List;
+    if (rawOrder.length != 4) _invalid();
+    final order = <Object?>[
+      _positiveInteger(rawOrder[0]),
+      _identifier(rawOrder[1]),
+      _positiveInteger(rawOrder[2]),
+      _uuid(rawOrder[3]),
+    ];
+    final rawRecords = payload['records']! as List;
+    if (rawRecords.length > _maximumQueueOperations) _invalid();
+    final records = rawRecords
+        .map(
+          (item) => AtlasVaultOpaqueCiphertextEnvelope.fromJson(_object(item)),
+        )
+        .toList(growable: false);
+    final recordIds = records.map((item) => item.objectId).toList();
+    if (recordIds.toSet().length != records.length ||
+        !_sameStrings(recordIds, [...recordIds]..sort())) {
+      _invalid();
+    }
+    final fingerprints = <String, String>{};
+    for (final entry in _object(payload['applied_fingerprints']).entries) {
+      final digest = _text(entry.value, maximum: 64);
+      if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(digest)) _invalid();
+      fingerprints[_uuid(entry.key)] = digest;
+    }
+    if (fingerprints.length != revision ||
+        revision > _maximumQueueOperations ||
+        !fingerprints.containsKey(order[3])) {
+      _invalid();
+    }
+    final sequences = <String, int>{};
+    for (final entry in _object(payload['author_sequences']).entries) {
+      sequences[_identifier(entry.key)] = _positiveInteger(entry.value);
+    }
+    if (sequences.isEmpty ||
+        sequences.length > _maximumQueueOperations ||
+        sequences.values.fold<int>(0, (sum, value) => sum + value) !=
+            revision) {
+      _invalid();
+    }
+    final recordCount = _nonnegativeInteger(payload['record_count']);
+    final liveCount = _nonnegativeInteger(payload['live_record_count']);
+    final tombstoneCount = _nonnegativeInteger(payload['tombstone_count']);
+    if (recordCount != records.length ||
+        liveCount != records.where((item) => !item.tombstone).length ||
+        tombstoneCount != records.where((item) => item.tombstone).length ||
+        liveCount + tombstoneCount != recordCount) {
+      _invalid();
+    }
+    return AtlasVaultAuthenticatedCollectionSnapshot._(
+      collectionId: _identifier(payload['collection_id']),
+      collectionRevision: revision,
+      lastOrder: List<Object?>.unmodifiable(order),
+      records: List<AtlasVaultOpaqueCiphertextEnvelope>.unmodifiable(records),
+      appliedFingerprints: Map<String, String>.unmodifiable(fingerprints),
+      authorSequences: Map<String, int>.unmodifiable(sequences),
+      authenticationTagBase64: base64Encode(tag),
+      canonicalPayloadSha256: _sha256Hex(payloadBytes),
+    );
+  }
+
+  static Future<AtlasVaultAuthenticatedCollectionSnapshot> decodeBytes(
+    Uint8List value, {
+    required Uint8List authenticationKey,
+  }) async {
+    try {
+      return decode(
+        _object(jsonDecode(utf8.decode(value))),
+        authenticationKey: authenticationKey,
+      );
+    } catch (_) {
+      _invalid();
+    }
+  }
+
+  static Future<AtlasVaultAuthenticatedCollectionSnapshot> create({
+    required String collectionId,
+    required Map<String, AtlasVaultOpaqueCiphertextEnvelope> records,
+    required Map<String, String> fingerprints,
+    required Map<String, int> authorSequences,
+    required List<Object?> lastOrder,
+    required Uint8List authenticationKey,
+  }) async {
+    final recordValues = records.keys.toList()..sort();
+    final fingerprintKeys = fingerprints.keys.toList()..sort();
+    final sequenceKeys = authorSequences.keys.toList()..sort();
+    final payload = <String, Object?>{
+      'format': _snapshotPayloadFormat,
+      'version': 1,
+      'collection_id': collectionId,
+      'collection_revision': fingerprints.length,
+      'last_order': lastOrder,
+      'records': recordValues.map((key) => records[key]!.toJson()).toList(),
+      'applied_fingerprints': <String, Object?>{
+        for (final key in fingerprintKeys) key: fingerprints[key],
+      },
+      'author_sequences': <String, Object?>{
+        for (final key in sequenceKeys) key: authorSequences[key],
+      },
+      'record_count': records.length,
+      'live_record_count': records.values
+          .where((item) => !item.tombstone)
+          .length,
+      'tombstone_count': records.values.where((item) => item.tombstone).length,
+    };
+    final tag = await Hmac.sha256().calculateMac(
+      _canonicalJsonBytes(payload),
+      secretKey: SecretKey(authenticationKey),
+    );
+    return decode(<String, Object?>{
+      'format': _snapshotFormat,
+      'version': 1,
+      'payload': payload,
+      'authentication': <String, Object?>{
+        'algorithm': _snapshotAuthenticationAlgorithm,
+        'tag_b64': base64Encode(tag.bytes),
+      },
+    }, authenticationKey: authenticationKey);
+  }
+
+  final String collectionId;
+  final int collectionRevision;
+  final List<Object?> lastOrder;
+  final List<AtlasVaultOpaqueCiphertextEnvelope> records;
+  final Map<String, String> appliedFingerprints;
+  final Map<String, int> authorSequences;
+  final String authenticationTagBase64;
+  final String canonicalPayloadSha256;
+
+  Map<String, Object?> toJson() {
+    final fingerprintKeys = appliedFingerprints.keys.toList()..sort();
+    final sequenceKeys = authorSequences.keys.toList()..sort();
+    final payload = <String, Object?>{
+      'format': _snapshotPayloadFormat,
+      'version': 1,
+      'collection_id': collectionId,
+      'collection_revision': collectionRevision,
+      'last_order': lastOrder,
+      'records': records.map((item) => item.toJson()).toList(),
+      'applied_fingerprints': <String, Object?>{
+        for (final key in fingerprintKeys) key: appliedFingerprints[key],
+      },
+      'author_sequences': <String, Object?>{
+        for (final key in sequenceKeys) key: authorSequences[key],
+      },
+      'record_count': records.length,
+      'live_record_count': records.where((item) => !item.tombstone).length,
+      'tombstone_count': records.where((item) => item.tombstone).length,
+    };
+    return <String, Object?>{
+      'format': _snapshotFormat,
+      'version': 1,
+      'payload': payload,
+      'authentication': <String, Object?>{
+        'algorithm': _snapshotAuthenticationAlgorithm,
+        'tag_b64': authenticationTagBase64,
+      },
+    };
+  }
+}
+
+bool _sameStrings(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
+final class _CollectionReplay {
+  _CollectionReplay({
+    required this.records,
+    required this.fingerprints,
+    required this.authorSequences,
+    required this.objectRevisions,
+    required this.lastOrder,
+  });
+
+  factory _CollectionReplay.fromSnapshot(
+    AtlasVaultAuthenticatedCollectionSnapshot? snapshot,
+  ) {
+    if (snapshot == null) {
+      return _CollectionReplay(
+        records: <String, AtlasVaultOpaqueCiphertextEnvelope>{},
+        fingerprints: <String, String>{},
+        authorSequences: <String, int>{},
+        objectRevisions: <String, String>{},
+        lastOrder: null,
+      );
+    }
+    final records = <String, AtlasVaultOpaqueCiphertextEnvelope>{
+      for (final item in snapshot.records) item.objectId: item,
+    };
+    return _CollectionReplay(
+      records: records,
+      fingerprints: Map<String, String>.from(snapshot.appliedFingerprints),
+      authorSequences: Map<String, int>.from(snapshot.authorSequences),
+      objectRevisions: <String, String>{
+        for (final entry in records.entries) entry.key: entry.value.revision,
+      },
+      lastOrder: List<Object?>.from(snapshot.lastOrder),
+    );
+  }
+
+  final Map<String, AtlasVaultOpaqueCiphertextEnvelope> records;
+  final Map<String, String> fingerprints;
+  final Map<String, int> authorSequences;
+  final Map<String, String> objectRevisions;
+  List<Object?>? lastOrder;
+
+  bool apply(AtlasVaultEncryptedPatchOperation operation) {
+    final digest = _fingerprint(operation);
+    final known = fingerprints[operation.operationId];
+    if (known != null) {
+      if (known != digest) _invalid();
+      return false;
+    }
+    if (fingerprints.length >= _maximumQueueOperations) _invalid();
+    lastOrder = _advance(
+      operation,
+      authorSequences,
+      objectRevisions,
+      lastOrder,
+    );
+    records[operation.envelope.objectId] = operation.envelope;
+    fingerprints[operation.operationId] = digest;
+    return true;
+  }
+}
+
+final class _LoadedCollection {
+  const _LoadedCollection(this.snapshot, this.tail, this.replay);
+
+  final AtlasVaultAuthenticatedCollectionSnapshot? snapshot;
+  final List<AtlasVaultEncryptedPatchOperation> tail;
+  final _CollectionReplay replay;
+}
+
+Map<String, Object?> _collectionDefault(String collectionId) =>
+    <String, Object?>{
+      'format': _collectionStateFormat,
+      'version': 1,
+      'collection_id': collectionId,
+      'snapshot': null,
+      'tail_operations': <Object?>[],
+    };
+
+Future<_LoadedCollection> _loadCollection(
+  _EncryptedQueueFile store, {
+  required String collectionId,
+  required Uint8List authenticationKey,
+}) async {
+  final state = await store.read(_collectionDefault(collectionId));
+  _exact(state, const <String>{
+    'format',
+    'version',
+    'collection_id',
+    'snapshot',
+    'tail_operations',
+  });
+  if (state['format'] != _collectionStateFormat ||
+      state['version'] != 1 ||
+      _identifier(state['collection_id']) != collectionId ||
+      state['tail_operations'] is! List) {
+    _invalid();
+  }
+  AtlasVaultAuthenticatedCollectionSnapshot? snapshot;
+  if (state['snapshot'] != null) {
+    snapshot = await AtlasVaultAuthenticatedCollectionSnapshot.decode(
+      _object(state['snapshot']),
+      authenticationKey: authenticationKey,
+    );
+    if (snapshot.collectionId != collectionId) _invalid();
+  }
+  final rawTail = state['tail_operations']! as List;
+  if (rawTail.length > _maximumQueueOperations) _invalid();
+  final tail = rawTail
+      .map((item) => AtlasVaultEncryptedPatchOperation.fromJson(_object(item)))
+      .toList(growable: false);
+  if (!_sameOperations(tail, [...tail]..sort()) ||
+      tail.map((item) => item.operationId).toSet().length != tail.length) {
+    _invalid();
+  }
+  final replay = _CollectionReplay.fromSnapshot(snapshot);
+  for (final operation in tail) {
+    if (!replay.apply(operation)) _invalid();
+  }
+  return _LoadedCollection(snapshot, tail, replay);
+}
+
+final class AtlasVaultDurableEncryptedPatchCollection {
+  AtlasVaultDurableEncryptedPatchCollection(
+    File file, {
+    required Uint8List encryptionKey,
+    required Uint8List authenticationKey,
+    required String collectionId,
+  }) : _collectionId = _identifier(collectionId),
+       _authenticationKey = Uint8List.fromList(authenticationKey),
+       _store = _EncryptedQueueFile(file, encryptionKey, kind: 'collection') {
+    if (authenticationKey.length != 32) _invalid();
+  }
+
+  final String _collectionId;
+  final Uint8List _authenticationKey;
+  final _EncryptedQueueFile _store;
+
+  Future<_LoadedCollection> _load() => _loadCollection(
+    _store,
+    collectionId: _collectionId,
+    authenticationKey: _authenticationKey,
+  );
+
+  Future<void> append(AtlasVaultEncryptedPatchOperation operation) async {
+    final loaded = await _load();
+    if (!loaded.replay.apply(operation)) return;
+    final tail = <AtlasVaultEncryptedPatchOperation>[...loaded.tail, operation];
+    await _store.write(<String, Object?>{
+      'format': _collectionStateFormat,
+      'version': 1,
+      'collection_id': _collectionId,
+      'snapshot': loaded.snapshot?.toJson(),
+      'tail_operations': tail.map((item) => item.toJson()).toList(),
+    });
+  }
+
+  Future<List<AtlasVaultOpaqueCiphertextEnvelope>> currentRecords() async {
+    final replay = (await _load()).replay;
+    final keys = replay.records.keys.toList()..sort();
+    return List<AtlasVaultOpaqueCiphertextEnvelope>.unmodifiable(
+      keys.map((key) => replay.records[key]!),
+    );
+  }
+
+  Future<List<AtlasVaultEncryptedPatchOperation>> tailOperations() async =>
+      List<AtlasVaultEncryptedPatchOperation>.unmodifiable(
+        (await _load()).tail,
+      );
+
+  Future<AtlasVaultAuthenticatedCollectionSnapshot?> readSnapshot() async =>
+      (await _load()).snapshot;
+
+  Future<int> committedOperationCount() async =>
+      (await _load()).replay.fingerprints.length;
+
+  Future<AtlasVaultAuthenticatedCollectionSnapshot> compact({
+    FutureOr<void> Function()? beforeReplace,
+  }) async {
+    final replay = (await _load()).replay;
+    if (replay.lastOrder == null || replay.fingerprints.isEmpty) _invalid();
+    final snapshot = await AtlasVaultAuthenticatedCollectionSnapshot.create(
+      collectionId: _collectionId,
+      records: replay.records,
+      fingerprints: replay.fingerprints,
+      authorSequences: replay.authorSequences,
+      lastOrder: replay.lastOrder!,
+      authenticationKey: _authenticationKey,
+    );
+    await _store.write(<String, Object?>{
+      'format': _collectionStateFormat,
+      'version': 1,
+      'collection_id': _collectionId,
+      'snapshot': snapshot.toJson(),
+      'tail_operations': <Object?>[],
+    }, beforeReplace: beforeReplace);
+    return snapshot;
   }
 }
 

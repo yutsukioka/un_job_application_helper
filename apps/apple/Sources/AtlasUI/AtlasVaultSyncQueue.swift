@@ -10,6 +10,10 @@ public enum AtlasVaultEncryptedPatchQueueError: Error, Equatable, Sendable {
 private let patchFormat = "atlasvault-encrypted-patch-operation"
 private let opaqueEnvelopeFormat = "atlasvault-opaque-ciphertext-envelope"
 private let queueEnvelopeFormat = "atlasvault-encrypted-transfer-queue"
+private let snapshotFormat = "atlasvault-authenticated-collection-snapshot"
+private let snapshotPayloadFormat = "atlasvault-authenticated-collection-snapshot-payload"
+private let snapshotAuthenticationAlgorithm = "HMAC-SHA256"
+private let collectionStateFormat = "atlasvault-encrypted-patch-collection-state"
 private let maximumQueueBytes = 128 * 1024 * 1024
 private let maximumQueueOperations = 65_536
 private let maximumEnvelopeFieldBytes = 96 * 1024 * 1024
@@ -51,6 +55,19 @@ private func positiveInteger(_ value: Any?) throws -> Int64 {
     return number
 }
 
+private func nonnegativeInteger(_ value: Any?) throws -> Int64 {
+    guard let value = value as? NSNumber,
+          CFGetTypeID(value) != CFBooleanGetTypeID()
+    else {
+        throw invalid()
+    }
+    let number = value.int64Value
+    guard number >= 0, value.doubleValue == Double(number), number <= maximumInteger else {
+        throw invalid()
+    }
+    return number
+}
+
 private func canonicalUUID(_ value: Any?) throws -> String {
     let value = try text(value, maximum: 36)
     guard let parsed = UUID(uuidString: value), parsed.uuidString.lowercased() == value else {
@@ -87,6 +104,15 @@ private func canonicalJSON(_ value: [String: Any]) throws -> Data {
 
 private func sha256Hex(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+private func constantTimeEqual(_ left: Data, _ right: Data) -> Bool {
+    guard left.count == right.count else { return false }
+    var difference: UInt8 = 0
+    for index in left.indices {
+        difference |= left[index] ^ right[index]
+    }
+    return difference == 0
 }
 
 public struct AtlasVaultOpaqueCiphertextEnvelope: Equatable, Sendable {
@@ -323,7 +349,10 @@ private struct EncryptedQueueFile {
         }
     }
 
-    func write(_ state: [String: Any]) throws {
+    func write(
+        _ state: [String: Any],
+        beforeReplace: (() throws -> Void)? = nil
+    ) throws {
         do {
             let stateData = try canonicalJSON(state)
             guard !stateData.isEmpty, stateData.count <= maximumQueueBytes else { throw invalid() }
@@ -349,14 +378,24 @@ private struct EncryptedQueueFile {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            try encoded.write(to: fileURL, options: [.atomic])
+            let staged = parent.appendingPathComponent(
+                ".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp"
+            )
+            defer { try? FileManager.default.removeItem(at: staged) }
+            try encoded.write(to: staged)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: staged.path
+            )
+            let handle = try FileHandle(forWritingTo: staged)
+            try handle.synchronize()
+            try handle.close()
+            try beforeReplace?()
+            guard Darwin.rename(staged.path, fileURL.path) == 0 else { throw invalid() }
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
                 ofItemAtPath: fileURL.path
             )
-            let handle = try FileHandle(forWritingTo: fileURL)
-            try handle.synchronize()
-            try handle.close()
             let descriptor = Darwin.open(parent.path, O_RDONLY | O_DIRECTORY)
             if descriptor >= 0 {
                 defer { Darwin.close(descriptor) }
@@ -367,6 +406,380 @@ private struct EncryptedQueueFile {
         } catch {
             throw invalid()
         }
+    }
+}
+
+public struct AtlasVaultAuthenticatedCollectionSnapshot {
+    public let collectionID: String
+    public let collectionRevision: Int64
+    public let records: [AtlasVaultOpaqueCiphertextEnvelope]
+    public let authenticationTagBase64: String
+    public let canonicalPayloadSHA256: String
+
+    fileprivate let lastOrder: OrderKey
+    fileprivate let appliedFingerprints: [String: String]
+    fileprivate let authorSequences: [String: Int64]
+
+    public init(jsonObject value: [String: Any], authenticationKey: Data) throws {
+        guard authenticationKey.count == 32 else { throw invalid() }
+        try exactKeys(value, ["format", "version", "payload", "authentication"])
+        guard value["format"] as? String == snapshotFormat,
+              try positiveInteger(value["version"]) == 1,
+              let payload = value["payload"] as? [String: Any],
+              let authentication = value["authentication"] as? [String: Any]
+        else {
+            throw invalid()
+        }
+        try exactKeys(authentication, ["algorithm", "tag_b64"])
+        guard authentication["algorithm"] as? String == snapshotAuthenticationAlgorithm else {
+            throw invalid()
+        }
+        let tag = try canonicalBase64(authentication["tag_b64"], exactLength: 32)
+        let payloadData = try canonicalJSON(payload)
+        let expected = Data(HMAC<SHA256>.authenticationCode(
+            for: payloadData,
+            using: SymmetricKey(data: authenticationKey)
+        ))
+        guard constantTimeEqual(tag, expected) else { throw invalid() }
+        try exactKeys(
+            payload,
+            [
+                "format", "version", "collection_id", "collection_revision",
+                "last_order", "records", "applied_fingerprints", "author_sequences",
+                "record_count", "live_record_count", "tombstone_count",
+            ])
+        guard payload["format"] as? String == snapshotPayloadFormat,
+              try positiveInteger(payload["version"]) == 1,
+              let rawOrder = payload["last_order"] as? [Any],
+              let rawRecords = payload["records"] as? [[String: Any]],
+              let rawFingerprints = payload["applied_fingerprints"] as? [String: Any],
+              let rawSequences = payload["author_sequences"] as? [String: Any]
+        else {
+            throw invalid()
+        }
+        let revision = try positiveInteger(payload["collection_revision"])
+        guard revision <= Int64(maximumQueueOperations),
+              rawRecords.count <= maximumQueueOperations,
+              Int64(rawFingerprints.count) == revision,
+              !rawSequences.isEmpty,
+              rawSequences.count <= maximumQueueOperations
+        else {
+            throw invalid()
+        }
+        let order = try OrderKey(jsonArray: rawOrder)
+        let records = try rawRecords.map(AtlasVaultOpaqueCiphertextEnvelope.init(jsonObject:))
+        guard records.map(\.objectID) == records.map(\.objectID).sorted(),
+              Set(records.map(\.objectID)).count == records.count
+        else {
+            throw invalid()
+        }
+        var fingerprints: [String: String] = [:]
+        for (operationID, value) in rawFingerprints {
+            let digest = try text(value, maximum: 64)
+            let expression = try NSRegularExpression(pattern: "^[0-9a-f]{64}$")
+            let range = NSRange(digest.startIndex..<digest.endIndex, in: digest)
+            guard expression.firstMatch(in: digest, range: range)?.range == range else {
+                throw invalid()
+            }
+            fingerprints[try canonicalUUID(operationID)] = digest
+        }
+        guard fingerprints[order.operationID] != nil else { throw invalid() }
+        var sequences: [String: Int64] = [:]
+        var sequenceTotal: Int64 = 0
+        for (device, value) in rawSequences {
+            let sequence = try positiveInteger(value)
+            let addition = sequenceTotal.addingReportingOverflow(sequence)
+            guard !addition.overflow else { throw invalid() }
+            sequenceTotal = addition.partialValue
+            sequences[try identifier(device)] = sequence
+        }
+        guard sequenceTotal == revision else { throw invalid() }
+        let recordCount = try nonnegativeInteger(payload["record_count"])
+        let liveCount = try nonnegativeInteger(payload["live_record_count"])
+        let tombstoneCount = try nonnegativeInteger(payload["tombstone_count"])
+        guard recordCount == Int64(records.count),
+              liveCount == Int64(records.filter({ !$0.tombstone }).count),
+              tombstoneCount == Int64(records.filter(\.tombstone).count),
+              liveCount + tombstoneCount == recordCount
+        else {
+            throw invalid()
+        }
+        self.collectionID = try identifier(payload["collection_id"])
+        self.collectionRevision = revision
+        self.lastOrder = order
+        self.records = records
+        self.appliedFingerprints = fingerprints
+        self.authorSequences = sequences
+        self.authenticationTagBase64 = tag.base64EncodedString()
+        self.canonicalPayloadSHA256 = sha256Hex(payloadData)
+    }
+
+    public init(jsonData: Data, authenticationKey: Data) throws {
+        do {
+            guard let value = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+            else {
+                throw invalid()
+            }
+            try self.init(jsonObject: value, authenticationKey: authenticationKey)
+        } catch let error as AtlasVaultEncryptedPatchQueueError {
+            throw error
+        } catch {
+            throw invalid()
+        }
+    }
+
+    fileprivate static func create(
+        collectionID: String,
+        records: [String: AtlasVaultOpaqueCiphertextEnvelope],
+        fingerprints: [String: String],
+        authorSequences: [String: Int64],
+        lastOrder: OrderKey,
+        authenticationKey: Data
+    ) throws -> AtlasVaultAuthenticatedCollectionSnapshot {
+        let orderedRecords = records.keys.sorted().compactMap { records[$0]?.jsonObject }
+        let payload: [String: Any] = [
+            "format": snapshotPayloadFormat,
+            "version": 1,
+            "collection_id": collectionID,
+            "collection_revision": fingerprints.count,
+            "last_order": lastOrder.jsonArray,
+            "records": orderedRecords,
+            "applied_fingerprints": fingerprints,
+            "author_sequences": authorSequences,
+            "record_count": records.count,
+            "live_record_count": records.values.filter { !$0.tombstone }.count,
+            "tombstone_count": records.values.filter(\.tombstone).count,
+        ]
+        let tag = Data(HMAC<SHA256>.authenticationCode(
+            for: try canonicalJSON(payload),
+            using: SymmetricKey(data: authenticationKey)
+        ))
+        return try AtlasVaultAuthenticatedCollectionSnapshot(
+            jsonObject: [
+                "format": snapshotFormat,
+                "version": 1,
+                "payload": payload,
+                "authentication": [
+                    "algorithm": snapshotAuthenticationAlgorithm,
+                    "tag_b64": tag.base64EncodedString(),
+                ],
+            ],
+            authenticationKey: authenticationKey
+        )
+    }
+
+    public var jsonObject: [String: Any] {
+        let payload: [String: Any] = [
+            "format": snapshotPayloadFormat,
+            "version": 1,
+            "collection_id": collectionID,
+            "collection_revision": collectionRevision,
+            "last_order": lastOrder.jsonArray,
+            "records": records.map(\.jsonObject),
+            "applied_fingerprints": appliedFingerprints,
+            "author_sequences": authorSequences,
+            "record_count": records.count,
+            "live_record_count": records.filter { !$0.tombstone }.count,
+            "tombstone_count": records.filter(\.tombstone).count,
+        ]
+        return [
+            "format": snapshotFormat,
+            "version": 1,
+            "payload": payload,
+            "authentication": [
+                "algorithm": snapshotAuthenticationAlgorithm,
+                "tag_b64": authenticationTagBase64,
+            ],
+        ]
+    }
+}
+
+private struct CollectionReplay {
+    var records: [String: AtlasVaultOpaqueCiphertextEnvelope]
+    var fingerprints: [String: String]
+    var authorSequences: [String: Int64]
+    var objectRevisions: [String: String]
+    var lastOrder: OrderKey?
+
+    init(snapshot: AtlasVaultAuthenticatedCollectionSnapshot?) {
+        guard let snapshot else {
+            self.records = [:]
+            self.fingerprints = [:]
+            self.authorSequences = [:]
+            self.objectRevisions = [:]
+            self.lastOrder = nil
+            return
+        }
+        self.records = Dictionary(uniqueKeysWithValues: snapshot.records.map {
+            ($0.objectID, $0)
+        })
+        self.fingerprints = snapshot.appliedFingerprints
+        self.authorSequences = snapshot.authorSequences
+        self.objectRevisions = Dictionary(uniqueKeysWithValues: snapshot.records.map {
+            ($0.objectID, $0.revision)
+        })
+        self.lastOrder = snapshot.lastOrder
+    }
+
+    mutating func apply(_ operation: AtlasVaultEncryptedPatchOperation) throws -> Bool {
+        let digest = try fingerprint(operation)
+        if let known = fingerprints[operation.operationID] {
+            guard known == digest else { throw invalid() }
+            return false
+        }
+        guard fingerprints.count < maximumQueueOperations else { throw invalid() }
+        lastOrder = try advanceMetadata(
+            operation,
+            sequences: &authorSequences,
+            revisions: &objectRevisions,
+            lastOrder: lastOrder
+        )
+        records[operation.envelope.objectID] = operation.envelope
+        fingerprints[operation.operationID] = digest
+        return true
+    }
+}
+
+private struct LoadedCollection {
+    let snapshot: AtlasVaultAuthenticatedCollectionSnapshot?
+    let tail: [AtlasVaultEncryptedPatchOperation]
+    var replay: CollectionReplay
+}
+
+private func collectionDefault(_ collectionID: String) -> [String: Any] {
+    [
+        "format": collectionStateFormat,
+        "version": 1,
+        "collection_id": collectionID,
+        "snapshot": NSNull(),
+        "tail_operations": [],
+    ]
+}
+
+private func loadCollection(
+    _ store: EncryptedQueueFile,
+    collectionID: String,
+    authenticationKey: Data
+) throws -> LoadedCollection {
+    let state = try store.read(default: collectionDefault(collectionID))
+    try exactKeys(
+        state,
+        ["format", "version", "collection_id", "snapshot", "tail_operations"]
+    )
+    guard state["format"] as? String == collectionStateFormat,
+          try positiveInteger(state["version"]) == 1,
+          try identifier(state["collection_id"]) == collectionID,
+          let rawTail = state["tail_operations"] as? [[String: Any]],
+          rawTail.count <= maximumQueueOperations
+    else {
+        throw invalid()
+    }
+    let snapshot: AtlasVaultAuthenticatedCollectionSnapshot?
+    if state["snapshot"] is NSNull {
+        snapshot = nil
+    } else {
+        guard let rawSnapshot = state["snapshot"] as? [String: Any] else { throw invalid() }
+        snapshot = try AtlasVaultAuthenticatedCollectionSnapshot(
+            jsonObject: rawSnapshot,
+            authenticationKey: authenticationKey
+        )
+        guard snapshot?.collectionID == collectionID else { throw invalid() }
+    }
+    let tail = try rawTail.map(AtlasVaultEncryptedPatchOperation.init(jsonObject:))
+    guard tail == tail.sorted(), Set(tail.map(\.operationID)).count == tail.count else {
+        throw invalid()
+    }
+    var replay = CollectionReplay(snapshot: snapshot)
+    for operation in tail {
+        guard try replay.apply(operation) else { throw invalid() }
+    }
+    return LoadedCollection(snapshot: snapshot, tail: tail, replay: replay)
+}
+
+public final class AtlasVaultDurableEncryptedPatchCollection {
+    private let store: EncryptedQueueFile
+    private let authenticationKey: Data
+    private let collectionID: String
+
+    public init(
+        fileURL: URL,
+        encryptionKey: Data,
+        authenticationKey: Data,
+        collectionID: String
+    ) throws {
+        guard authenticationKey.count == 32 else { throw invalid() }
+        self.collectionID = try identifier(collectionID)
+        self.authenticationKey = authenticationKey
+        self.store = try EncryptedQueueFile(
+            fileURL: fileURL,
+            encryptionKey: encryptionKey,
+            kind: "collection"
+        )
+    }
+
+    private func load() throws -> LoadedCollection {
+        try loadCollection(
+            store,
+            collectionID: collectionID,
+            authenticationKey: authenticationKey
+        )
+    }
+
+    public func append(_ operation: AtlasVaultEncryptedPatchOperation) throws {
+        var loaded = try load()
+        guard try loaded.replay.apply(operation) else { return }
+        try store.write([
+            "format": collectionStateFormat,
+            "version": 1,
+            "collection_id": collectionID,
+            "snapshot": loaded.snapshot?.jsonObject ?? NSNull(),
+            "tail_operations": (loaded.tail + [operation]).map(\.jsonObject),
+        ])
+    }
+
+    public func currentRecords() throws -> [AtlasVaultOpaqueCiphertextEnvelope] {
+        let replay = try load().replay
+        return replay.records.keys.sorted().compactMap { replay.records[$0] }
+    }
+
+    public func tailOperations() throws -> [AtlasVaultEncryptedPatchOperation] {
+        try load().tail
+    }
+
+    public func snapshot() throws -> AtlasVaultAuthenticatedCollectionSnapshot? {
+        try load().snapshot
+    }
+
+    public func committedOperationCount() throws -> Int {
+        try load().replay.fingerprints.count
+    }
+
+    public func compact(
+        beforeReplace: (() throws -> Void)? = nil
+    ) throws -> AtlasVaultAuthenticatedCollectionSnapshot {
+        let replay = try load().replay
+        guard let lastOrder = replay.lastOrder, !replay.fingerprints.isEmpty else {
+            throw invalid()
+        }
+        let snapshot = try AtlasVaultAuthenticatedCollectionSnapshot.create(
+            collectionID: collectionID,
+            records: replay.records,
+            fingerprints: replay.fingerprints,
+            authorSequences: replay.authorSequences,
+            lastOrder: lastOrder,
+            authenticationKey: authenticationKey
+        )
+        try store.write(
+            [
+                "format": collectionStateFormat,
+                "version": 1,
+                "collection_id": collectionID,
+                "snapshot": snapshot.jsonObject,
+                "tail_operations": [],
+            ],
+            beforeReplace: beforeReplace
+        )
+        return snapshot
     }
 }
 

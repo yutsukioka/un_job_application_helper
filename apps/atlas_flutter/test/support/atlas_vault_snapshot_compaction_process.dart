@@ -30,7 +30,9 @@ Future<void> main(List<String> arguments) async {
   await collection.compact(
     beforeReplace: () async {
       await File(arguments[1]).writeAsString('ready\n', flush: true);
-      await Completer<void>().future;
+      while (true) {
+        await Future<void>.delayed(const Duration(minutes: 1));
+      }
     },
   );
 }
