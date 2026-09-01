@@ -420,6 +420,7 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
     fileprivate let lastOrder: OrderKey
     fileprivate let appliedFingerprints: [String: String]
     fileprivate let authorSequences: [String: Int64]
+    fileprivate let authorSequenceOwners: [String: [Int64: String]]
 
     public init(jsonObject value: [String: Any], authenticationKey: Data) throws {
         guard authenticationKey.count == 32 else { throw invalid() }
@@ -447,6 +448,7 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
             [
                 "format", "version", "collection_id", "collection_revision",
                 "last_order", "records", "applied_fingerprints", "author_sequences",
+                "author_sequence_owners",
                 "record_count", "live_record_count", "tombstone_count",
             ])
         guard payload["format"] as? String == snapshotPayloadFormat,
@@ -454,7 +456,8 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
               let rawOrder = payload["last_order"] as? [Any],
               let rawRecords = payload["records"] as? [[String: Any]],
               let rawFingerprints = payload["applied_fingerprints"] as? [String: Any],
-              let rawSequences = payload["author_sequences"] as? [String: Any]
+              let rawSequences = payload["author_sequences"] as? [String: Any],
+              let rawOwners = payload["author_sequence_owners"] as? [String: Any]
         else {
             throw invalid()
         }
@@ -495,6 +498,38 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
             sequences[try identifier(device)] = sequence
         }
         guard sequenceTotal == revision else { throw invalid() }
+        var sequenceOwners: [String: [Int64: String]] = [:]
+        for (rawDevice, rawValue) in rawOwners {
+            let device = try identifier(rawDevice)
+            guard let rawDeviceOwners = rawValue as? [String: Any] else { throw invalid() }
+            var deviceOwners: [Int64: String] = [:]
+            for (rawSequence, rawOperationID) in rawDeviceOwners {
+                guard let sequence = Int64(rawSequence), sequence > 0,
+                      String(sequence) == rawSequence
+                else {
+                    throw invalid()
+                }
+                deviceOwners[sequence] = try canonicalUUID(rawOperationID)
+            }
+            sequenceOwners[device] = deviceOwners
+        }
+        guard Set(sequenceOwners.keys) == Set(sequences.keys) else { throw invalid() }
+        for (device, maximumSequence) in sequences {
+            guard let owners = sequenceOwners[device],
+                  Int64(owners.count) == maximumSequence
+            else {
+                throw invalid()
+            }
+            for sequence in 1...maximumSequence where owners[sequence] == nil {
+                throw invalid()
+            }
+        }
+        let ownerIDs = Set(sequenceOwners.values.flatMap(\.values))
+        guard Int64(ownerIDs.count) == revision,
+              ownerIDs == Set(fingerprints.keys)
+        else {
+            throw invalid()
+        }
         let recordCount = try nonnegativeInteger(payload["record_count"])
         let liveCount = try nonnegativeInteger(payload["live_record_count"])
         let tombstoneCount = try nonnegativeInteger(payload["tombstone_count"])
@@ -511,6 +546,7 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
         self.records = records
         self.appliedFingerprints = fingerprints
         self.authorSequences = sequences
+        self.authorSequenceOwners = sequenceOwners
         self.authenticationTagBase64 = tag.base64EncodedString()
         self.canonicalPayloadSHA256 = sha256Hex(payloadData)
     }
@@ -534,6 +570,7 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
         records: [String: AtlasVaultOpaqueCiphertextEnvelope],
         fingerprints: [String: String],
         authorSequences: [String: Int64],
+        authorSequenceOwners: [String: [Int64: String]],
         lastOrder: OrderKey,
         authenticationKey: Data
     ) throws -> AtlasVaultAuthenticatedCollectionSnapshot {
@@ -547,6 +584,7 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
             "records": orderedRecords,
             "applied_fingerprints": fingerprints,
             "author_sequences": authorSequences,
+            "author_sequence_owners": sequenceOwnersJSON(authorSequenceOwners),
             "record_count": records.count,
             "live_record_count": records.values.filter { !$0.tombstone }.count,
             "tombstone_count": records.values.filter(\.tombstone).count,
@@ -579,6 +617,7 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
             "records": records.map(\.jsonObject),
             "applied_fingerprints": appliedFingerprints,
             "author_sequences": authorSequences,
+            "author_sequence_owners": sequenceOwnersJSON(authorSequenceOwners),
             "record_count": records.count,
             "live_record_count": records.filter { !$0.tombstone }.count,
             "tombstone_count": records.filter(\.tombstone).count,
@@ -595,10 +634,19 @@ public struct AtlasVaultAuthenticatedCollectionSnapshot {
     }
 }
 
+private func sequenceOwnersJSON(
+    _ owners: [String: [Int64: String]]
+) -> [String: [String: String]] {
+    owners.mapValues { deviceOwners in
+        Dictionary(uniqueKeysWithValues: deviceOwners.map { (String($0.key), $0.value) })
+    }
+}
+
 private struct CollectionReplay {
     var records: [String: AtlasVaultOpaqueCiphertextEnvelope]
     var fingerprints: [String: String]
     var authorSequences: [String: Int64]
+    var authorSequenceOwners: [String: [Int64: String]]
     var objectRevisions: [String: String]
     var lastOrder: OrderKey?
 
@@ -607,6 +655,7 @@ private struct CollectionReplay {
             self.records = [:]
             self.fingerprints = [:]
             self.authorSequences = [:]
+            self.authorSequenceOwners = [:]
             self.objectRevisions = [:]
             self.lastOrder = nil
             return
@@ -616,6 +665,7 @@ private struct CollectionReplay {
         })
         self.fingerprints = snapshot.appliedFingerprints
         self.authorSequences = snapshot.authorSequences
+        self.authorSequenceOwners = snapshot.authorSequenceOwners
         self.objectRevisions = Dictionary(uniqueKeysWithValues: snapshot.records.map {
             ($0.objectID, $0.revision)
         })
@@ -629,6 +679,12 @@ private struct CollectionReplay {
             return false
         }
         guard fingerprints.count < maximumQueueOperations else { throw invalid() }
+        var owners = authorSequenceOwners[operation.authorDeviceID] ?? [:]
+        if let knownOwner = owners[operation.authorSequence],
+           knownOwner != operation.operationID
+        {
+            throw invalid()
+        }
         lastOrder = try advanceMetadata(
             operation,
             sequences: &authorSequences,
@@ -637,6 +693,8 @@ private struct CollectionReplay {
         )
         records[operation.envelope.objectID] = operation.envelope
         fingerprints[operation.operationID] = digest
+        owners[operation.authorSequence] = operation.operationID
+        authorSequenceOwners[operation.authorDeviceID] = owners
         return true
     }
 }
@@ -767,6 +825,7 @@ public final class AtlasVaultDurableEncryptedPatchCollection {
             records: replay.records,
             fingerprints: replay.fingerprints,
             authorSequences: replay.authorSequences,
+            authorSequenceOwners: replay.authorSequenceOwners,
             lastOrder: lastOrder,
             authenticationKey: authenticationKey
         )
@@ -818,6 +877,8 @@ private func validateConvergentHistory(
 ) throws -> [String: String] {
     var receipts: [String: String] = [:]
     var snapshotSequences: [String: Int64] = [:]
+    var sequenceOwners: [ConvergentSequenceKey: String] = [:]
+    var operationSequences: [String: ConvergentSequenceKey] = [:]
     var revisionValues: [ConvergentRevisionKey: Data] = [:]
     var revisionParents: [ConvergentRevisionKey: String?] = [:]
 
@@ -838,6 +899,17 @@ private func validateConvergentHistory(
         revisionParents[key] = envelope.parentRevision
     }
 
+    func addSequenceOwner(_ key: ConvergentSequenceKey, _ operationID: String) throws {
+        if let knownOwner = sequenceOwners[key], knownOwner != operationID {
+            throw invalid()
+        }
+        if let knownSequence = operationSequences[operationID], knownSequence != key {
+            throw invalid()
+        }
+        sequenceOwners[key] = operationID
+        operationSequences[operationID] = key
+    }
+
     for snapshot in snapshots {
         for (operationID, digest) in snapshot.appliedFingerprints {
             try addReceipt(operationID, digest)
@@ -845,10 +917,15 @@ private func validateConvergentHistory(
         for (deviceID, sequence) in snapshot.authorSequences {
             snapshotSequences[deviceID] = max(snapshotSequences[deviceID] ?? 0, sequence)
         }
+        for (deviceID, owners) in snapshot.authorSequenceOwners {
+            for (sequence, operationID) in owners {
+                let key = ConvergentSequenceKey(deviceID: deviceID, sequence: sequence)
+                try addSequenceOwner(key, operationID)
+            }
+        }
         for envelope in snapshot.records { try addEnvelope(envelope) }
     }
 
-    var sequenceOwners: [ConvergentSequenceKey: String] = [:]
     for operation in operations {
         let digest = try fingerprint(operation)
         let knownReceipt = receipts[operation.operationID]
@@ -857,12 +934,7 @@ private func validateConvergentHistory(
             deviceID: operation.authorDeviceID,
             sequence: operation.authorSequence
         )
-        if let knownOwner = sequenceOwners[sequenceKey],
-           knownOwner != operation.operationID
-        {
-            throw invalid()
-        }
-        sequenceOwners[sequenceKey] = operation.operationID
+        try addSequenceOwner(sequenceKey, operation.operationID)
         if knownReceipt == nil,
            operation.authorSequence <= (snapshotSequences[operation.authorDeviceID] ?? 0)
         {

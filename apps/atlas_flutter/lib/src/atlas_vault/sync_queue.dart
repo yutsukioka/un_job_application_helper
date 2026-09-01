@@ -303,7 +303,7 @@ final class AtlasVaultEncryptedPatchOperation
 }
 
 String _fingerprint(AtlasVaultEncryptedPatchOperation value) =>
-    _sha256Hex(utf8.encode(jsonEncode(value.toJson())));
+    _sha256Hex(_canonicalJsonBytes(value.toJson()));
 
 final class _EncryptedQueueFile {
   _EncryptedQueueFile(this.file, Uint8List key, {required String kind})
@@ -409,6 +409,7 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
     required this.records,
     required this.appliedFingerprints,
     required this.authorSequences,
+    required this.authorSequenceOwners,
     required this.authenticationTagBase64,
     required this.canonicalPayloadSha256,
   });
@@ -449,6 +450,7 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
       'records',
       'applied_fingerprints',
       'author_sequences',
+      'author_sequence_owners',
       'record_count',
       'live_record_count',
       'tombstone_count',
@@ -501,6 +503,37 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
             revision) {
       _invalid();
     }
+    final sequenceOwners = <String, Map<int, String>>{};
+    for (final entry in _object(payload['author_sequence_owners']).entries) {
+      final device = _identifier(entry.key);
+      final owners = <int, String>{};
+      for (final owner in _object(entry.value).entries) {
+        final sequence = int.tryParse(owner.key);
+        if (sequence == null || sequence < 1 || '$sequence' != owner.key) {
+          _invalid();
+        }
+        owners[sequence] = _uuid(owner.value);
+      }
+      sequenceOwners[device] = owners;
+    }
+    if (sequenceOwners.length != sequences.length ||
+        !sequenceOwners.keys.toSet().containsAll(sequences.keys)) {
+      _invalid();
+    }
+    for (final entry in sequences.entries) {
+      final owners = sequenceOwners[entry.key]!;
+      if (owners.length != entry.value) _invalid();
+      for (var sequence = 1; sequence <= entry.value; sequence++) {
+        if (!owners.containsKey(sequence)) _invalid();
+      }
+    }
+    final ownerIds = sequenceOwners.values
+        .expand((owners) => owners.values)
+        .toSet();
+    if (ownerIds.length != revision ||
+        !ownerIds.containsAll(fingerprints.keys)) {
+      _invalid();
+    }
     final recordCount = _nonnegativeInteger(payload['record_count']);
     final liveCount = _nonnegativeInteger(payload['live_record_count']);
     final tombstoneCount = _nonnegativeInteger(payload['tombstone_count']);
@@ -517,6 +550,10 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
       records: List<AtlasVaultOpaqueCiphertextEnvelope>.unmodifiable(records),
       appliedFingerprints: Map<String, String>.unmodifiable(fingerprints),
       authorSequences: Map<String, int>.unmodifiable(sequences),
+      authorSequenceOwners: Map<String, Map<int, String>>.unmodifiable({
+        for (final entry in sequenceOwners.entries)
+          entry.key: Map<int, String>.unmodifiable(entry.value),
+      }),
       authenticationTagBase64: base64Encode(tag),
       canonicalPayloadSha256: _sha256Hex(payloadBytes),
     );
@@ -541,6 +578,7 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
     required Map<String, AtlasVaultOpaqueCiphertextEnvelope> records,
     required Map<String, String> fingerprints,
     required Map<String, int> authorSequences,
+    required Map<String, Map<int, String>> authorSequenceOwners,
     required List<Object?> lastOrder,
     required Uint8List authenticationKey,
   }) async {
@@ -560,6 +598,7 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
       'author_sequences': <String, Object?>{
         for (final key in sequenceKeys) key: authorSequences[key],
       },
+      'author_sequence_owners': _sequenceOwnersJson(authorSequenceOwners),
       'record_count': records.length,
       'live_record_count': records.values
           .where((item) => !item.tombstone)
@@ -587,6 +626,7 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
   final List<AtlasVaultOpaqueCiphertextEnvelope> records;
   final Map<String, String> appliedFingerprints;
   final Map<String, int> authorSequences;
+  final Map<String, Map<int, String>> authorSequenceOwners;
   final String authenticationTagBase64;
   final String canonicalPayloadSha256;
 
@@ -606,6 +646,7 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
       'author_sequences': <String, Object?>{
         for (final key in sequenceKeys) key: authorSequences[key],
       },
+      'author_sequence_owners': _sequenceOwnersJson(authorSequenceOwners),
       'record_count': records.length,
       'live_record_count': records.where((item) => !item.tombstone).length,
       'tombstone_count': records.where((item) => item.tombstone).length,
@@ -622,6 +663,17 @@ final class AtlasVaultAuthenticatedCollectionSnapshot {
   }
 }
 
+Map<String, Object?> _sequenceOwnersJson(Map<String, Map<int, String>> owners) {
+  final devices = owners.keys.toList()..sort();
+  return <String, Object?>{
+    for (final device in devices)
+      device: <String, Object?>{
+        for (final sequence in (owners[device]!.keys.toList()..sort()))
+          '$sequence': owners[device]![sequence],
+      },
+  };
+}
+
 bool _sameStrings(List<String> left, List<String> right) {
   if (left.length != right.length) return false;
   for (var index = 0; index < left.length; index++) {
@@ -635,6 +687,7 @@ final class _CollectionReplay {
     required this.records,
     required this.fingerprints,
     required this.authorSequences,
+    required this.authorSequenceOwners,
     required this.objectRevisions,
     required this.lastOrder,
   });
@@ -647,6 +700,7 @@ final class _CollectionReplay {
         records: <String, AtlasVaultOpaqueCiphertextEnvelope>{},
         fingerprints: <String, String>{},
         authorSequences: <String, int>{},
+        authorSequenceOwners: <String, Map<int, String>>{},
         objectRevisions: <String, String>{},
         lastOrder: null,
       );
@@ -658,6 +712,10 @@ final class _CollectionReplay {
       records: records,
       fingerprints: Map<String, String>.from(snapshot.appliedFingerprints),
       authorSequences: Map<String, int>.from(snapshot.authorSequences),
+      authorSequenceOwners: <String, Map<int, String>>{
+        for (final entry in snapshot.authorSequenceOwners.entries)
+          entry.key: Map<int, String>.from(entry.value),
+      },
       objectRevisions: <String, String>{
         for (final entry in records.entries) entry.key: entry.value.revision,
       },
@@ -668,6 +726,7 @@ final class _CollectionReplay {
   final Map<String, AtlasVaultOpaqueCiphertextEnvelope> records;
   final Map<String, String> fingerprints;
   final Map<String, int> authorSequences;
+  final Map<String, Map<int, String>> authorSequenceOwners;
   final Map<String, String> objectRevisions;
   List<Object?>? lastOrder;
 
@@ -679,6 +738,12 @@ final class _CollectionReplay {
       return false;
     }
     if (fingerprints.length >= _maximumQueueOperations) _invalid();
+    final owners = authorSequenceOwners.putIfAbsent(
+      operation.authorDeviceId,
+      () => <int, String>{},
+    );
+    final knownOwner = owners[operation.authorSequence];
+    if (knownOwner != null && knownOwner != operation.operationId) _invalid();
     lastOrder = _advance(
       operation,
       authorSequences,
@@ -687,6 +752,7 @@ final class _CollectionReplay {
     );
     records[operation.envelope.objectId] = operation.envelope;
     fingerprints[operation.operationId] = digest;
+    owners[operation.authorSequence] = operation.operationId;
     return true;
   }
 }
@@ -815,6 +881,7 @@ final class AtlasVaultDurableEncryptedPatchCollection {
       records: replay.records,
       fingerprints: replay.fingerprints,
       authorSequences: replay.authorSequences,
+      authorSequenceOwners: replay.authorSequenceOwners,
       lastOrder: replay.lastOrder!,
       authenticationKey: _authenticationKey,
     );
@@ -859,6 +926,8 @@ Map<String, String> _validateConvergentHistory(
 ) {
   final receipts = <String, String>{};
   final snapshotSequences = <String, int>{};
+  final sequenceOwners = <String, String>{};
+  final operationSequences = <String, String>{};
   final revisionValues = <String, String>{};
   final revisionParents = <String, String?>{};
 
@@ -878,6 +947,17 @@ Map<String, String> _validateConvergentHistory(
     revisionParents[key] = envelope.parentRevision;
   }
 
+  void addSequenceOwner(String key, String operationId) {
+    final knownOwner = sequenceOwners[key];
+    final knownSequence = operationSequences[operationId];
+    if ((knownOwner != null && knownOwner != operationId) ||
+        (knownSequence != null && knownSequence != key)) {
+      _invalid();
+    }
+    sequenceOwners[key] = operationId;
+    operationSequences[operationId] = key;
+  }
+
   for (final snapshot in snapshots) {
     for (final entry in snapshot.appliedFingerprints.entries) {
       addReceipt(entry.key, entry.value);
@@ -886,21 +966,24 @@ Map<String, String> _validateConvergentHistory(
       final current = snapshotSequences[entry.key] ?? 0;
       if (entry.value > current) snapshotSequences[entry.key] = entry.value;
     }
+    for (final device in snapshot.authorSequenceOwners.entries) {
+      for (final owner in device.value.entries) {
+        final key = '${device.key}\u0000${owner.key}';
+        addSequenceOwner(key, owner.value);
+      }
+    }
     for (final envelope in snapshot.records) {
       addEnvelope(envelope);
     }
   }
 
-  final sequenceOwners = <String, String>{};
   for (final operation in operations) {
     final digest = _fingerprint(operation);
     final knownReceipt = receipts[operation.operationId];
     addReceipt(operation.operationId, digest);
     final sequenceKey =
         '${operation.authorDeviceId}\u0000${operation.authorSequence}';
-    final knownOwner = sequenceOwners[sequenceKey];
-    if (knownOwner != null && knownOwner != operation.operationId) _invalid();
-    sequenceOwners[sequenceKey] = operation.operationId;
+    addSequenceOwner(sequenceKey, operation.operationId);
     if (knownReceipt == null &&
         operation.authorSequence <=
             (snapshotSequences[operation.authorDeviceId] ?? 0)) {

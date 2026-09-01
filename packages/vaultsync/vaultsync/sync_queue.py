@@ -282,6 +282,21 @@ def _fingerprint(operation: EncryptedPatchOperation) -> str:
     return hashlib.sha256(_canonical_json(operation.to_dict())).hexdigest()
 
 
+def _validated_operation(operation: EncryptedPatchOperation) -> EncryptedPatchOperation:
+    if not isinstance(operation, EncryptedPatchOperation):
+        raise _error()
+    return EncryptedPatchOperation.from_dict(operation.to_dict())
+
+
+def _sequence_owners_json(
+    owners: Mapping[tuple[str, int], str],
+) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for (device, sequence), operation_id in sorted(owners.items()):
+        result.setdefault(device, {})[str(sequence)] = operation_id
+    return result
+
+
 class _EncryptedQueueFile:
     def __init__(self, path: str | Path, encryption_key: bytes, *, kind: str) -> None:
         if not isinstance(encryption_key, bytes) or len(encryption_key) != 32:
@@ -381,6 +396,7 @@ class AuthenticatedCollectionSnapshot:
     records: tuple[OpaqueCiphertextEnvelope, ...]
     applied_fingerprints: Mapping[str, str]
     author_sequences: Mapping[str, int]
+    author_sequence_owners: Mapping[tuple[str, int], str]
     authentication_tag_b64: str
     canonical_payload_sha256: str
 
@@ -418,6 +434,7 @@ class AuthenticatedCollectionSnapshot:
                 "records",
                 "applied_fingerprints",
                 "author_sequences",
+                "author_sequence_owners",
                 "record_count",
                 "live_record_count",
                 "tombstone_count",
@@ -464,6 +481,32 @@ class AuthenticatedCollectionSnapshot:
         }
         if sum(sequences.values()) != revision or order[3] not in fingerprints:
             raise _error()
+        raw_owners = _mapping(payload["author_sequence_owners"])
+        if set(raw_owners) != set(sequences):
+            raise _error()
+        sequence_owners: dict[tuple[str, int], str] = {}
+        for device, maximum_sequence in sequences.items():
+            device_owners = _mapping(raw_owners[device])
+            if len(device_owners) != maximum_sequence:
+                raise _error()
+            for sequence_text, operation_id in device_owners.items():
+                if (
+                    not isinstance(sequence_text, str)
+                    or not sequence_text.isascii()
+                    or not sequence_text.isdigit()
+                ):
+                    raise _error()
+                sequence = int(sequence_text)
+                if sequence < 1 or str(sequence) != sequence_text:
+                    raise _error()
+                sequence_owners[(device, sequence)] = _canonical_uuid(operation_id)
+            if {sequence for owner, sequence in sequence_owners if owner == device} != set(
+                range(1, maximum_sequence + 1)
+            ):
+                raise _error()
+        owner_ids = set(sequence_owners.values())
+        if len(owner_ids) != revision or owner_ids != set(fingerprints):
+            raise _error()
         record_count = payload["record_count"]
         live_count = payload["live_record_count"]
         tombstone_count = payload["tombstone_count"]
@@ -484,6 +527,7 @@ class AuthenticatedCollectionSnapshot:
             records=records,
             applied_fingerprints=fingerprints,
             author_sequences=sequences,
+            author_sequence_owners=sequence_owners,
             authentication_tag_b64=tag_text,
             canonical_payload_sha256=hashlib.sha256(payload_bytes).hexdigest(),
         )
@@ -509,6 +553,7 @@ class AuthenticatedCollectionSnapshot:
         records: Mapping[str, OpaqueCiphertextEnvelope],
         fingerprints: Mapping[str, str],
         author_sequences: Mapping[str, int],
+        author_sequence_owners: Mapping[tuple[str, int], str],
         last_order: tuple[int, str, int, str],
         authentication_key: bytes,
     ) -> AuthenticatedCollectionSnapshot:
@@ -522,6 +567,7 @@ class AuthenticatedCollectionSnapshot:
             "records": ordered_records,
             "applied_fingerprints": dict(sorted(fingerprints.items())),
             "author_sequences": dict(sorted(author_sequences.items())),
+            "author_sequence_owners": _sequence_owners_json(author_sequence_owners),
             "record_count": len(ordered_records),
             "live_record_count": sum(not item.tombstone for item in records.values()),
             "tombstone_count": sum(item.tombstone for item in records.values()),
@@ -551,6 +597,9 @@ class AuthenticatedCollectionSnapshot:
             "records": records,
             "applied_fingerprints": dict(self.applied_fingerprints),
             "author_sequences": dict(self.author_sequences),
+            "author_sequence_owners": _sequence_owners_json(
+                self.author_sequence_owners
+            ),
             "record_count": len(records),
             "live_record_count": sum(not item.tombstone for item in self.records),
             "tombstone_count": sum(item.tombstone for item in self.records),
@@ -571,6 +620,7 @@ class _CollectionReplay:
     records: dict[str, OpaqueCiphertextEnvelope]
     fingerprints: dict[str, str]
     author_sequences: dict[str, int]
+    author_sequence_owners: dict[tuple[str, int], str]
     object_revisions: dict[str, str]
     last_order: tuple[int, str, int, str] | None
 
@@ -579,12 +629,13 @@ class _CollectionReplay:
         cls, snapshot: AuthenticatedCollectionSnapshot | None
     ) -> _CollectionReplay:
         if snapshot is None:
-            return cls({}, {}, {}, {}, None)
+            return cls({}, {}, {}, {}, {}, None)
         records = {item.object_id: item for item in snapshot.records}
         return cls(
             records=records,
             fingerprints=dict(snapshot.applied_fingerprints),
             author_sequences=dict(snapshot.author_sequences),
+            author_sequence_owners=dict(snapshot.author_sequence_owners),
             object_revisions={key: item.revision for key, item in records.items()},
             last_order=snapshot.last_order,
         )
@@ -598,6 +649,10 @@ class _CollectionReplay:
             return False
         if len(self.fingerprints) >= MAXIMUM_QUEUE_OPERATIONS:
             raise _error()
+        sequence_key = (operation.author_device_id, operation.author_sequence)
+        known_owner = self.author_sequence_owners.get(sequence_key)
+        if known_owner is not None and known_owner != operation.operation_id:
+            raise _error()
         self.last_order = _advance_metadata(
             operation,
             author_sequences=self.author_sequences,
@@ -606,6 +661,7 @@ class _CollectionReplay:
         )
         self.records[operation.envelope.object_id] = operation.envelope
         self.fingerprints[operation.operation_id] = digest
+        self.author_sequence_owners[sequence_key] = operation.operation_id
         return True
 
 
@@ -692,8 +748,7 @@ class DurableEncryptedPatchCollection:
         )
 
     def append(self, operation: EncryptedPatchOperation) -> None:
-        if not isinstance(operation, EncryptedPatchOperation):
-            raise _error()
+        operation = _validated_operation(operation)
         snapshot, tail, replay = self._load()
         if not replay.apply(operation):
             return
@@ -736,6 +791,7 @@ class DurableEncryptedPatchCollection:
             records=replay.records,
             fingerprints=replay.fingerprints,
             author_sequences=replay.author_sequences,
+            author_sequence_owners=replay.author_sequence_owners,
             last_order=replay.last_order,
             authentication_key=self._authentication_key,
         )
@@ -777,6 +833,8 @@ def _validate_convergent_history(
 ) -> dict[str, str]:
     receipts: dict[str, str] = {}
     snapshot_sequences: dict[str, int] = {}
+    sequence_owners: dict[tuple[str, int], str] = {}
+    operation_sequences: dict[str, tuple[str, int]] = {}
     revision_values: dict[tuple[str, str], bytes] = {}
     revision_parents: dict[tuple[str, str], str | None] = {}
 
@@ -797,6 +855,21 @@ def _validate_convergent_history(
         revision_values[key] = encoded
         revision_parents[key] = envelope.parent_revision
 
+    def add_sequence_owner(
+        sequence_key: tuple[str, int], operation_id: str
+    ) -> None:
+        known_owner = sequence_owners.get(sequence_key)
+        known_sequence = operation_sequences.get(operation_id)
+        if (
+            known_owner is not None
+            and known_owner != operation_id
+            or known_sequence is not None
+            and known_sequence != sequence_key
+        ):
+            raise _error()
+        sequence_owners[sequence_key] = operation_id
+        operation_sequences[operation_id] = sequence_key
+
     for snapshot in snapshots:
         for operation_id, digest in snapshot.applied_fingerprints.items():
             add_receipt(operation_id, digest)
@@ -804,19 +877,17 @@ def _validate_convergent_history(
             snapshot_sequences[device_id] = max(
                 snapshot_sequences.get(device_id, 0), sequence
             )
+        for sequence_key, operation_id in snapshot.author_sequence_owners.items():
+            add_sequence_owner(sequence_key, operation_id)
         for envelope in snapshot.records:
             add_envelope(envelope)
 
-    sequence_owners: dict[tuple[str, int], str] = {}
     for operation in operations:
         digest = _fingerprint(operation)
         known_receipt = receipts.get(operation.operation_id)
         add_receipt(operation.operation_id, digest)
         sequence_key = (operation.author_device_id, operation.author_sequence)
-        known_owner = sequence_owners.get(sequence_key)
-        if known_owner is not None and known_owner != operation.operation_id:
-            raise _error()
-        sequence_owners[sequence_key] = operation.operation_id
+        add_sequence_owner(sequence_key, operation.operation_id)
         if (
             known_receipt is None
             and operation.author_sequence
@@ -999,8 +1070,7 @@ class DurableEncryptedConvergentReplica:
         self._store.write(_convergent_dict(state, collection_id=self._collection_id))
 
     def ingest_remote(self, operation: EncryptedPatchOperation) -> bool:
-        if not isinstance(operation, EncryptedPatchOperation):
-            raise _error()
+        operation = _validated_operation(operation)
         state = self._load()
         digest = _fingerprint(operation)
         known = state.receipts.get(operation.operation_id)
@@ -1012,8 +1082,7 @@ class DurableEncryptedConvergentReplica:
         return True
 
     def queue_local(self, operation: EncryptedPatchOperation) -> bool:
-        if not isinstance(operation, EncryptedPatchOperation):
-            raise _error()
+        operation = _validated_operation(operation)
         state = self._load()
         digest = _fingerprint(operation)
         known = state.receipts.get(operation.operation_id)
@@ -1122,8 +1191,7 @@ class DurableEncryptedOutbox:
         return pending[0] if pending else None
 
     def enqueue(self, operation: EncryptedPatchOperation) -> None:
-        if not isinstance(operation, EncryptedPatchOperation):
-            raise _error()
+        operation = _validated_operation(operation)
         operations = _load_outbox(self._store)
         for current in operations:
             if current.operation_id == operation.operation_id:
@@ -1330,10 +1398,9 @@ class DurableEncryptedInbox:
         if state.pending or state.cursor != expected_cursor:
             raise _error()
         incoming = tuple(operations)
-        if len(incoming) > MAXIMUM_QUEUE_OPERATIONS or any(
-            not isinstance(item, EncryptedPatchOperation) for item in incoming
-        ):
+        if len(incoming) > MAXIMUM_QUEUE_OPERATIONS:
             raise _error()
+        incoming = tuple(_validated_operation(item) for item in incoming)
         if incoming != tuple(sorted(incoming)) or len(
             {item.operation_id for item in incoming}
         ) != len(incoming):

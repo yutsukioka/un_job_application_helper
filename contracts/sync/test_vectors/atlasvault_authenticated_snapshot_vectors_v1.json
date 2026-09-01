@@ -3,7 +3,7 @@
   "version": 1,
   "warning": "Synthetic test-only ciphertext fixtures; never use as production data.",
   "authentication_key_derivation_label": "atlasvault-c18-synthetic-snapshot-authentication",
-  "expected_canonical_payload_sha256": "f4b00d950d4831164836844affd77ee593fc73ffb5ed280ea4dcc8c5616d07dd",
+  "expected_canonical_payload_sha256": "6c71cd265ee374c5b4fd3964225fb3fc86c5dc39e9f82f45d91a79aa41ccd983",
   "snapshot": {
     "format": "atlasvault-authenticated-collection-snapshot",
     "version": 1,
@@ -41,13 +41,19 @@
       "author_sequences": {
         "device_a": 2
       },
+      "author_sequence_owners": {
+        "device_a": {
+          "1": "00000000-0000-4000-8000-000000000001",
+          "2": "00000000-0000-4000-8000-000000000002"
+        }
+      },
       "record_count": 1,
       "live_record_count": 0,
       "tombstone_count": 1
     },
     "authentication": {
       "algorithm": "HMAC-SHA256",
-      "tag_b64": "nVCAa4+q4tn8EOTxmIN2R0Vyza6U1+8JEwG+tCO2ZYU="
+      "tag_b64": "7OwEglaW1mFYHwmmQ4xa09Bb6Rk3gFsdI+2BqL7LWrA="
     }
   }
 }
