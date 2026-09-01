@@ -82,5 +82,6 @@ def test_c20_real_proof_is_enforced_by_hosted_ci() -> None:
 
     assert "Run C20 two-device convergence proof" in workflow
     assert 'python -m pip install -e "services/atlasvault-api[dev]"' in workflow
+    assert 'python -m pip install "uvicorn>=0.30,<1"' in workflow
     assert "python scripts/ci/atlasvault_two_device_convergence.py" in workflow
     assert '--output "$RUNNER_TEMP/atlasvault-c20-two-device-convergence.json"' in workflow
