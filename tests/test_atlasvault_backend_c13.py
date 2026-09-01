@@ -425,10 +425,13 @@ def test_c13_registry_rejects_a_previously_used_revision(
         ),
     )
     assert cycled.status_code == 409
-    assert client.get(
-        f"/v1/accounts/{ACCOUNT_A}/devices",
-        headers=headers,
-    ).json()["revision"] == REVISION_2
+    assert (
+        client.get(
+            f"/v1/accounts/{ACCOUNT_A}/devices",
+            headers=headers,
+        ).json()["revision"]
+        == REVISION_2
+    )
 
 
 def test_c13_served_openapi_declares_bearer_security() -> None:

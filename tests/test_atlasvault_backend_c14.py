@@ -325,24 +325,30 @@ def test_c14_changed_revision_reuse_is_rejected_across_resource_history(
         ("*", "history-metadata-1", metadata_first),
         ("history-metadata-r1", "history-metadata-2", metadata_second),
     ):
-        assert client.put(
+        assert (
+            client.put(
+                metadata_path,
+                headers=_write_headers(
+                    authorization,
+                    expected=expected,
+                    idempotency_key=key,
+                ),
+                json=envelope,
+            ).status_code
+            == 200
+        )
+    assert (
+        client.put(
             metadata_path,
             headers=_write_headers(
                 authorization,
-                expected=expected,
-                idempotency_key=key,
+                expected="history-metadata-r2",
+                idempotency_key="history-metadata-reuse",
             ),
-            json=envelope,
-        ).status_code == 200
-    assert client.put(
-        metadata_path,
-        headers=_write_headers(
-            authorization,
-            expected="history-metadata-r2",
-            idempotency_key="history-metadata-reuse",
-        ),
-        json=metadata_reused,
-    ).status_code == 409
+            json=metadata_reused,
+        ).status_code
+        == 409
+    )
     assert client.get(metadata_path, headers=authorization).json() == metadata_second
 
     object_path = f"/v1/vaults/{VAULT_ID}/objects/history-object"
@@ -368,24 +374,30 @@ def test_c14_changed_revision_reuse_is_rejected_across_resource_history(
         ("*", "history-object-1", object_first),
         ("history-object-r1", "history-object-2", object_second),
     ):
-        assert client.put(
+        assert (
+            client.put(
+                object_path,
+                headers=_write_headers(
+                    authorization,
+                    expected=expected,
+                    idempotency_key=key,
+                ),
+                json=envelope,
+            ).status_code
+            == 200
+        )
+    assert (
+        client.put(
             object_path,
             headers=_write_headers(
                 authorization,
-                expected=expected,
-                idempotency_key=key,
+                expected="history-object-r2",
+                idempotency_key="history-object-reuse",
             ),
-            json=envelope,
-        ).status_code == 200
-    assert client.put(
-        object_path,
-        headers=_write_headers(
-            authorization,
-            expected="history-object-r2",
-            idempotency_key="history-object-reuse",
-        ),
-        json=object_reused,
-    ).status_code == 409
+            json=object_reused,
+        ).status_code
+        == 409
+    )
     assert client.get(object_path, headers=authorization).json() == object_second
 
     snapshot_path = f"/v1/vaults/{VAULT_ID}/snapshots"
@@ -411,24 +423,30 @@ def test_c14_changed_revision_reuse_is_rejected_across_resource_history(
         ("*", "history-snapshot-1", snapshot_first),
         ("history-snapshot-r1", "history-snapshot-2", snapshot_second),
     ):
-        assert client.put(
+        assert (
+            client.put(
+                snapshot_path,
+                headers=_write_headers(
+                    authorization,
+                    expected=expected,
+                    idempotency_key=key,
+                ),
+                json=envelope,
+            ).status_code
+            == 200
+        )
+    assert (
+        client.put(
             snapshot_path,
             headers=_write_headers(
                 authorization,
-                expected=expected,
-                idempotency_key=key,
+                expected="history-snapshot-r2",
+                idempotency_key="history-snapshot-reuse",
             ),
-            json=envelope,
-        ).status_code == 200
-    assert client.put(
-        snapshot_path,
-        headers=_write_headers(
-            authorization,
-            expected="history-snapshot-r2",
-            idempotency_key="history-snapshot-reuse",
-        ),
-        json=snapshot_reused,
-    ).status_code == 409
+            json=snapshot_reused,
+        ).status_code
+        == 409
+    )
     assert client.get(snapshot_path, headers=authorization).json() == snapshot_second
 
 
@@ -638,9 +656,10 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     assert parameters["PageSize"]["name"] == "page_size"
 
     schemas = contract["components"]["schemas"]
-    assert schemas["EncryptedVaultMetadataEnvelope"]["properties"]["revision"][
-        "maxLength"
-    ] == 128
+    assert (
+        schemas["EncryptedVaultMetadataEnvelope"]["properties"]["revision"]["maxLength"]
+        == 128
+    )
     opaque_properties = schemas["OpaqueCiphertextEnvelope"]["properties"]
     assert opaque_properties["revision"]["maxLength"] == 128
     assert opaque_properties["parent_revision"]["maxLength"] == 128

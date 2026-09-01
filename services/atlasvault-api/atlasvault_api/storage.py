@@ -91,12 +91,22 @@ class _Receipt:
 @dataclass
 class _VaultState:
     metadata: EncryptedVaultMetadataEnvelopeModel | None = None
+    metadata_by_revision: dict[str, EncryptedVaultMetadataEnvelopeModel] = field(
+        default_factory=dict
+    )
     objects: dict[str, OpaqueCiphertextEnvelopeModel] = field(default_factory=dict)
+    object_revisions: dict[
+        str,
+        dict[str, OpaqueCiphertextEnvelopeModel],
+    ] = field(default_factory=dict)
     patches: list[OpaqueCiphertextEnvelopeModel] = field(default_factory=list)
     patches_by_revision: dict[str, OpaqueCiphertextEnvelopeModel] = field(
         default_factory=dict
     )
     snapshot: OpaqueCiphertextEnvelopeModel | None = None
+    snapshots_by_revision: dict[str, OpaqueCiphertextEnvelopeModel] = field(
+        default_factory=dict
+    )
     receipts: dict[tuple[str, str], _Receipt] = field(default_factory=dict)
 
 
@@ -145,6 +155,7 @@ class InMemoryOpaqueStore:
             )
             if replay is not None:
                 return _require_metadata(replay)
+            _reject_changed_revision(state.metadata_by_revision, envelope)
             duplicate = _same_revision(state.metadata, envelope)
             if duplicate is not None:
                 self._record(
@@ -158,6 +169,7 @@ class InMemoryOpaqueStore:
                 return _require_metadata(duplicate)
             _require_cas(state.metadata, expected_revision)
             state.metadata = envelope
+            state.metadata_by_revision[envelope.revision] = envelope
             self._record(
                 state,
                 "metadata",
@@ -204,6 +216,8 @@ class InMemoryOpaqueStore:
             if replay is not None:
                 return _require_opaque(replay)
             current = state.objects.get(object_id)
+            revisions = state.object_revisions.setdefault(object_id, {})
+            _reject_changed_revision(revisions, envelope)
             duplicate = _same_revision(current, envelope)
             if duplicate is not None:
                 self._record(
@@ -217,6 +231,7 @@ class InMemoryOpaqueStore:
                 return _require_opaque(duplicate)
             _require_parent_cas(current, envelope, expected_revision)
             state.objects[object_id] = envelope
+            revisions[envelope.revision] = envelope
             self._record(
                 state,
                 scope,
@@ -346,6 +361,7 @@ class InMemoryOpaqueStore:
             )
             if replay is not None:
                 return _require_opaque(replay)
+            _reject_changed_revision(state.snapshots_by_revision, envelope)
             duplicate = _same_revision(state.snapshot, envelope)
             if duplicate is not None:
                 self._record(
@@ -359,6 +375,7 @@ class InMemoryOpaqueStore:
                 return _require_opaque(duplicate)
             _require_parent_cas(state.snapshot, envelope, expected_revision)
             state.snapshot = envelope
+            state.snapshots_by_revision[envelope.revision] = envelope
             self._record(
                 state,
                 "snapshot",
@@ -478,6 +495,15 @@ def _same_revision(
     if current != incoming:
         raise OpaqueStorageConflict
     return current
+
+
+def _reject_changed_revision(
+    history: dict[str, StorageEnvelope],
+    incoming: StorageEnvelope,
+) -> None:
+    previous = history.get(incoming.revision)
+    if previous is not None and previous != incoming:
+        raise OpaqueStorageConflict
 
 
 def _require_cas(

@@ -12,14 +12,24 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, NoReturn
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from fastapi import FastAPI, Header, HTTPException, Path, Query, Request, status
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Security,
+    status,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from vaultsync.device_identity import (
@@ -182,6 +192,7 @@ class _Session:
 class _Account:
     revision: str
     devices: dict[str, SignedDeviceDescriptorModel]
+    used_revisions: set[str] = field(default_factory=set)
 
 
 class AtlasVaultBackend:
@@ -239,6 +250,7 @@ class AtlasVaultBackend:
             self._accounts[account_id] = _Account(
                 revision=transition.revision,
                 devices={descriptor.descriptor.device_id: transition.device},
+                used_revisions={transition.revision},
             )
             return self._registry_view(account_id)
 
@@ -273,6 +285,7 @@ class AtlasVaultBackend:
         request: SessionProofRequest,
     ) -> SessionGrant:
         with self._lock:
+            now = self._monotonic()
             challenge = self._challenges.pop(
                 (account_id, request.challenge_id),
                 None,
@@ -282,7 +295,7 @@ class AtlasVaultBackend:
                 challenge is None
                 or account is None
                 or not hmac.compare_digest(challenge.device_id, request.device_id)
-                or challenge.expires_at <= self._monotonic()
+                or challenge.expires_at <= now
             ):
                 raise AuthorizationFailed
             signed_descriptor = account.devices.get(request.device_id)
@@ -306,6 +319,7 @@ class AtlasVaultBackend:
                 )
             except (InvalidSignature, TypeError, ValueError) as exc:
                 raise AuthorizationFailed from exc
+            self._prune_expired_sessions(now)
             token = _encode_token(_entropy_bytes(self._entropy, 32))
             digest = _token_digest(token)
             if digest in self._sessions:
@@ -313,7 +327,7 @@ class AtlasVaultBackend:
             self._sessions[digest] = _Session(
                 account_id=account_id,
                 device_id=request.device_id,
-                expires_at=self._monotonic() + SESSION_LIFETIME_SECONDS,
+                expires_at=now + SESSION_LIFETIME_SECONDS,
             )
             return SessionGrant(
                 token_type="Bearer",
@@ -347,6 +361,8 @@ class AtlasVaultBackend:
                 raise AuthorizationFailed
             if not hmac.compare_digest(account.revision, transition.parent_revision):
                 raise RevisionConflict
+            if transition.revision in account.used_revisions:
+                raise RevisionConflict
             signer = account.devices.get(transition.signer_device_id)
             if signer is None:
                 raise AuthorizationFailed
@@ -360,6 +376,7 @@ class AtlasVaultBackend:
                 raise RevisionConflict
             account.devices[target.descriptor.device_id] = transition.device
             account.revision = transition.revision
+            account.used_revisions.add(transition.revision)
             return self._registry_view(account_id)
 
     def authorize_account(self, token: str) -> str:
@@ -393,6 +410,15 @@ class AtlasVaultBackend:
             raise AuthorizationFailed
         return session
 
+    def _prune_expired_sessions(self, now: float) -> None:
+        expired = [
+            digest
+            for digest, session in self._sessions.items()
+            if session.expires_at <= now
+        ]
+        for digest in expired:
+            del self._sessions[digest]
+
     def _registry_view(self, account_id: str) -> DeviceRegistryView:
         account = self._accounts[account_id]
         return DeviceRegistryView(
@@ -405,7 +431,11 @@ class AtlasVaultBackend:
 
 
 AccountPath = Annotated[str, Path(pattern=ACCOUNT_ID_PATTERN)]
-AuthorizationHeader = Annotated[str | None, Header(alias="Authorization")]
+_BEARER_SECURITY = HTTPBearer(auto_error=False, scheme_name="bearerAuth")
+BearerAuthorization = Annotated[
+    HTTPAuthorizationCredentials | None,
+    Security(_BEARER_SECURITY),
+]
 VaultPath = Annotated[
     str,
     Path(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH),
@@ -601,10 +631,10 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     )
     def list_account_devices(
         account_id: AccountPath,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> DeviceRegistryView:
         try:
-            return service.list_devices(account_id, _bearer_token(authorization))
+            return service.list_devices(account_id, _credential_token(authorization))
         except AuthorizationFailed as exc:
             raise HTTPException(
                 status_code=401, detail="Authorization failed."
@@ -618,12 +648,12 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     def add_account_device(
         account_id: AccountPath,
         request: SignedDeviceRegistryTransitionModel,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> DeviceRegistryView:
         try:
             return service.add_device(
                 account_id,
-                _bearer_token(authorization),
+                _credential_token(authorization),
                 request,
             )
         except AuthorizationFailed as exc:
@@ -649,7 +679,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         request: EncryptedVaultMetadataEnvelopeModel,
         if_match: IfMatchHeader,
         idempotency_key: IdempotencyKeyHeader,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> EncryptedVaultMetadataEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -670,7 +700,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     )
     def get_encrypted_vault_metadata(
         vault_id: VaultPath,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> EncryptedVaultMetadataEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -689,7 +719,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         request: OpaqueCiphertextEnvelopeModel,
         if_match: IfMatchHeader,
         idempotency_key: IdempotencyKeyHeader,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -712,7 +742,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     def get_opaque_ciphertext_object(
         vault_id: VaultPath,
         object_id: ObjectPath,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -731,7 +761,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         request: OpaqueCiphertextEnvelopeModel,
         if_match: IfMatchHeader,
         idempotency_key: IdempotencyKeyHeader,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -752,7 +782,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     )
     def list_encrypted_patches(
         vault_id: VaultPath,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
         cursor: CursorQuery = None,
         page_size: PageSizeQuery = None,
     ) -> OpaqueCiphertextPageModel:
@@ -777,7 +807,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         request: OpaqueCiphertextEnvelopeModel,
         if_match: IfMatchHeader,
         idempotency_key: IdempotencyKeyHeader,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -798,7 +828,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     )
     def get_encrypted_snapshot(
         vault_id: VaultPath,
-        authorization: AuthorizationHeader = None,
+        authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
         account_id = _authorized_storage_account(service, authorization)
         try:
@@ -818,10 +848,10 @@ _STORAGE_ERRORS = (
 
 def _authorized_storage_account(
     backend: AtlasVaultBackend,
-    authorization: str | None,
+    authorization: HTTPAuthorizationCredentials | None,
 ) -> str:
     try:
-        return backend.authorize_account(_bearer_token(authorization))
+        return backend.authorize_account(_credential_token(authorization))
     except AuthorizationFailed as exc:
         raise HTTPException(
             status_code=401,
@@ -974,9 +1004,19 @@ def _entropy_bytes(entropy: Callable[[int], bytes], length: int) -> bytes:
 
 
 def _bearer_token(authorization: str | None) -> str:
-    if authorization is None or not authorization.startswith("Bearer "):
+    if authorization is None:
         raise AuthorizationFailed
-    token = authorization.removeprefix("Bearer ")
+    scheme, separator, token = authorization.partition(" ")
+    if separator != " " or scheme.casefold() != "bearer":
+        raise AuthorizationFailed
     if not token or any(character.isspace() for character in token):
         raise AuthorizationFailed
     return token
+
+
+def _credential_token(
+    authorization: HTTPAuthorizationCredentials | None,
+) -> str:
+    if authorization is None:
+        raise AuthorizationFailed
+    return _bearer_token(f"{authorization.scheme} {authorization.credentials}")

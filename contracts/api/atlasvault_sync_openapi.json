@@ -985,7 +985,8 @@
             "type": "string"
           },
           "revision": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 128
           },
           "key_epoch": {
             "type": "integer",
@@ -1042,13 +1043,15 @@
             "type": "string"
           },
           "revision": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 128
           },
           "parent_revision": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "maxLength": 128
           },
           "key_epoch": {
             "type": "integer",
