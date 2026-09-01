@@ -138,6 +138,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e "packages/vaultsync[dev]"
+          python -m pip install -e "services/atlasvault-api[dev]"
 
       - name: Set up Flutter for host-supported golden tests
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -145,6 +146,31 @@ jobs:
           flutter-version: "${{ env.FLUTTER_VERSION }}"
           channel: stable
           cache: true
+
+      - name: Run C20 two-device convergence proof
+        run: |
+          cd apps/atlas_flutter
+          flutter pub get
+          cd "$GITHUB_WORKSPACE"
+          python scripts/ci/atlasvault_two_device_convergence.py \
+            --output "$RUNNER_TEMP/atlasvault-c20-two-device-convergence.json"
+          python - "$RUNNER_TEMP/atlasvault-c20-two-device-convergence.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          pairings = report["pairings"]
+          if len(pairings) != 3 or not all(
+              item["matching_state_hashes"]
+              and item["terminal_tombstone"]
+              and item["duplicate_replay_noop"]
+              for item in pairings
+          ):
+              raise SystemExit("C20 convergence report failed closed")
+          print(f'C20 final state SHA-256: {report["all_pair_state_sha256"]}')
+          PY
+          rm -f -- "$RUNNER_TEMP/atlasvault-c20-two-device-convergence.json"
 
       - name: Run AtlasVault Swift security checks
         run: ./scripts/ci/atlasvault_swift.sh

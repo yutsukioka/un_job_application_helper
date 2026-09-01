@@ -347,12 +347,15 @@ class _EncryptedQueueFile:
                 if not name.startswith(prefix) or not name.endswith(suffix):
                     continue
                 token = name[len(prefix) : -len(suffix)]
-                parsed = uuid.UUID(token)
+                try:
+                    parsed = uuid.UUID(token)
+                except ValueError:
+                    continue
                 if parsed.hex != token:
                     continue
                 if candidate.is_file() or candidate.is_symlink():
                     candidate.unlink()
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
             raise _error() from exc
 
     def read(self, default: Mapping[str, Any]) -> dict[str, Any]:
