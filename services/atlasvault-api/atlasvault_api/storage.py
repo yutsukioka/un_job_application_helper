@@ -13,6 +13,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from atlasvault_api.controls import AbuseControlPolicy
+
 OPAQUE_ID_MAX_LENGTH = 128
 OPAQUE_ID_PATTERN = (
     r"^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|"
@@ -156,6 +158,10 @@ class InvalidOpaqueStorageRequest(ValueError):
     """Raised when opaque path or cursor metadata is inconsistent."""
 
 
+class OpaqueStorageCapacityExceeded(ValueError):
+    """Raised before an opaque write would exceed retained-state limits."""
+
+
 StorageEnvelope = EncryptedVaultMetadataEnvelopeModel | OpaqueCiphertextEnvelopeModel
 
 
@@ -201,6 +207,15 @@ class _Cursor:
     next_cursor: str | None = None
 
 
+@dataclass(frozen=True)
+class _CapacityDelta:
+    vaults: int
+    objects: int
+    patches: int
+    revisions: int
+    envelope_bytes: int
+
+
 class InMemoryOpaqueStore:
     """Thread-safe test store that never decodes or indexes ciphertext fields."""
 
@@ -209,11 +224,19 @@ class InMemoryOpaqueStore:
         *,
         entropy: Callable[[int], bytes] = secrets.token_bytes,
         monotonic: Callable[[], float] = time.monotonic,
+        limits: AbuseControlPolicy | None = None,
     ) -> None:
         self._entropy = entropy
         self._monotonic = monotonic
+        self._limits = limits or AbuseControlPolicy()
         self._lock = threading.RLock()
         self._vaults: dict[tuple[str, str], _VaultState] = {}
+        self._vaults_per_account: dict[str, int] = {}
+        self._objects_per_account: dict[str, int] = {}
+        self._patches_per_account: dict[str, int] = {}
+        self._revisions_per_account: dict[str, int] = {}
+        self._retained_bytes = 0
+        self._retained_bytes_per_account: dict[str, int] = {}
         self._cursors: dict[str, _Cursor] = {}
         self._cursor_expiries: list[tuple[float, int, str]] = []
         self._next_cursor_expiry_sequence = 0
@@ -261,6 +284,12 @@ class InMemoryOpaqueStore:
                 envelope,
             )
             _require_cas(state.metadata, expected_revision)
+            capacity = self._capacity_delta(
+                account_id,
+                vault_id,
+                envelope,
+            )
+            self._require_capacity(account_id, capacity)
             state.metadata = envelope
             state.metadata_revision_fingerprints[envelope.revision] = (
                 _envelope_fingerprint(envelope)
@@ -273,7 +302,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
-            self._retain_state(account_id, vault_id, state)
+            self._retain_state(account_id, vault_id, state, capacity)
             return envelope
 
     def get_metadata(
@@ -327,6 +356,13 @@ class InMemoryOpaqueStore:
                 return _require_opaque(duplicate)
             _reject_historical_revision(revisions, envelope)
             _require_parent_cas(current, envelope, expected_revision)
+            capacity = self._capacity_delta(
+                account_id,
+                vault_id,
+                envelope,
+                objects=int(current is None),
+            )
+            self._require_capacity(account_id, capacity)
             state.objects[object_id] = envelope
             revisions[envelope.revision] = _envelope_fingerprint(envelope)
             state.object_revision_fingerprints[object_id] = revisions
@@ -338,7 +374,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
-            self._retain_state(account_id, vault_id, state)
+            self._retain_state(account_id, vault_id, state, capacity)
             return envelope
 
     def get_object(
@@ -390,6 +426,13 @@ class InMemoryOpaqueStore:
                 return _require_opaque(duplicate)
             current = state.patches[-1] if state.patches else None
             _require_parent_cas(current, envelope, expected_revision)
+            capacity = self._capacity_delta(
+                account_id,
+                vault_id,
+                envelope,
+                patches=1,
+            )
+            self._require_capacity(account_id, capacity)
             state.patches.append(envelope)
             state.patches_by_revision[envelope.revision] = envelope
             self._record(
@@ -400,7 +443,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
-            self._retain_state(account_id, vault_id, state)
+            self._retain_state(account_id, vault_id, state, capacity)
             return envelope
 
     def list_patches(
@@ -480,6 +523,12 @@ class InMemoryOpaqueStore:
                 envelope,
             )
             _require_parent_cas(state.snapshot, envelope, expected_revision)
+            capacity = self._capacity_delta(
+                account_id,
+                vault_id,
+                envelope,
+            )
+            self._require_capacity(account_id, capacity)
             state.snapshot = envelope
             state.snapshot_revision_fingerprints[envelope.revision] = (
                 _envelope_fingerprint(envelope)
@@ -492,7 +541,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
-            self._retain_state(account_id, vault_id, state)
+            self._retain_state(account_id, vault_id, state, capacity)
             return envelope
 
     def get_snapshot(
@@ -514,8 +563,70 @@ class InMemoryOpaqueStore:
         account_id: str,
         vault_id: str,
         state: _VaultState,
+        capacity: _CapacityDelta,
     ) -> None:
         self._vaults[(account_id, vault_id)] = state
+        if capacity.vaults:
+            self._vaults_per_account[account_id] = (
+                self._vaults_per_account.get(account_id, 0) + capacity.vaults
+            )
+        if capacity.objects:
+            self._objects_per_account[account_id] = (
+                self._objects_per_account.get(account_id, 0) + capacity.objects
+            )
+        if capacity.patches:
+            self._patches_per_account[account_id] = (
+                self._patches_per_account.get(account_id, 0) + capacity.patches
+            )
+        self._revisions_per_account[account_id] = (
+            self._revisions_per_account.get(account_id, 0) + capacity.revisions
+        )
+        self._retained_bytes += capacity.envelope_bytes
+        self._retained_bytes_per_account[account_id] = (
+            self._retained_bytes_per_account.get(account_id, 0)
+            + capacity.envelope_bytes
+        )
+
+    def _capacity_delta(
+        self,
+        account_id: str,
+        vault_id: str,
+        envelope: StorageEnvelope,
+        *,
+        objects: int = 0,
+        patches: int = 0,
+    ) -> _CapacityDelta:
+        return _CapacityDelta(
+            vaults=int((account_id, vault_id) not in self._vaults),
+            objects=objects,
+            patches=patches,
+            revisions=1,
+            envelope_bytes=len(envelope.model_dump_json().encode("utf-8")),
+        )
+
+    def _require_capacity(
+        self,
+        account_id: str,
+        capacity: _CapacityDelta,
+    ) -> None:
+        limits = self._limits
+        if (
+            len(self._vaults) + capacity.vaults > limits.max_retained_vaults
+            or self._vaults_per_account.get(account_id, 0) + capacity.vaults
+            > limits.max_retained_vaults_per_account
+            or self._objects_per_account.get(account_id, 0) + capacity.objects
+            > limits.max_retained_objects_per_account
+            or self._patches_per_account.get(account_id, 0) + capacity.patches
+            > limits.max_retained_patches_per_account
+            or self._revisions_per_account.get(account_id, 0) + capacity.revisions
+            > limits.max_retained_revisions_per_account
+            or self._retained_bytes + capacity.envelope_bytes
+            > limits.max_retained_bytes
+            or self._retained_bytes_per_account.get(account_id, 0)
+            + capacity.envelope_bytes
+            > limits.max_retained_bytes_per_account
+        ):
+            raise OpaqueStorageCapacityExceeded
 
     def _replay(
         self,

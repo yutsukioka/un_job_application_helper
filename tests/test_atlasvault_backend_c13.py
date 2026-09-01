@@ -48,8 +48,8 @@ ACCOUNT_B = f"ava1-{hashlib.sha256(b'account-b').hexdigest()}"
 REVISION_1 = "10000000-0000-4000-8000-000000000001"
 REVISION_2 = "10000000-0000-4000-8000-000000000002"
 UTC_SECONDS_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
-BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{43}=$"
-BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{86}==$"
+BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$"
+BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{85}[AQgw]==$"
 
 
 class DeterministicEntropy:
@@ -861,8 +861,8 @@ def test_c13_account_base64_schema_requires_exact_binary_lengths(
     )
     assert response.status_code == 422
 
-    assert BASE64_32_PATTERN == r"^[A-Za-z0-9+/]{42}[AQgw]=$"
-    assert BASE64_64_PATTERN == r"^[A-Za-z0-9+/]{85}[AEIMQUYcgkosw048]==$"
+    assert BASE64_32_PATTERN == r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$"
+    assert BASE64_64_PATTERN == r"^[A-Za-z0-9+/]{85}[AQgw]==$"
 
 
 def test_c13_protected_unauthorized_routes_send_bearer_challenge() -> None:

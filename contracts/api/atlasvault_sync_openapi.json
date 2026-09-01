@@ -14,6 +14,13 @@
     "maxLiveSessions": 4096,
     "maxSessionsPerDevice": 8,
     "maxDevicesPerAccount": 256,
+    "maxRetainedVaults": 4096,
+    "maxRetainedVaultsPerAccount": 128,
+    "maxRetainedObjectsPerAccount": 16384,
+    "maxRetainedPatchesPerAccount": 65536,
+    "maxRetainedRevisionsPerAccount": 131072,
+    "maxRetainedBytes": 1073741824,
+    "maxRetainedBytesPerAccount": 536870912,
     "rateWindowSeconds": 60,
     "maxRequestBytes": 201326592,
     "maxAccountRequestBytes": 65536,
@@ -761,8 +768,7 @@
         "schema": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 100,
-          "default": 100
+          "maximum": 100
         }
       }
     },
@@ -891,14 +897,14 @@
             "type": "string",
             "minLength": 44,
             "maxLength": 44,
-            "pattern": "^[A-Za-z0-9+/]{43}=$",
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
             "contentEncoding": "base64"
           },
           "agreement_public_key": {
             "type": "string",
             "minLength": 44,
             "maxLength": 44,
-            "pattern": "^[A-Za-z0-9+/]{43}=$",
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
             "contentEncoding": "base64"
           },
           "created_at": {
@@ -936,7 +942,7 @@
             "type": "string",
             "minLength": 88,
             "maxLength": 88,
-            "pattern": "^[A-Za-z0-9+/]{86}==$",
+            "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
             "contentEncoding": "base64"
           }
         }
@@ -1013,7 +1019,7 @@
             "type": "string",
             "minLength": 88,
             "maxLength": 88,
-            "pattern": "^[A-Za-z0-9+/]{86}==$",
+            "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
             "contentEncoding": "base64"
           }
         }
@@ -1048,7 +1054,7 @@
             "type": "string",
             "minLength": 44,
             "maxLength": 44,
-            "pattern": "^[A-Za-z0-9+/]{43}=$",
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
             "contentEncoding": "base64"
           },
           "expires_in_seconds": {
@@ -1077,7 +1083,7 @@
             "type": "string",
             "minLength": 88,
             "maxLength": 88,
-            "pattern": "^[A-Za-z0-9+/]{86}==$",
+            "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
             "contentEncoding": "base64"
           }
         }

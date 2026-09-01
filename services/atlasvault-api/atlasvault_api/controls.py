@@ -21,6 +21,13 @@ DEFAULT_MAX_CHALLENGES_PER_DEVICE = 8
 DEFAULT_MAX_SESSIONS = 4096
 DEFAULT_MAX_SESSIONS_PER_DEVICE = 8
 DEFAULT_MAX_DEVICES_PER_ACCOUNT = 256
+DEFAULT_MAX_RETAINED_VAULTS = 4096
+DEFAULT_MAX_RETAINED_VAULTS_PER_ACCOUNT = 128
+DEFAULT_MAX_RETAINED_OBJECTS_PER_ACCOUNT = 16_384
+DEFAULT_MAX_RETAINED_PATCHES_PER_ACCOUNT = 65_536
+DEFAULT_MAX_RETAINED_REVISIONS_PER_ACCOUNT = 131_072
+DEFAULT_MAX_RETAINED_BYTES = 1024 * 1024 * 1024
+DEFAULT_MAX_RETAINED_BYTES_PER_ACCOUNT = 512 * 1024 * 1024
 MAX_RETAINED_SECURITY_EVENTS = 256
 MAX_COUNTER_PRUNE_PER_REQUEST = 64
 
@@ -51,6 +58,13 @@ class AbuseControlPolicy:
     max_sessions: int = DEFAULT_MAX_SESSIONS
     max_sessions_per_device: int = DEFAULT_MAX_SESSIONS_PER_DEVICE
     max_devices_per_account: int = DEFAULT_MAX_DEVICES_PER_ACCOUNT
+    max_retained_vaults: int = DEFAULT_MAX_RETAINED_VAULTS
+    max_retained_vaults_per_account: int = DEFAULT_MAX_RETAINED_VAULTS_PER_ACCOUNT
+    max_retained_objects_per_account: int = DEFAULT_MAX_RETAINED_OBJECTS_PER_ACCOUNT
+    max_retained_patches_per_account: int = DEFAULT_MAX_RETAINED_PATCHES_PER_ACCOUNT
+    max_retained_revisions_per_account: int = DEFAULT_MAX_RETAINED_REVISIONS_PER_ACCOUNT
+    max_retained_bytes: int = DEFAULT_MAX_RETAINED_BYTES
+    max_retained_bytes_per_account: int = DEFAULT_MAX_RETAINED_BYTES_PER_ACCOUNT
 
     def __post_init__(self) -> None:
         integer_limits = (
@@ -64,6 +78,13 @@ class AbuseControlPolicy:
             self.max_sessions,
             self.max_sessions_per_device,
             self.max_devices_per_account,
+            self.max_retained_vaults,
+            self.max_retained_vaults_per_account,
+            self.max_retained_objects_per_account,
+            self.max_retained_patches_per_account,
+            self.max_retained_revisions_per_account,
+            self.max_retained_bytes,
+            self.max_retained_bytes_per_account,
         )
         valid_window = (
             type(self.window_seconds) in (int, float)

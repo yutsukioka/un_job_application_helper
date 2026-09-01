@@ -112,7 +112,8 @@ device-ID checks, and tampered or stale transitions fail closed.
 Public signing/agreement keys and authentication challenges are canonical
 base64 encodings of exactly 32 bytes; descriptor, transition, and session-proof
 signatures are canonical base64 encodings of exactly 64 bytes. Their schemas
-publish the corresponding length and alphabet constraints. Device and
+publish the corresponding length, alphabet, and zero padding-bit constraints,
+so a schema-valid value is also a canonical base64 value. Device and
 transition signature verification runs outside the shared registry lock, then
 authorization, capacity, parent revision, and revision uniqueness are rechecked
 under the lock immediately before commit.
@@ -143,6 +144,13 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 - 4,096 live session digests per process;
 - 8 live session digests per account/device pair;
 - 256 retained public devices per account;
+- 4,096 retained opaque vault namespaces per process;
+- 128 retained opaque vault namespaces per account;
+- 16,384 retained object IDs per account;
+- 65,536 retained patches per account;
+- 131,072 retained ciphertext revisions per account;
+- 1 GiB conservative retained ciphertext-revision bytes per process;
+- 512 MiB conservative retained ciphertext-revision bytes per account;
 - 64 KiB maximum encoded HTTP request body on account-control routes;
 - 192 MiB maximum encoded HTTP request body on storage routes.
 
@@ -160,9 +168,18 @@ creation without retaining request-derived dimensions in telemetry.
 Challenge and session issuance enforce both process-wide and per-account/device
 ceilings, then fail with 429 before retaining state. Signed device addition
 likewise fails with 429 before mutation when its per-account ceiling is reached.
+Live challenge capacity uses an expiry heap plus per-device counters, so neither
+expiry cleanup nor per-device accounting scans the live challenge registry.
 Live session capacity uses an expiry heap plus per-device counters; an invalid
 challenge is rejected before any capacity maintenance, and no request scans the
 session registry.
+
+The in-process opaque store enforces its vault, object, patch, revision, and
+byte budgets before mutation. Revision-byte accounting is deliberately
+conservative and cumulative: replacing a current envelope does not refund its
+budget because revision fingerprints and short-lived idempotency evidence remain
+retained. This fail-closed bound keeps the default embedded backend finite; a
+durable production backend must provide equivalent or stricter quotas.
 
 The route-specific body ceiling is checked before request parsing from a valid
 declared length and while streaming request chunks. Oversized requests return a
@@ -176,6 +193,9 @@ its tests.
 Every documented account and storage operation publishes the 413 middleware
 boundary together with each handler-specific 400, 401, 404, 409, or 429 result,
 so the served and checked-in OpenAPI response sets remain identical.
+Bearer-protected account and storage routes include
+`WWW-Authenticate: Bearer` on 401 responses. Challenge and session-proof
+failures are authentication-flow failures and do not emit that bearer challenge.
 Each reusable canonical error response also publishes its JSON body schema:
 fixed failures return an object with a string `detail`, while validation
 failures return the exact generic `{"detail":"Invalid request."}` shape.
@@ -242,6 +262,9 @@ page size. Retrying a cursor returns the same page and next cursor, while later
 appends appear only in a fresh listing. Cursor records expire after 300 seconds;
 an expired cursor fails closed and the client starts a fresh listing. Cursor
 expiry uses a min-heap, so listings do not scan the global live-cursor registry.
+The OpenAPI parameter intentionally has no unconditional default: omitting it
+on the first page selects 100 server-side, while later requests inherit the
+size retained in their cursor and may omit the parameter.
 
 ### Put Vault Metadata
 

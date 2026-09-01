@@ -60,6 +60,7 @@ from atlasvault_api.storage import (
     InvalidOpaqueStorageRequest,
     OpaqueCiphertextEnvelopeModel,
     OpaqueCiphertextPageModel,
+    OpaqueStorageCapacityExceeded,
     OpaqueStorageConflict,
     OpaqueStorageNotFound,
 )
@@ -73,8 +74,8 @@ CHALLENGE_BYTES = 32
 SIGNATURE_BYTES = 64
 BASE64_32_LENGTH = 44
 BASE64_64_LENGTH = 88
-BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{43}=$"
-BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{86}==$"
+BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$"
+BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{85}[AQgw]==$"
 CHALLENGE_LIFETIME_SECONDS = 120
 SESSION_LIFETIME_SECONDS = 900
 REGISTRY_REVISION_PATTERN = (
@@ -233,6 +234,18 @@ _ACCOUNT_AUTH_OPENAPI_RESPONSES = {
     401: {
         "description": "Account or device authorization failed",
         "model": FixedErrorResponse,
+        "headers": {
+            "WWW-Authenticate": {
+                "schema": {"type": "string", "const": "Bearer"},
+            }
+        },
+    },
+}
+_ACCOUNT_PROOF_OPENAPI_RESPONSES = {
+    **_ACCOUNT_BODY_LIMIT_OPENAPI_RESPONSE,
+    401: {
+        "description": "Account or device authentication failed",
+        "model": FixedErrorResponse,
     },
 }
 _ACCOUNT_BOOTSTRAP_OPENAPI_RESPONSES = {
@@ -251,14 +264,14 @@ _ACCOUNT_BOOTSTRAP_OPENAPI_RESPONSES = {
     },
 }
 _ACCOUNT_CHALLENGE_OPENAPI_RESPONSES = {
-    **_ACCOUNT_AUTH_OPENAPI_RESPONSES,
+    **_ACCOUNT_PROOF_OPENAPI_RESPONSES,
     429: {
         "description": "Challenge capacity is exhausted",
         "model": FixedErrorResponse,
     },
 }
 _ACCOUNT_SESSION_OPENAPI_RESPONSES = {
-    **_ACCOUNT_AUTH_OPENAPI_RESPONSES,
+    **_ACCOUNT_PROOF_OPENAPI_RESPONSES,
     429: {
         "description": "Session capacity is exhausted",
         "model": FixedErrorResponse,
@@ -285,6 +298,11 @@ _STORAGE_COMMON_OPENAPI_RESPONSES = {
     401: {
         "description": "Account or device authorization failed",
         "model": FixedErrorResponse,
+        "headers": {
+            "WWW-Authenticate": {
+                "schema": {"type": "string", "const": "Bearer"},
+            }
+        },
     },
     413: {
         "description": "Request body exceeds the fixed ciphertext request ceiling",
@@ -409,13 +427,20 @@ class AtlasVaultBackend:
         self._lock = threading.RLock()
         self._accounts: dict[str, _Account] = {}
         self._challenges: dict[tuple[str, str], _Challenge] = {}
+        self._challenge_expiries: list[tuple[float, int, tuple[str, str]]] = []
+        self._challenges_per_device: dict[tuple[str, str], int] = {}
+        self._next_challenge_expiry_sequence = 0
         self._sessions: dict[bytes, _Session] = {}
         self._session_expiries: list[tuple[float, int, bytes]] = []
         self._sessions_per_device: dict[tuple[str, str], int] = {}
         self._next_session_expiry_sequence = 0
         self._last_account_clock: float | None = None
-        self.storage = InMemoryOpaqueStore(entropy=entropy, monotonic=monotonic)
         self.abuse_policy = abuse_policy or AbuseControlPolicy()
+        self.storage = InMemoryOpaqueStore(
+            entropy=entropy,
+            monotonic=monotonic,
+            limits=self.abuse_policy,
+        )
         self._storage_limiter = AccountDeviceRateLimiter(
             self.abuse_policy,
             monotonic=monotonic,
@@ -460,17 +485,14 @@ class AtlasVaultBackend:
     ) -> AuthenticationChallenge:
         with self._lock:
             now = self._credential_now()
-            self._prune_expired_challenges(now)
             account = self._accounts.get(account_id)
             if account is None or request.device_id not in account.devices:
                 raise AuthorizationFailed
+            self._prune_expired_challenges(now)
             if len(self._challenges) >= self.abuse_policy.max_challenges:
                 raise RequestRateExceeded
-            device_challenges = sum(
-                stored_account_id == account_id
-                and challenge.device_id == request.device_id
-                for (stored_account_id, _), challenge in self._challenges.items()
-            )
+            device_key = (account_id, request.device_id)
+            device_challenges = self._challenges_per_device.get(device_key, 0)
             if device_challenges >= self.abuse_policy.max_challenges_per_device:
                 raise RequestRateExceeded
             challenge_id = f"avc1-{_entropy_bytes(self._entropy, 16).hex()}"
@@ -482,6 +504,16 @@ class AtlasVaultBackend:
                 device_id=request.device_id,
                 challenge=challenge,
                 expires_at=now + CHALLENGE_LIFETIME_SECONDS,
+            )
+            self._challenges_per_device[device_key] = device_challenges + 1
+            self._next_challenge_expiry_sequence += 1
+            heapq.heappush(
+                self._challenge_expiries,
+                (
+                    now + CHALLENGE_LIFETIME_SECONDS,
+                    self._next_challenge_expiry_sequence,
+                    key,
+                ),
             )
             return AuthenticationChallenge(
                 challenge_id=challenge_id,
@@ -496,10 +528,7 @@ class AtlasVaultBackend:
     ) -> SessionGrant:
         with self._lock:
             now = self._credential_now()
-            challenge = self._challenges.pop(
-                (account_id, request.challenge_id),
-                None,
-            )
+            challenge = self._drop_challenge((account_id, request.challenge_id))
             account = self._accounts.get(account_id)
             if (
                 challenge is None
@@ -687,13 +716,23 @@ class AtlasVaultBackend:
             self._sessions_per_device.pop(device_key, None)
 
     def _prune_expired_challenges(self, now: float) -> None:
-        expired = [
-            key
-            for key, challenge in self._challenges.items()
-            if challenge.expires_at <= now
-        ]
-        for key in expired:
-            del self._challenges[key]
+        while self._challenge_expiries and self._challenge_expiries[0][0] <= now:
+            _, _, key = heapq.heappop(self._challenge_expiries)
+            challenge = self._challenges.get(key)
+            if challenge is not None and challenge.expires_at <= now:
+                self._drop_challenge(key)
+
+    def _drop_challenge(self, key: tuple[str, str]) -> _Challenge | None:
+        challenge = self._challenges.pop(key, None)
+        if challenge is None:
+            return None
+        device_key = (key[0], challenge.device_id)
+        remaining = self._challenges_per_device.get(device_key, 0) - 1
+        if remaining > 0:
+            self._challenges_per_device[device_key] = remaining
+        else:
+            self._challenges_per_device.pop(device_key, None)
+        return challenge
 
     def _registry_view(self, account_id: str) -> DeviceRegistryView:
         account = self._accounts[account_id]
@@ -792,6 +831,7 @@ class _SecurityBoundaryMiddleware:
                     observed_send,
                     401,
                     "Authorization failed.",
+                    headers=[(b"www-authenticate", b"Bearer")],
                 )
                 self._backend.telemetry.record(category, 401)
                 return
@@ -951,9 +991,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         try:
             return service.list_devices(account_id, _credential_token(authorization))
         except AuthorizationFailed as exc:
-            raise HTTPException(
-                status_code=401, detail="Authorization failed."
-            ) from exc
+            raise _bearer_authorization_error() from exc
 
     @app.post(
         "/v1/accounts/{account_id}/devices",
@@ -973,9 +1011,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
                 request,
             )
         except AuthorizationFailed as exc:
-            raise HTTPException(
-                status_code=401, detail="Authorization failed."
-            ) from exc
+            raise _bearer_authorization_error() from exc
         except InvalidRegistryTransition as exc:
             raise HTTPException(
                 status_code=400, detail="Invalid registry transition."
@@ -1175,6 +1211,13 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "maxLiveSessions": policy.max_sessions,
         "maxSessionsPerDevice": policy.max_sessions_per_device,
         "maxDevicesPerAccount": policy.max_devices_per_account,
+        "maxRetainedVaults": policy.max_retained_vaults,
+        "maxRetainedVaultsPerAccount": policy.max_retained_vaults_per_account,
+        "maxRetainedObjectsPerAccount": policy.max_retained_objects_per_account,
+        "maxRetainedPatchesPerAccount": policy.max_retained_patches_per_account,
+        "maxRetainedRevisionsPerAccount": policy.max_retained_revisions_per_account,
+        "maxRetainedBytes": policy.max_retained_bytes,
+        "maxRetainedBytesPerAccount": policy.max_retained_bytes_per_account,
         "rateWindowSeconds": policy.window_seconds,
         "maxRequestBytes": policy.max_request_bytes,
         "maxAccountRequestBytes": policy.max_account_request_bytes,
@@ -1194,6 +1237,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
 
 _STORAGE_ERRORS = (
     InvalidOpaqueStorageRequest,
+    OpaqueStorageCapacityExceeded,
     OpaqueStorageConflict,
     OpaqueStorageNotFound,
 )
@@ -1206,10 +1250,7 @@ def _authorized_storage_account(
     try:
         return backend.authorize_account(_credential_token(authorization))
     except AuthorizationFailed as exc:
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization failed.",
-        ) from exc
+        raise _bearer_authorization_error() from exc
 
 
 def _request_category(scope: Scope) -> str:
@@ -1258,6 +1299,8 @@ async def _send_fixed_error(
     send: Send,
     status_code: int,
     detail: str,
+    *,
+    headers: list[tuple[bytes, bytes]] | None = None,
 ) -> None:
     body = json.dumps(
         {"detail": detail},
@@ -1271,6 +1314,7 @@ async def _send_fixed_error(
             "headers": [
                 (b"content-length", str(len(body)).encode("ascii")),
                 (b"content-type", b"application/json"),
+                *(headers or []),
             ],
         }
     )
@@ -1282,7 +1326,17 @@ def _raise_storage_http_error(error: ValueError) -> NoReturn:
         raise HTTPException(status_code=404, detail="Opaque resource not found.")
     if isinstance(error, OpaqueStorageConflict):
         raise HTTPException(status_code=409, detail="Opaque revision conflict.")
+    if isinstance(error, OpaqueStorageCapacityExceeded):
+        raise HTTPException(status_code=429, detail="Opaque storage capacity exceeded.")
     raise HTTPException(status_code=400, detail="Invalid opaque storage request.")
+
+
+def _bearer_authorization_error() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="Authorization failed.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def _require_account_match(path_account_id: str, body_account_id: str) -> None:
