@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import threading
 import time
@@ -344,6 +345,30 @@ class _Account:
     used_revisions: set[str] = field(default_factory=set)
 
 
+def _verify_session_proof(
+    account_id: str,
+    request: SessionProofRequest,
+    challenge: _Challenge,
+    signed_descriptor: SignedDeviceDescriptorModel,
+) -> None:
+    descriptor = signed_descriptor.verified().descriptor
+    proof_payload = {
+        "format": "atlasvault-account-session-proof",
+        "version": 1,
+        "account_id": account_id,
+        "device_id": request.device_id,
+        "challenge_id": request.challenge_id,
+        "challenge": _encode_base64(challenge.challenge),
+    }
+    try:
+        Ed25519PublicKey.from_public_bytes(descriptor.signing_public_key).verify(
+            _decode_base64(request.signature, SIGNATURE_BYTES),
+            ACCOUNT_SESSION_PROOF_DOMAIN + _canonical_bytes(proof_payload),
+        )
+    except (InvalidSignature, TypeError, ValueError) as exc:
+        raise AuthorizationFailed from exc
+
+
 class AtlasVaultBackend:
     """Ephemeral account, public-device, and opaque ciphertext state.
 
@@ -365,6 +390,7 @@ class AtlasVaultBackend:
         self._accounts: dict[str, _Account] = {}
         self._challenges: dict[tuple[str, str], _Challenge] = {}
         self._sessions: dict[bytes, _Session] = {}
+        self._last_account_clock: float | None = None
         self.storage = InMemoryOpaqueStore(entropy=entropy, monotonic=monotonic)
         self.abuse_policy = abuse_policy or AbuseControlPolicy()
         self._storage_limiter = AccountDeviceRateLimiter(
@@ -410,7 +436,7 @@ class AtlasVaultBackend:
         request: AuthenticationChallengeRequest,
     ) -> AuthenticationChallenge:
         with self._lock:
-            now = self._monotonic()
+            now = self._credential_now()
             self._prune_expired_challenges(now)
             account = self._accounts.get(account_id)
             if account is None or request.device_id not in account.devices:
@@ -446,7 +472,7 @@ class AtlasVaultBackend:
         request: SessionProofRequest,
     ) -> SessionGrant:
         with self._lock:
-            now = self._monotonic()
+            now = self._credential_now()
             self._prune_expired_sessions(now)
             self._require_session_capacity(account_id, request.device_id)
             challenge = self._challenges.pop(
@@ -464,26 +490,22 @@ class AtlasVaultBackend:
             signed_descriptor = account.devices.get(request.device_id)
             if signed_descriptor is None:
                 raise AuthorizationFailed
-            descriptor = signed_descriptor.verified().descriptor
-            proof_payload = {
-                "format": "atlasvault-account-session-proof",
-                "version": 1,
-                "account_id": account_id,
-                "device_id": request.device_id,
-                "challenge_id": request.challenge_id,
-                "challenge": _encode_base64(challenge.challenge),
-            }
-            try:
-                Ed25519PublicKey.from_public_bytes(
-                    descriptor.signing_public_key
-                ).verify(
-                    _decode_base64(request.signature, SIGNATURE_BYTES),
-                    ACCOUNT_SESSION_PROOF_DOMAIN + _canonical_bytes(proof_payload),
-                )
-            except (InvalidSignature, TypeError, ValueError) as exc:
-                raise AuthorizationFailed from exc
-            token = _encode_token(_entropy_bytes(self._entropy, 32))
-            digest = _token_digest(token)
+
+        _verify_session_proof(account_id, request, challenge, signed_descriptor)
+        token = _encode_token(_entropy_bytes(self._entropy, 32))
+        digest = _token_digest(token)
+
+        with self._lock:
+            now = self._credential_now()
+            self._prune_expired_sessions(now)
+            self._require_session_capacity(account_id, request.device_id)
+            account = self._accounts.get(account_id)
+            if (
+                account is None
+                or request.device_id not in account.devices
+                or challenge.expires_at <= now
+            ):
+                raise AuthorizationFailed
             if digest in self._sessions:
                 raise AuthorizationFailed
             self._sessions[digest] = _Session(
@@ -582,13 +604,23 @@ class AtlasVaultBackend:
     def _authorize_token(self, token: str) -> _Session:
         digest = _token_digest(token)
         session = self._sessions.get(digest)
-        if session is None or session.expires_at <= self._monotonic():
+        now = self._credential_now()
+        if session is None or session.expires_at <= now:
             self._sessions.pop(digest, None)
             raise AuthorizationFailed
         account = self._accounts.get(session.account_id)
         if account is None or session.device_id not in account.devices:
             raise AuthorizationFailed
         return session
+
+    def _credential_now(self) -> float:
+        now = self._monotonic()
+        if not math.isfinite(now):
+            raise AuthorizationFailed
+        if self._last_account_clock is not None and now < self._last_account_clock:
+            raise AuthorizationFailed
+        self._last_account_clock = now
+        return now
 
     def _prune_expired_sessions(self, now: float) -> None:
         expired = [
@@ -712,10 +744,13 @@ class _SecurityBoundaryMiddleware:
                 return
 
         try:
+            max_request_bytes = (
+                self._backend.abuse_policy.max_account_request_bytes
+                if category == "account"
+                else self._backend.abuse_policy.max_request_bytes
+            )
             declared_length = _declared_content_length(scope)
-            if declared_length is not None and (
-                declared_length > self._backend.abuse_policy.max_request_bytes
-            ):
+            if declared_length is not None and declared_length > max_request_bytes:
                 raise _RequestBodyTooLarge
             received_bytes = 0
 
@@ -724,7 +759,7 @@ class _SecurityBoundaryMiddleware:
                 message = await receive()
                 if message["type"] == "http.request":
                     received_bytes += len(message.get("body", b""))
-                    if received_bytes > self._backend.abuse_policy.max_request_bytes:
+                    if received_bytes > max_request_bytes:
                         raise _RequestBodyTooLarge
                 return message
 

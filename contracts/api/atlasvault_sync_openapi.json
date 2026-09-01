@@ -16,6 +16,7 @@
     "maxDevicesPerAccount": 256,
     "rateWindowSeconds": 60,
     "maxRequestBytes": 201326592,
+    "maxAccountRequestBytes": 65536,
     "telemetryDimensions": [
       "category",
       "outcome",

@@ -136,13 +136,16 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 - 4,096 live session digests per process;
 - 8 live session digests per account/device pair;
 - 256 retained public devices per account;
-- 192 MiB maximum encoded HTTP request body.
+- 64 KiB maximum encoded HTTP request body on account-control routes;
+- 192 MiB maximum encoded HTTP request body on storage routes.
 
 Limits are keyed by authenticated account and device IDs rather than bearer
 tokens. Rotating a session, changing ciphertext endpoints, or adding another
 device therefore cannot reset the applicable device or account window. A
-non-finite or regressing monotonic clock fails closed. Expired process-local
-windows are removed rather than retained indefinitely.
+non-finite or regressing monotonic clock fails closed for rate windows and all
+account challenge/session credentials. Expired process-local windows are
+removed through bounded heap-backed cleanup rather than a full counter scan on
+each request.
 
 Account bootstrap fails with 429 before insertion when the fixed process-local
 registry ceiling is reached. This bounds unauthenticated self-signed account
@@ -151,12 +154,14 @@ Challenge and session issuance enforce both process-wide and per-account/device
 ceilings, then fail with 429 before retaining state. Signed device addition
 likewise fails with 429 before mutation when its per-account ceiling is reached.
 
-The body ceiling is checked before request parsing from a valid declared length
-and while streaming request chunks. Oversized requests return a fixed 413
-response and do not reach the storage handler. Rate exhaustion returns a fixed
-429 response. C16 must choose a shared limiter before any multi-instance
-deployment; process-local limits are sufficient only for this in-process P4
-contract and its tests.
+The route-specific body ceiling is checked before request parsing from a valid
+declared length and while streaming request chunks. Oversized requests return a
+fixed 413 response and do not reach the account or storage handler. Rate
+exhaustion returns a fixed 429 response. Session proof verification runs outside
+the backend registry lock, followed by a locked capacity and expiry recheck at
+commit. C16 must choose a shared limiter before any multi-instance deployment;
+process-local limits are sufficient only for this in-process P4 contract and
+its tests.
 
 Every documented account and storage operation publishes the 413 middleware
 boundary together with each handler-specific 400, 401, 404, 409, or 429 result,

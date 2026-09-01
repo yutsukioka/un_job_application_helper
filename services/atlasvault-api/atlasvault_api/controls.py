@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import logging
 import math
 import threading
@@ -13,6 +14,7 @@ DEFAULT_ACCOUNT_REQUEST_LIMIT = 40
 DEFAULT_DEVICE_REQUEST_LIMIT = 24
 DEFAULT_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_MAX_REQUEST_BYTES = 192 * 1024 * 1024
+DEFAULT_MAX_ACCOUNT_REQUEST_BYTES = 64 * 1024
 DEFAULT_MAX_ACCOUNTS = 1024
 DEFAULT_MAX_CHALLENGES = 4096
 DEFAULT_MAX_CHALLENGES_PER_DEVICE = 8
@@ -20,6 +22,7 @@ DEFAULT_MAX_SESSIONS = 4096
 DEFAULT_MAX_SESSIONS_PER_DEVICE = 8
 DEFAULT_MAX_DEVICES_PER_ACCOUNT = 256
 MAX_RETAINED_SECURITY_EVENTS = 256
+MAX_COUNTER_PRUNE_PER_REQUEST = 64
 
 _CATEGORIES = frozenset({"account", "storage", "other"})
 _SECURITY_LOGGER = logging.getLogger("atlasvault_api.security")
@@ -41,6 +44,7 @@ class AbuseControlPolicy:
     device_request_limit: int = DEFAULT_DEVICE_REQUEST_LIMIT
     window_seconds: float = DEFAULT_RATE_WINDOW_SECONDS
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
+    max_account_request_bytes: int = DEFAULT_MAX_ACCOUNT_REQUEST_BYTES
     max_accounts: int = DEFAULT_MAX_ACCOUNTS
     max_challenges: int = DEFAULT_MAX_CHALLENGES
     max_challenges_per_device: int = DEFAULT_MAX_CHALLENGES_PER_DEVICE
@@ -53,6 +57,7 @@ class AbuseControlPolicy:
             self.account_request_limit,
             self.device_request_limit,
             self.max_request_bytes,
+            self.max_account_request_bytes,
             self.max_accounts,
             self.max_challenges,
             self.max_challenges_per_device,
@@ -93,6 +98,9 @@ class AccountDeviceRateLimiter:
         self._lock = threading.Lock()
         self._accounts: dict[str, _WindowCounter] = {}
         self._devices: dict[tuple[str, str], _WindowCounter] = {}
+        self._account_expiries: list[tuple[float, int, object]] = []
+        self._device_expiries: list[tuple[float, int, object]] = []
+        self._next_expiry_sequence = 0
         self._last_observed: float | None = None
 
     def consume(self, principal: StoragePrincipal) -> None:
@@ -104,9 +112,19 @@ class AccountDeviceRateLimiter:
                 raise RequestRateExceeded
             self._last_observed = now
             self._prune(now)
-            account = self._counter(self._accounts, principal.account_id, now)
+            account = self._counter(
+                self._accounts,
+                self._account_expiries,
+                principal.account_id,
+                now,
+            )
             device_key = (principal.account_id, principal.device_id)
-            device = self._counter(self._devices, device_key, now)
+            device = self._counter(
+                self._devices,
+                self._device_expiries,
+                device_key,
+                now,
+            )
             if (
                 account.count >= self._policy.account_request_limit
                 or device.count >= self._policy.device_request_limit
@@ -118,26 +136,42 @@ class AccountDeviceRateLimiter:
     def _counter(
         self,
         counters: dict[object, _WindowCounter],
+        expiries: list[tuple[float, int, object]],
         key: object,
         now: float,
     ) -> _WindowCounter:
         counter = counters.get(key)
-        if counter is None:
+        if counter is None or now - counter.started_at >= self._policy.window_seconds:
             counter = _WindowCounter(started_at=now)
             counters[key] = counter
+            self._next_expiry_sequence += 1
+            heapq.heappush(
+                expiries,
+                (
+                    now + self._policy.window_seconds,
+                    self._next_expiry_sequence,
+                    key,
+                ),
+            )
         elif now < counter.started_at:
             raise RequestRateExceeded
         return counter
 
     def _prune(self, now: float) -> None:
-        for counters in (self._accounts, self._devices):
-            expired = [
-                key
-                for key, counter in counters.items()
-                if now - counter.started_at >= self._policy.window_seconds
-            ]
-            for key in expired:
-                del counters[key]
+        remaining = MAX_COUNTER_PRUNE_PER_REQUEST
+        for counters, expiries in (
+            (self._accounts, self._account_expiries),
+            (self._devices, self._device_expiries),
+        ):
+            while remaining and expiries and expiries[0][0] <= now:
+                _, _, key = heapq.heappop(expiries)
+                remaining -= 1
+                counter = counters.get(key)
+                if (
+                    counter is not None
+                    and now - counter.started_at >= self._policy.window_seconds
+                ):
+                    counters.pop(key, None)
 
 
 class SecretFreeTelemetry:
