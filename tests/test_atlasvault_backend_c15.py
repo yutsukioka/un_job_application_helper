@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 
+import atlasvault_api.app as app_module
 from atlasvault_api.app import (
     ACCOUNT_SESSION_PROOF_DOMAIN,
     AtlasVaultBackend,
@@ -50,6 +51,7 @@ from test_atlasvault_backend_c14 import (
 DEVICE_REQUEST_LIMIT = 24
 ACCOUNT_REQUEST_LIMIT = 40
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
+MAX_ACCOUNT_REQUEST_BYTES = 64 * 1024
 MAX_RETAINED_ACCOUNTS = 1024
 MAX_LIVE_CHALLENGES = 4096
 MAX_CHALLENGES_PER_DEVICE = 8
@@ -557,6 +559,7 @@ def test_c15_contract_declares_storage_controls() -> None:
         "maxSessionsPerDevice": MAX_SESSIONS_PER_DEVICE,
         "maxDevicesPerAccount": MAX_DEVICES_PER_ACCOUNT,
         "maxRequestBytes": MAX_REQUEST_BYTES,
+        "maxAccountRequestBytes": MAX_ACCOUNT_REQUEST_BYTES,
         "rateWindowSeconds": 60,
         "telemetryDimensions": ["category", "outcome", "count"],
     }
@@ -782,6 +785,84 @@ def test_c15_abuse_control_integer_limits_require_positive_actual_integers(
 ) -> None:
     with pytest.raises(ValueError, match="invalid abuse-control policy"):
         AbuseControlPolicy(**{field: invalid})
+
+
+@pytest.mark.parametrize("invalid_now", (float("nan"), 2_999.0))
+def test_c15_account_credentials_fail_closed_on_nonfinite_or_regressing_clock(
+    invalid_now: float,
+) -> None:
+    now = [3_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    token, _ = _session(client, device, account_id=ACCOUNT_A)
+    retained_challenges = dict(backend._challenges)
+
+    now[0] = invalid_now
+    devices = client.get(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert devices.status_code == 401
+    challenge = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": device.device_id},
+    )
+    assert challenge.status_code == 401
+    assert backend._challenges == retained_challenges
+
+
+def test_c15_account_routes_use_a_small_preparse_body_ceiling() -> None:
+    backend = AtlasVaultBackend(entropy=DeterministicEntropy())
+    client = TestClient(create_app(backend))
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        headers={"Content-Length": str(MAX_ACCOUNT_REQUEST_BYTES + 1)},
+        content=b"{}",
+    )
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Request body too large."}
+    assert backend._accounts == {}
+
+
+def test_c15_session_proof_verification_runs_outside_backend_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    original = app_module._verify_session_proof
+    lock_observations: list[bool] = []
+
+    def verify(*args: object, **kwargs: object) -> None:
+        lock_observations.append(backend._lock._is_owned())
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "_verify_session_proof", verify)
+    _session(client, device, account_id=ACCOUNT_A)
+    assert lock_observations == [False]
+
+
+def test_c15_rate_limiter_does_not_scan_every_counter_on_each_request() -> None:
+    class NoFullScanDict(dict[object, object]):
+        def items(self) -> object:
+            raise AssertionError("full counter scan is forbidden")
+
+    limiter = AccountDeviceRateLimiter(
+        AbuseControlPolicy(),
+        monotonic=lambda: 3_000.0,
+    )
+    limiter._accounts = NoFullScanDict()
+    limiter._devices = NoFullScanDict()
+    limiter.consume(StoragePrincipal("account-a", "device-a"))
 
 
 def test_c15_telemetry_coarsens_unknown_categories() -> None:
