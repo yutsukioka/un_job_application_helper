@@ -988,7 +988,9 @@
           },
           "revision": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 128,
+            "pattern": "^[!-~]+$",
             "not": {
               "const": "*"
             }
@@ -1051,7 +1053,9 @@
           },
           "revision": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 128,
+            "pattern": "^[!-~]+$",
             "not": {
               "const": "*"
             }
@@ -1061,7 +1065,9 @@
               "string",
               "null"
             ],
+            "minLength": 1,
             "maxLength": 128,
+            "pattern": "^[!-~]+$",
             "not": {
               "const": "*"
             }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -17,7 +18,9 @@ IDEMPOTENCY_KEY_MAX_LENGTH = 128
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CURSOR_PREFIX = "avcur1-"
-_STRICT_MODEL = ConfigDict(extra="forbid", frozen=True)
+CURSOR_LIFETIME_SECONDS = 300
+_REVISION_PATTERN = r"^[!-~]+$"
+_STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class EncryptedVaultMetadataEnvelopeModel(BaseModel):
@@ -29,6 +32,7 @@ class EncryptedVaultMetadataEnvelopeModel(BaseModel):
     revision: str = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,
+        pattern=_REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(ge=1)
@@ -55,11 +59,13 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
     revision: str = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,
+        pattern=_REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
     parent_revision: str | None = Field(
-        default=None,
+        min_length=1,
         max_length=REVISION_MAX_LENGTH,
+        pattern=_REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(ge=1)
@@ -137,6 +143,7 @@ class _Cursor:
     start: int
     end: int
     page_size: int
+    expires_at: float
     next_cursor: str | None = None
 
 
@@ -147,8 +154,10 @@ class InMemoryOpaqueStore:
         self,
         *,
         entropy: Callable[[int], bytes] = secrets.token_bytes,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._entropy = entropy
+        self._monotonic = monotonic
         self._lock = threading.RLock()
         self._vaults: dict[tuple[str, str], _VaultState] = {}
         self._cursors: dict[str, _Cursor] = {}
@@ -336,6 +345,7 @@ class InMemoryOpaqueStore:
         page_size: int | None,
     ) -> OpaqueCiphertextPageModel:
         with self._lock:
+            self._prune_expired_cursors()
             state = self._vaults.get((account_id, vault_id))
             patches = state.patches if state is not None else []
             if cursor is None:
@@ -511,9 +521,18 @@ class InMemoryOpaqueStore:
                     start=start,
                     end=end,
                     page_size=page_size,
+                    expires_at=self._monotonic() + CURSOR_LIFETIME_SECONDS,
                 )
                 return token
         raise RuntimeError("cursor entropy source repeated")
+
+    def _prune_expired_cursors(self) -> None:
+        now = self._monotonic()
+        expired = [
+            token for token, cursor in self._cursors.items() if cursor.expires_at <= now
+        ]
+        for token in expired:
+            del self._cursors[token]
 
 
 def _same_revision(

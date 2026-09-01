@@ -216,7 +216,7 @@ class AtlasVaultBackend:
         self._accounts: dict[str, _Account] = {}
         self._challenges: dict[tuple[str, str], _Challenge] = {}
         self._sessions: dict[bytes, _Session] = {}
-        self.storage = InMemoryOpaqueStore(entropy=entropy)
+        self.storage = InMemoryOpaqueStore(entropy=entropy, monotonic=monotonic)
         self.abuse_policy = abuse_policy or AbuseControlPolicy()
         self._storage_limiter = AccountDeviceRateLimiter(
             self.abuse_policy,

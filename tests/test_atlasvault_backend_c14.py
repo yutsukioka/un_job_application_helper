@@ -738,10 +738,17 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
             opaque_properties["revision"],
             opaque_properties["parent_revision"],
         ):
-            revision_options = revision.get("anyOf", [revision])
-            string_revision = next(
-                option for option in revision_options if option.get("type") == "string"
-            )
+            revision_type = revision.get("type")
+            if revision_type == "string" or (
+                isinstance(revision_type, list) and "string" in revision_type
+            ):
+                string_revision = revision
+            else:
+                string_revision = next(
+                    option
+                    for option in revision["anyOf"]
+                    if option.get("type") == "string"
+                )
             assert string_revision["minLength"] == 1
             assert string_revision["pattern"] == "^[!-~]+$"
             max_length = revision.get("maxLength")
