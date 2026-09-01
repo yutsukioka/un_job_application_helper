@@ -6,6 +6,7 @@ import 'package:atlas/atlas_vault.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/atlas_vault_dart_helper_process.dart';
 import 'support/atlas_vault_vector_loader.dart';
 
 void main() {
@@ -177,13 +178,10 @@ void main() {
           .map((value) => value.toJson())
           .toList(growable: false);
 
-      final process = await Process.start('/usr/bin/env', <String>[
-        'dart',
-        'run',
+      final process = await startAtlasVaultDartHelper(
         'test/support/atlas_vault_snapshot_compaction_process.dart',
-        file.path,
-        ready.path,
-      ], workingDirectory: Directory.current.path);
+        <String>[file.path, ready.path],
+      );
       addTearDown(() => process.kill(ProcessSignal.sigkill));
       final deadline = DateTime.now().add(const Duration(seconds: 30));
       while (!await ready.exists() && DateTime.now().isBefore(deadline)) {

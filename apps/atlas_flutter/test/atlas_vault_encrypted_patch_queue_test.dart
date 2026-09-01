@@ -6,6 +6,7 @@ import 'package:atlas/atlas_vault.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/atlas_vault_dart_helper_process.dart';
 import 'support/atlas_vault_vector_loader.dart';
 
 void main() {
@@ -225,14 +226,10 @@ void main() {
       final outboxFile = File('${directory.path}/outbox.queue');
       final inboxFile = File('${directory.path}/inbox.queue');
       final readyFile = File('${directory.path}/ready');
-      final process = await Process.start('/usr/bin/env', <String>[
-        'dart',
-        'run',
+      final process = await startAtlasVaultDartHelper(
         'test/support/atlas_vault_sync_queue_process.dart',
-        outboxFile.path,
-        inboxFile.path,
-        readyFile.path,
-      ], workingDirectory: Directory.current.path);
+        <String>[outboxFile.path, inboxFile.path, readyFile.path],
+      );
       addTearDown(() => process.kill(ProcessSignal.sigkill));
       final deadline = DateTime.now().add(const Duration(seconds: 30));
       while (!await readyFile.exists() && DateTime.now().isBefore(deadline)) {
