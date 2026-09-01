@@ -14,6 +14,7 @@ private let snapshotFormat = "atlasvault-authenticated-collection-snapshot"
 private let snapshotPayloadFormat = "atlasvault-authenticated-collection-snapshot-payload"
 private let snapshotAuthenticationAlgorithm = "HMAC-SHA256"
 private let collectionStateFormat = "atlasvault-encrypted-patch-collection-state"
+private let convergentReplicaStateFormat = "atlasvault-encrypted-convergent-replica-state"
 private let maximumQueueBytes = 128 * 1024 * 1024
 private let maximumQueueOperations = 65_536
 private let maximumEnvelopeFieldBytes = 96 * 1024 * 1024
@@ -780,6 +781,352 @@ public final class AtlasVaultDurableEncryptedPatchCollection {
             beforeReplace: beforeReplace
         )
         return snapshot
+    }
+}
+
+private struct ConvergentReplicaState {
+    let operations: [AtlasVaultEncryptedPatchOperation]
+    let snapshots: [AtlasVaultAuthenticatedCollectionSnapshot]
+    let pendingOperationIDs: [String]
+    let receipts: [String: String]
+}
+
+private struct ConvergentRevisionKey: Hashable {
+    let objectID: String
+    let revision: String
+}
+
+private struct ConvergentSequenceKey: Hashable {
+    let deviceID: String
+    let sequence: Int64
+}
+
+private func convergentDefault(_ collectionID: String) -> [String: Any] {
+    [
+        "format": convergentReplicaStateFormat,
+        "version": 1,
+        "collection_id": collectionID,
+        "operations": [],
+        "snapshots": [],
+        "pending_operation_ids": [],
+    ]
+}
+
+private func validateConvergentHistory(
+    _ operations: [AtlasVaultEncryptedPatchOperation],
+    snapshots: [AtlasVaultAuthenticatedCollectionSnapshot]
+) throws -> [String: String] {
+    var receipts: [String: String] = [:]
+    var snapshotSequences: [String: Int64] = [:]
+    var revisionValues: [ConvergentRevisionKey: Data] = [:]
+    var revisionParents: [ConvergentRevisionKey: String?] = [:]
+
+    func addReceipt(_ operationID: String, _ digest: String) throws {
+        if let known = receipts[operationID], known != digest { throw invalid() }
+        receipts[operationID] = digest
+    }
+
+    func addEnvelope(_ envelope: AtlasVaultOpaqueCiphertextEnvelope) throws {
+        guard envelope.parentRevision != envelope.revision else { throw invalid() }
+        let key = ConvergentRevisionKey(
+            objectID: envelope.objectID,
+            revision: envelope.revision
+        )
+        let encoded = try canonicalJSON(envelope.jsonObject)
+        if let known = revisionValues[key], known != encoded { throw invalid() }
+        revisionValues[key] = encoded
+        revisionParents[key] = envelope.parentRevision
+    }
+
+    for snapshot in snapshots {
+        for (operationID, digest) in snapshot.appliedFingerprints {
+            try addReceipt(operationID, digest)
+        }
+        for (deviceID, sequence) in snapshot.authorSequences {
+            snapshotSequences[deviceID] = max(snapshotSequences[deviceID] ?? 0, sequence)
+        }
+        for envelope in snapshot.records { try addEnvelope(envelope) }
+    }
+
+    var sequenceOwners: [ConvergentSequenceKey: String] = [:]
+    for operation in operations {
+        let digest = try fingerprint(operation)
+        let knownReceipt = receipts[operation.operationID]
+        try addReceipt(operation.operationID, digest)
+        let sequenceKey = ConvergentSequenceKey(
+            deviceID: operation.authorDeviceID,
+            sequence: operation.authorSequence
+        )
+        if let knownOwner = sequenceOwners[sequenceKey],
+           knownOwner != operation.operationID
+        {
+            throw invalid()
+        }
+        sequenceOwners[sequenceKey] = operation.operationID
+        if knownReceipt == nil,
+           operation.authorSequence <= (snapshotSequences[operation.authorDeviceID] ?? 0)
+        {
+            throw invalid()
+        }
+        try addEnvelope(operation.envelope)
+    }
+    guard receipts.count <= maximumQueueOperations else { throw invalid() }
+
+    for start in revisionParents.keys {
+        var seen: Set<ConvergentRevisionKey> = []
+        var current: ConvergentRevisionKey? = start
+        while let value = current, let parentValue = revisionParents[value] {
+            guard seen.insert(value).inserted else { throw invalid() }
+            current = parentValue.map {
+                ConvergentRevisionKey(objectID: value.objectID, revision: $0)
+            }
+        }
+    }
+    return receipts
+}
+
+private func loadConvergentReplica(
+    _ store: EncryptedQueueFile,
+    collectionID: String,
+    authenticationKey: Data
+) throws -> ConvergentReplicaState {
+    let state = try store.read(default: convergentDefault(collectionID))
+    try exactKeys(
+        state,
+        [
+            "format", "version", "collection_id", "operations", "snapshots",
+            "pending_operation_ids",
+        ]
+    )
+    guard state["format"] as? String == convergentReplicaStateFormat,
+          try positiveInteger(state["version"]) == 1,
+          try identifier(state["collection_id"]) == collectionID,
+          let rawOperations = state["operations"] as? [[String: Any]],
+          let rawSnapshots = state["snapshots"] as? [[String: Any]],
+          let rawPending = state["pending_operation_ids"] as? [String],
+          rawOperations.count <= maximumQueueOperations,
+          rawSnapshots.count <= maximumQueueOperations,
+          rawPending.count <= maximumQueueOperations
+    else {
+        throw invalid()
+    }
+    let operations = try rawOperations.map(
+        AtlasVaultEncryptedPatchOperation.init(jsonObject:)
+    )
+    guard operations == operations.sorted(by: { $0.operationID < $1.operationID }),
+          Set(operations.map(\.operationID)).count == operations.count
+    else {
+        throw invalid()
+    }
+    let snapshots = try rawSnapshots.map {
+        try AtlasVaultAuthenticatedCollectionSnapshot(
+            jsonObject: $0,
+            authenticationKey: authenticationKey
+        )
+    }
+    guard snapshots.allSatisfy({ $0.collectionID == collectionID }),
+          snapshots.map(\.canonicalPayloadSHA256)
+            == snapshots.map(\.canonicalPayloadSHA256).sorted(),
+          Set(snapshots.map(\.canonicalPayloadSHA256)).count == snapshots.count
+    else {
+        throw invalid()
+    }
+    let pending = try rawPending.map(canonicalUUID)
+    guard pending == pending.sorted(),
+          Set(pending).count == pending.count,
+          Set(operations.map(\.operationID)).isSuperset(of: pending)
+    else {
+        throw invalid()
+    }
+    return try ConvergentReplicaState(
+        operations: operations,
+        snapshots: snapshots,
+        pendingOperationIDs: pending,
+        receipts: validateConvergentHistory(operations, snapshots: snapshots)
+    )
+}
+
+private struct ConvergentCandidate {
+    let envelope: AtlasVaultOpaqueCiphertextEnvelope
+    let operation: AtlasVaultEncryptedPatchOperation?
+    let snapshotDigest: String
+
+    func wins(over other: ConvergentCandidate) -> Bool {
+        if envelope.tombstone != other.envelope.tombstone { return envelope.tombstone }
+        if operation != nil, other.operation == nil { return true }
+        if operation == nil, other.operation != nil { return false }
+        if let operation, let otherOperation = other.operation {
+            return otherOperation < operation
+        }
+        return snapshotDigest > other.snapshotDigest
+    }
+}
+
+public final class AtlasVaultDurableEncryptedConvergentReplica {
+    private let store: EncryptedQueueFile
+    private let authenticationKey: Data
+    private let collectionID: String
+
+    public init(
+        fileURL: URL,
+        encryptionKey: Data,
+        authenticationKey: Data,
+        collectionID: String
+    ) throws {
+        guard authenticationKey.count == 32 else { throw invalid() }
+        self.collectionID = try identifier(collectionID)
+        self.authenticationKey = authenticationKey
+        self.store = try EncryptedQueueFile(
+            fileURL: fileURL,
+            encryptionKey: encryptionKey,
+            kind: "convergent-replica"
+        )
+    }
+
+    private func load() throws -> ConvergentReplicaState {
+        try loadConvergentReplica(
+            store,
+            collectionID: collectionID,
+            authenticationKey: authenticationKey
+        )
+    }
+
+    private func write(
+        operations: [AtlasVaultEncryptedPatchOperation],
+        snapshots: [AtlasVaultAuthenticatedCollectionSnapshot],
+        pendingOperationIDs: [String]
+    ) throws {
+        let orderedOperations = operations.sorted { $0.operationID < $1.operationID }
+        let orderedSnapshots = snapshots.sorted {
+            $0.canonicalPayloadSHA256 < $1.canonicalPayloadSHA256
+        }
+        let orderedPending = pendingOperationIDs.sorted()
+        _ = try validateConvergentHistory(orderedOperations, snapshots: orderedSnapshots)
+        guard Set(orderedOperations.map(\.operationID)).isSuperset(of: orderedPending) else {
+            throw invalid()
+        }
+        try store.write([
+            "format": convergentReplicaStateFormat,
+            "version": 1,
+            "collection_id": collectionID,
+            "operations": orderedOperations.map(\.jsonObject),
+            "snapshots": orderedSnapshots.map(\.jsonObject),
+            "pending_operation_ids": orderedPending,
+        ])
+    }
+
+    @discardableResult
+    public func ingestRemote(_ operation: AtlasVaultEncryptedPatchOperation) throws -> Bool {
+        let state = try load()
+        let digest = try fingerprint(operation)
+        if let known = state.receipts[operation.operationID] {
+            guard known == digest else { throw invalid() }
+            return false
+        }
+        try write(
+            operations: state.operations + [operation],
+            snapshots: state.snapshots,
+            pendingOperationIDs: state.pendingOperationIDs
+        )
+        return true
+    }
+
+    @discardableResult
+    public func queueLocal(_ operation: AtlasVaultEncryptedPatchOperation) throws -> Bool {
+        let state = try load()
+        let digest = try fingerprint(operation)
+        if let known = state.receipts[operation.operationID] {
+            guard known == digest else { throw invalid() }
+            return false
+        }
+        try write(
+            operations: state.operations + [operation],
+            snapshots: state.snapshots,
+            pendingOperationIDs: state.pendingOperationIDs + [operation.operationID]
+        )
+        return true
+    }
+
+    @discardableResult
+    public func mergeSnapshot(
+        _ snapshot: AtlasVaultAuthenticatedCollectionSnapshot
+    ) throws -> Bool {
+        let verified = try AtlasVaultAuthenticatedCollectionSnapshot(
+            jsonObject: snapshot.jsonObject,
+            authenticationKey: authenticationKey
+        )
+        guard verified.collectionID == collectionID else { throw invalid() }
+        let state = try load()
+        guard !state.snapshots.contains(where: {
+            $0.canonicalPayloadSHA256 == verified.canonicalPayloadSHA256
+        }) else {
+            return false
+        }
+        try write(
+            operations: state.operations,
+            snapshots: state.snapshots + [verified],
+            pendingOperationIDs: state.pendingOperationIDs
+        )
+        return true
+    }
+
+    public func currentRecords() throws -> [AtlasVaultOpaqueCiphertextEnvelope] {
+        let state = try load()
+        var winners: [String: ConvergentCandidate] = [:]
+        func consider(_ candidate: ConvergentCandidate) {
+            let objectID = candidate.envelope.objectID
+            if let current = winners[objectID], !candidate.wins(over: current) { return }
+            winners[objectID] = candidate
+        }
+        for snapshot in state.snapshots {
+            for envelope in snapshot.records {
+                consider(ConvergentCandidate(
+                    envelope: envelope,
+                    operation: nil,
+                    snapshotDigest: snapshot.canonicalPayloadSHA256
+                ))
+            }
+        }
+        for operation in state.operations {
+            consider(ConvergentCandidate(
+                envelope: operation.envelope,
+                operation: operation,
+                snapshotDigest: ""
+            ))
+        }
+        return winners.keys.sorted().compactMap { winners[$0]?.envelope }
+    }
+
+    public func acceptedOperationCount() throws -> Int { try load().receipts.count }
+
+    public func pendingOperations() throws -> [AtlasVaultEncryptedPatchOperation] {
+        let state = try load()
+        let pending = Set(state.pendingOperationIDs)
+        return state.operations.filter { pending.contains($0.operationID) }.sorted()
+    }
+
+    public func confirmRemoteAcceptance(_ operationID: String) throws {
+        let operationID = try canonicalUUID(operationID)
+        let state = try load()
+        guard state.pendingOperationIDs.contains(operationID) else { throw invalid() }
+        try write(
+            operations: state.operations,
+            snapshots: state.snapshots,
+            pendingOperationIDs: state.pendingOperationIDs.filter { $0 != operationID }
+        )
+    }
+
+    public func synchronize(
+        to remote: AtlasVaultDurableEncryptedConvergentReplica
+    ) throws -> Int {
+        guard remote.collectionID == collectionID else { throw invalid() }
+        var accepted = 0
+        for operation in try pendingOperations() {
+            _ = try remote.ingestRemote(operation)
+            try confirmRemoteAcceptance(operation.operationID)
+            accepted += 1
+        }
+        return accepted
     }
 }
 

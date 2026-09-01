@@ -16,6 +16,8 @@ const _snapshotPayloadFormat =
     'atlasvault-authenticated-collection-snapshot-payload';
 const _snapshotAuthenticationAlgorithm = 'HMAC-SHA256';
 const _collectionStateFormat = 'atlasvault-encrypted-patch-collection-state';
+const _convergentReplicaStateFormat =
+    'atlasvault-encrypted-convergent-replica-state';
 const _maximumQueueBytes = 128 * 1024 * 1024;
 const _maximumQueueOperations = 65536;
 const _maximumEnvelopeFieldBytes = 96 * 1024 * 1024;
@@ -824,6 +826,401 @@ final class AtlasVaultDurableEncryptedPatchCollection {
       'tail_operations': <Object?>[],
     }, beforeReplace: beforeReplace);
     return snapshot;
+  }
+}
+
+final class _ConvergentReplicaState {
+  const _ConvergentReplicaState({
+    required this.operations,
+    required this.snapshots,
+    required this.pendingOperationIds,
+    required this.receipts,
+  });
+
+  final List<AtlasVaultEncryptedPatchOperation> operations;
+  final List<AtlasVaultAuthenticatedCollectionSnapshot> snapshots;
+  final List<String> pendingOperationIds;
+  final Map<String, String> receipts;
+}
+
+Map<String, Object?> _convergentDefault(String collectionId) =>
+    <String, Object?>{
+      'format': _convergentReplicaStateFormat,
+      'version': 1,
+      'collection_id': collectionId,
+      'operations': <Object?>[],
+      'snapshots': <Object?>[],
+      'pending_operation_ids': <Object?>[],
+    };
+
+Map<String, String> _validateConvergentHistory(
+  List<AtlasVaultEncryptedPatchOperation> operations,
+  List<AtlasVaultAuthenticatedCollectionSnapshot> snapshots,
+) {
+  final receipts = <String, String>{};
+  final snapshotSequences = <String, int>{};
+  final revisionValues = <String, String>{};
+  final revisionParents = <String, String?>{};
+
+  void addReceipt(String operationId, String digest) {
+    final known = receipts[operationId];
+    if (known != null && known != digest) _invalid();
+    receipts[operationId] = digest;
+  }
+
+  void addEnvelope(AtlasVaultOpaqueCiphertextEnvelope envelope) {
+    if (envelope.parentRevision == envelope.revision) _invalid();
+    final key = '${envelope.objectId}\u0000${envelope.revision}';
+    final encoded = _sha256Hex(_canonicalJsonBytes(envelope.toJson()));
+    final known = revisionValues[key];
+    if (known != null && known != encoded) _invalid();
+    revisionValues[key] = encoded;
+    revisionParents[key] = envelope.parentRevision;
+  }
+
+  for (final snapshot in snapshots) {
+    for (final entry in snapshot.appliedFingerprints.entries) {
+      addReceipt(entry.key, entry.value);
+    }
+    for (final entry in snapshot.authorSequences.entries) {
+      final current = snapshotSequences[entry.key] ?? 0;
+      if (entry.value > current) snapshotSequences[entry.key] = entry.value;
+    }
+    for (final envelope in snapshot.records) {
+      addEnvelope(envelope);
+    }
+  }
+
+  final sequenceOwners = <String, String>{};
+  for (final operation in operations) {
+    final digest = _fingerprint(operation);
+    final knownReceipt = receipts[operation.operationId];
+    addReceipt(operation.operationId, digest);
+    final sequenceKey =
+        '${operation.authorDeviceId}\u0000${operation.authorSequence}';
+    final knownOwner = sequenceOwners[sequenceKey];
+    if (knownOwner != null && knownOwner != operation.operationId) _invalid();
+    sequenceOwners[sequenceKey] = operation.operationId;
+    if (knownReceipt == null &&
+        operation.authorSequence <=
+            (snapshotSequences[operation.authorDeviceId] ?? 0)) {
+      _invalid();
+    }
+    addEnvelope(operation.envelope);
+  }
+  if (receipts.length > _maximumQueueOperations) _invalid();
+
+  for (final start in revisionParents.keys) {
+    final separator = start.indexOf('\u0000');
+    final objectId = start.substring(0, separator);
+    final seen = <String>{};
+    String? current = start;
+    while (current != null && revisionParents.containsKey(current)) {
+      if (!seen.add(current)) _invalid();
+      final parent = revisionParents[current];
+      current = parent == null ? null : '$objectId\u0000$parent';
+    }
+  }
+  return receipts;
+}
+
+Future<_ConvergentReplicaState> _loadConvergentReplica(
+  _EncryptedQueueFile store, {
+  required String collectionId,
+  required Uint8List authenticationKey,
+}) async {
+  final state = await store.read(_convergentDefault(collectionId));
+  _exact(state, const <String>{
+    'format',
+    'version',
+    'collection_id',
+    'operations',
+    'snapshots',
+    'pending_operation_ids',
+  });
+  if (state['format'] != _convergentReplicaStateFormat ||
+      state['version'] != 1 ||
+      _identifier(state['collection_id']) != collectionId ||
+      state['operations'] is! List ||
+      state['snapshots'] is! List ||
+      state['pending_operation_ids'] is! List) {
+    _invalid();
+  }
+  final rawOperations = state['operations']! as List;
+  final rawSnapshots = state['snapshots']! as List;
+  final rawPending = state['pending_operation_ids']! as List;
+  if (rawOperations.length > _maximumQueueOperations ||
+      rawSnapshots.length > _maximumQueueOperations ||
+      rawPending.length > _maximumQueueOperations) {
+    _invalid();
+  }
+  final operations = rawOperations
+      .map((item) => AtlasVaultEncryptedPatchOperation.fromJson(_object(item)))
+      .toList(growable: false);
+  final orderedOperations = [...operations]
+    ..sort((left, right) => left.operationId.compareTo(right.operationId));
+  if (!_sameOperations(operations, orderedOperations) ||
+      operations.map((item) => item.operationId).toSet().length !=
+          operations.length) {
+    _invalid();
+  }
+  final snapshots = <AtlasVaultAuthenticatedCollectionSnapshot>[];
+  for (final item in rawSnapshots) {
+    final snapshot = await AtlasVaultAuthenticatedCollectionSnapshot.decode(
+      _object(item),
+      authenticationKey: authenticationKey,
+    );
+    if (snapshot.collectionId != collectionId) _invalid();
+    snapshots.add(snapshot);
+  }
+  final snapshotDigests = snapshots
+      .map((item) => item.canonicalPayloadSha256)
+      .toList(growable: false);
+  if (!_sameStrings(snapshotDigests, [...snapshotDigests]..sort()) ||
+      snapshotDigests.toSet().length != snapshotDigests.length) {
+    _invalid();
+  }
+  final pending = rawPending.map(_uuid).toList(growable: false);
+  if (!_sameStrings(pending, [...pending]..sort()) ||
+      pending.toSet().length != pending.length ||
+      !operations
+          .map((item) => item.operationId)
+          .toSet()
+          .containsAll(pending)) {
+    _invalid();
+  }
+  return _ConvergentReplicaState(
+    operations: List<AtlasVaultEncryptedPatchOperation>.unmodifiable(
+      operations,
+    ),
+    snapshots: List<AtlasVaultAuthenticatedCollectionSnapshot>.unmodifiable(
+      snapshots,
+    ),
+    pendingOperationIds: List<String>.unmodifiable(pending),
+    receipts: Map<String, String>.unmodifiable(
+      _validateConvergentHistory(operations, snapshots),
+    ),
+  );
+}
+
+final class _ConvergentCandidate {
+  const _ConvergentCandidate({
+    required this.envelope,
+    required this.operation,
+    required this.snapshotDigest,
+  });
+
+  final AtlasVaultOpaqueCiphertextEnvelope envelope;
+  final AtlasVaultEncryptedPatchOperation? operation;
+  final String snapshotDigest;
+
+  bool winsOver(_ConvergentCandidate other) {
+    if (envelope.tombstone != other.envelope.tombstone) {
+      return envelope.tombstone;
+    }
+    if (operation != null && other.operation == null) return true;
+    if (operation == null && other.operation != null) return false;
+    if (operation != null) return operation!.compareTo(other.operation!) > 0;
+    return snapshotDigest.compareTo(other.snapshotDigest) > 0;
+  }
+}
+
+final class AtlasVaultDurableEncryptedConvergentReplica {
+  AtlasVaultDurableEncryptedConvergentReplica(
+    File file, {
+    required Uint8List encryptionKey,
+    required Uint8List authenticationKey,
+    required String collectionId,
+  }) : _collectionId = _identifier(collectionId),
+       _authenticationKey = Uint8List.fromList(authenticationKey),
+       _store = _EncryptedQueueFile(
+         file,
+         encryptionKey,
+         kind: 'convergent-replica',
+       ) {
+    if (authenticationKey.length != 32) _invalid();
+  }
+
+  final String _collectionId;
+  final Uint8List _authenticationKey;
+  final _EncryptedQueueFile _store;
+
+  Future<_ConvergentReplicaState> _load() => _loadConvergentReplica(
+    _store,
+    collectionId: _collectionId,
+    authenticationKey: _authenticationKey,
+  );
+
+  Future<void> _write({
+    required Iterable<AtlasVaultEncryptedPatchOperation> operations,
+    required Iterable<AtlasVaultAuthenticatedCollectionSnapshot> snapshots,
+    required Iterable<String> pendingOperationIds,
+  }) async {
+    final orderedOperations = operations.toList()
+      ..sort((left, right) => left.operationId.compareTo(right.operationId));
+    final orderedSnapshots = snapshots.toList()
+      ..sort(
+        (left, right) =>
+            left.canonicalPayloadSha256.compareTo(right.canonicalPayloadSha256),
+      );
+    final orderedPending = pendingOperationIds.toList()..sort();
+    _validateConvergentHistory(orderedOperations, orderedSnapshots);
+    if (!orderedOperations
+        .map((item) => item.operationId)
+        .toSet()
+        .containsAll(orderedPending)) {
+      _invalid();
+    }
+    await _store.write(<String, Object?>{
+      'format': _convergentReplicaStateFormat,
+      'version': 1,
+      'collection_id': _collectionId,
+      'operations': orderedOperations.map((item) => item.toJson()).toList(),
+      'snapshots': orderedSnapshots.map((item) => item.toJson()).toList(),
+      'pending_operation_ids': orderedPending,
+    });
+  }
+
+  Future<bool> ingestRemote(AtlasVaultEncryptedPatchOperation operation) async {
+    final state = await _load();
+    final digest = _fingerprint(operation);
+    final known = state.receipts[operation.operationId];
+    if (known != null) {
+      if (known != digest) _invalid();
+      return false;
+    }
+    await _write(
+      operations: <AtlasVaultEncryptedPatchOperation>[
+        ...state.operations,
+        operation,
+      ],
+      snapshots: state.snapshots,
+      pendingOperationIds: state.pendingOperationIds,
+    );
+    return true;
+  }
+
+  Future<bool> queueLocal(AtlasVaultEncryptedPatchOperation operation) async {
+    final state = await _load();
+    final digest = _fingerprint(operation);
+    final known = state.receipts[operation.operationId];
+    if (known != null) {
+      if (known != digest) _invalid();
+      return false;
+    }
+    await _write(
+      operations: <AtlasVaultEncryptedPatchOperation>[
+        ...state.operations,
+        operation,
+      ],
+      snapshots: state.snapshots,
+      pendingOperationIds: <String>[
+        ...state.pendingOperationIds,
+        operation.operationId,
+      ],
+    );
+    return true;
+  }
+
+  Future<bool> mergeSnapshot(
+    AtlasVaultAuthenticatedCollectionSnapshot snapshot,
+  ) async {
+    final verified = await AtlasVaultAuthenticatedCollectionSnapshot.decode(
+      snapshot.toJson(),
+      authenticationKey: _authenticationKey,
+    );
+    if (verified.collectionId != _collectionId) _invalid();
+    final state = await _load();
+    if (state.snapshots.any(
+      (item) => item.canonicalPayloadSha256 == verified.canonicalPayloadSha256,
+    )) {
+      return false;
+    }
+    await _write(
+      operations: state.operations,
+      snapshots: <AtlasVaultAuthenticatedCollectionSnapshot>[
+        ...state.snapshots,
+        verified,
+      ],
+      pendingOperationIds: state.pendingOperationIds,
+    );
+    return true;
+  }
+
+  Future<List<AtlasVaultOpaqueCiphertextEnvelope>> currentRecords() async {
+    final state = await _load();
+    final winners = <String, _ConvergentCandidate>{};
+    void consider(_ConvergentCandidate candidate) {
+      final objectId = candidate.envelope.objectId;
+      final current = winners[objectId];
+      if (current == null || candidate.winsOver(current)) {
+        winners[objectId] = candidate;
+      }
+    }
+
+    for (final snapshot in state.snapshots) {
+      for (final envelope in snapshot.records) {
+        consider(
+          _ConvergentCandidate(
+            envelope: envelope,
+            operation: null,
+            snapshotDigest: snapshot.canonicalPayloadSha256,
+          ),
+        );
+      }
+    }
+    for (final operation in state.operations) {
+      consider(
+        _ConvergentCandidate(
+          envelope: operation.envelope,
+          operation: operation,
+          snapshotDigest: '',
+        ),
+      );
+    }
+    final objectIds = winners.keys.toList()..sort();
+    return List<AtlasVaultOpaqueCiphertextEnvelope>.unmodifiable(
+      objectIds.map((item) => winners[item]!.envelope),
+    );
+  }
+
+  Future<int> acceptedOperationCount() async => (await _load()).receipts.length;
+
+  Future<List<AtlasVaultEncryptedPatchOperation>> pendingOperations() async {
+    final state = await _load();
+    final pending = state.pendingOperationIds.toSet();
+    final result =
+        state.operations
+            .where((item) => pending.contains(item.operationId))
+            .toList()
+          ..sort();
+    return List<AtlasVaultEncryptedPatchOperation>.unmodifiable(result);
+  }
+
+  Future<void> confirmRemoteAcceptance(String operationId) async {
+    operationId = _uuid(operationId);
+    final state = await _load();
+    if (!state.pendingOperationIds.contains(operationId)) _invalid();
+    await _write(
+      operations: state.operations,
+      snapshots: state.snapshots,
+      pendingOperationIds: state.pendingOperationIds.where(
+        (item) => item != operationId,
+      ),
+    );
+  }
+
+  Future<int> synchronizeTo(
+    AtlasVaultDurableEncryptedConvergentReplica remote,
+  ) async {
+    if (remote._collectionId != _collectionId) _invalid();
+    var accepted = 0;
+    for (final operation in await pendingOperations()) {
+      await remote.ingestRemote(operation);
+      await confirmRemoteAcceptance(operation.operationId);
+      accepted++;
+    }
+    return accepted;
   }
 }
 

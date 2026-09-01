@@ -27,6 +27,7 @@ SNAPSHOT_FORMAT = "atlasvault-authenticated-collection-snapshot"
 SNAPSHOT_PAYLOAD_FORMAT = "atlasvault-authenticated-collection-snapshot-payload"
 SNAPSHOT_AUTHENTICATION_ALGORITHM = "HMAC-SHA256"
 COLLECTION_STATE_FORMAT = "atlasvault-encrypted-patch-collection-state"
+CONVERGENT_REPLICA_STATE_FORMAT = "atlasvault-encrypted-convergent-replica-state"
 MAXIMUM_QUEUE_FILE_BYTES = 128 * 1024 * 1024
 MAXIMUM_QUEUE_OPERATIONS = 65_536
 MAXIMUM_ENVELOPE_FIELD_BYTES = 96 * 1024 * 1024
@@ -749,6 +750,340 @@ class DurableEncryptedPatchCollection:
             before_replace=before_replace,
         )
         return snapshot
+
+
+@dataclass(frozen=True)
+class _ConvergentReplicaState:
+    operations: tuple[EncryptedPatchOperation, ...]
+    snapshots: tuple[AuthenticatedCollectionSnapshot, ...]
+    pending_operation_ids: tuple[str, ...]
+    receipts: Mapping[str, str]
+
+
+def _convergent_default(collection_id: str) -> dict[str, Any]:
+    return {
+        "format": CONVERGENT_REPLICA_STATE_FORMAT,
+        "version": 1,
+        "collection_id": collection_id,
+        "operations": [],
+        "snapshots": [],
+        "pending_operation_ids": [],
+    }
+
+
+def _validate_convergent_history(
+    operations: tuple[EncryptedPatchOperation, ...],
+    snapshots: tuple[AuthenticatedCollectionSnapshot, ...],
+) -> dict[str, str]:
+    receipts: dict[str, str] = {}
+    snapshot_sequences: dict[str, int] = {}
+    revision_values: dict[tuple[str, str], bytes] = {}
+    revision_parents: dict[tuple[str, str], str | None] = {}
+
+    def add_receipt(operation_id: str, digest: str) -> None:
+        known = receipts.get(operation_id)
+        if known is not None and not secrets.compare_digest(known, digest):
+            raise _error()
+        receipts[operation_id] = digest
+
+    def add_envelope(envelope: OpaqueCiphertextEnvelope) -> None:
+        if envelope.parent_revision == envelope.revision:
+            raise _error()
+        key = (envelope.object_id, envelope.revision)
+        encoded = _canonical_json(envelope.to_dict())
+        known = revision_values.get(key)
+        if known is not None and not secrets.compare_digest(known, encoded):
+            raise _error()
+        revision_values[key] = encoded
+        revision_parents[key] = envelope.parent_revision
+
+    for snapshot in snapshots:
+        for operation_id, digest in snapshot.applied_fingerprints.items():
+            add_receipt(operation_id, digest)
+        for device_id, sequence in snapshot.author_sequences.items():
+            snapshot_sequences[device_id] = max(
+                snapshot_sequences.get(device_id, 0), sequence
+            )
+        for envelope in snapshot.records:
+            add_envelope(envelope)
+
+    sequence_owners: dict[tuple[str, int], str] = {}
+    for operation in operations:
+        digest = _fingerprint(operation)
+        known_receipt = receipts.get(operation.operation_id)
+        add_receipt(operation.operation_id, digest)
+        sequence_key = (operation.author_device_id, operation.author_sequence)
+        known_owner = sequence_owners.get(sequence_key)
+        if known_owner is not None and known_owner != operation.operation_id:
+            raise _error()
+        sequence_owners[sequence_key] = operation.operation_id
+        if (
+            known_receipt is None
+            and operation.author_sequence
+            <= snapshot_sequences.get(operation.author_device_id, 0)
+        ):
+            raise _error()
+        add_envelope(operation.envelope)
+
+    if len(receipts) > MAXIMUM_QUEUE_OPERATIONS:
+        raise _error()
+
+    for start in revision_parents:
+        seen: set[tuple[str, str]] = set()
+        current: tuple[str, str] | None = start
+        while current is not None and current in revision_parents:
+            if current in seen:
+                raise _error()
+            seen.add(current)
+            parent = revision_parents[current]
+            current = (current[0], parent) if parent is not None else None
+    return receipts
+
+
+def _load_convergent_replica(
+    store: _EncryptedQueueFile,
+    *,
+    collection_id: str,
+    authentication_key: bytes,
+) -> _ConvergentReplicaState:
+    state = _mapping(store.read(_convergent_default(collection_id)))
+    _exact(
+        state,
+        {
+            "format",
+            "version",
+            "collection_id",
+            "operations",
+            "snapshots",
+            "pending_operation_ids",
+        },
+    )
+    if (
+        state["format"] != CONVERGENT_REPLICA_STATE_FORMAT
+        or state["version"] != 1
+        or _identifier(state["collection_id"]) != collection_id
+    ):
+        raise _error()
+    raw_operations = state["operations"]
+    raw_snapshots = state["snapshots"]
+    raw_pending = state["pending_operation_ids"]
+    if (
+        not isinstance(raw_operations, list)
+        or not isinstance(raw_snapshots, list)
+        or not isinstance(raw_pending, list)
+        or len(raw_operations) > MAXIMUM_QUEUE_OPERATIONS
+        or len(raw_snapshots) > MAXIMUM_QUEUE_OPERATIONS
+        or len(raw_pending) > MAXIMUM_QUEUE_OPERATIONS
+    ):
+        raise _error()
+    operations = tuple(
+        EncryptedPatchOperation.from_dict(_mapping(item)) for item in raw_operations
+    )
+    if operations != tuple(sorted(operations, key=lambda item: item.operation_id)) or len(
+        {item.operation_id for item in operations}
+    ) != len(operations):
+        raise _error()
+    snapshots = tuple(
+        AuthenticatedCollectionSnapshot.from_dict(
+            _mapping(item), authentication_key=authentication_key
+        )
+        for item in raw_snapshots
+    )
+    if any(item.collection_id != collection_id for item in snapshots) or snapshots != tuple(
+        sorted(snapshots, key=lambda item: item.canonical_payload_sha256)
+    ) or len({item.canonical_payload_sha256 for item in snapshots}) != len(snapshots):
+        raise _error()
+    pending = tuple(_canonical_uuid(item) for item in raw_pending)
+    if pending != tuple(sorted(pending)) or len(set(pending)) != len(pending):
+        raise _error()
+    operation_ids = {item.operation_id for item in operations}
+    if not set(pending).issubset(operation_ids):
+        raise _error()
+    receipts = _validate_convergent_history(operations, snapshots)
+    return _ConvergentReplicaState(operations, snapshots, pending, receipts)
+
+
+def _convergent_dict(
+    state: _ConvergentReplicaState,
+    *,
+    collection_id: str,
+) -> dict[str, Any]:
+    return {
+        "format": CONVERGENT_REPLICA_STATE_FORMAT,
+        "version": 1,
+        "collection_id": collection_id,
+        "operations": [item.to_dict() for item in state.operations],
+        "snapshots": [item.to_dict() for item in state.snapshots],
+        "pending_operation_ids": list(state.pending_operation_ids),
+    }
+
+
+def _resolve_convergent_records(
+    state: _ConvergentReplicaState,
+) -> tuple[OpaqueCiphertextEnvelope, ...]:
+    candidates: dict[
+        str,
+        list[
+            tuple[
+                OpaqueCiphertextEnvelope,
+                tuple[int, int, str, int, str],
+            ]
+        ],
+    ] = {}
+    for snapshot in state.snapshots:
+        for envelope in snapshot.records:
+            candidates.setdefault(envelope.object_id, []).append(
+                (
+                    envelope,
+                    (0, 0, "", 0, snapshot.canonical_payload_sha256),
+                )
+            )
+    for operation in state.operations:
+        candidates.setdefault(operation.envelope.object_id, []).append(
+            (operation.envelope, (1, *operation.order_key))
+        )
+    resolved: list[OpaqueCiphertextEnvelope] = []
+    for object_id in sorted(candidates):
+        object_candidates = candidates[object_id]
+        if any(item[0].tombstone for item in object_candidates):
+            object_candidates = [item for item in object_candidates if item[0].tombstone]
+        resolved.append(max(object_candidates, key=lambda item: item[1])[0])
+    return tuple(resolved)
+
+
+class DurableEncryptedConvergentReplica:
+    """Durable ciphertext replica with order-independent conflict reduction."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        encryption_key: bytes,
+        authentication_key: bytes,
+        collection_id: str,
+    ) -> None:
+        if not isinstance(authentication_key, bytes) or len(authentication_key) != 32:
+            raise _error()
+        self._collection_id = _identifier(collection_id)
+        self._authentication_key = authentication_key
+        self._store = _EncryptedQueueFile(path, encryption_key, kind="convergent-replica")
+
+    def _load(self) -> _ConvergentReplicaState:
+        return _load_convergent_replica(
+            self._store,
+            collection_id=self._collection_id,
+            authentication_key=self._authentication_key,
+        )
+
+    def _write(
+        self,
+        operations: Iterable[EncryptedPatchOperation],
+        snapshots: Iterable[AuthenticatedCollectionSnapshot],
+        pending_operation_ids: Iterable[str],
+    ) -> None:
+        ordered_operations = tuple(sorted(operations, key=lambda item: item.operation_id))
+        ordered_snapshots = tuple(
+            sorted(snapshots, key=lambda item: item.canonical_payload_sha256)
+        )
+        ordered_pending = tuple(sorted(pending_operation_ids))
+        state = _ConvergentReplicaState(
+            ordered_operations,
+            ordered_snapshots,
+            ordered_pending,
+            _validate_convergent_history(ordered_operations, ordered_snapshots),
+        )
+        if not set(ordered_pending).issubset(
+            {item.operation_id for item in ordered_operations}
+        ):
+            raise _error()
+        self._store.write(_convergent_dict(state, collection_id=self._collection_id))
+
+    def ingest_remote(self, operation: EncryptedPatchOperation) -> bool:
+        if not isinstance(operation, EncryptedPatchOperation):
+            raise _error()
+        state = self._load()
+        digest = _fingerprint(operation)
+        known = state.receipts.get(operation.operation_id)
+        if known is not None:
+            if not secrets.compare_digest(known, digest):
+                raise _error()
+            return False
+        self._write((*state.operations, operation), state.snapshots, state.pending_operation_ids)
+        return True
+
+    def queue_local(self, operation: EncryptedPatchOperation) -> bool:
+        if not isinstance(operation, EncryptedPatchOperation):
+            raise _error()
+        state = self._load()
+        digest = _fingerprint(operation)
+        known = state.receipts.get(operation.operation_id)
+        if known is not None:
+            if not secrets.compare_digest(known, digest):
+                raise _error()
+            return False
+        self._write(
+            (*state.operations, operation),
+            state.snapshots,
+            (*state.pending_operation_ids, operation.operation_id),
+        )
+        return True
+
+    def merge_snapshot(self, snapshot: AuthenticatedCollectionSnapshot) -> bool:
+        if not isinstance(snapshot, AuthenticatedCollectionSnapshot):
+            raise _error()
+        verified = AuthenticatedCollectionSnapshot.from_dict(
+            snapshot.to_dict(), authentication_key=self._authentication_key
+        )
+        if verified.collection_id != self._collection_id:
+            raise _error()
+        state = self._load()
+        if any(
+            item.canonical_payload_sha256 == verified.canonical_payload_sha256
+            for item in state.snapshots
+        ):
+            return False
+        self._write(
+            state.operations,
+            (*state.snapshots, verified),
+            state.pending_operation_ids,
+        )
+        return True
+
+    def current_records(self) -> tuple[OpaqueCiphertextEnvelope, ...]:
+        return _resolve_convergent_records(self._load())
+
+    @property
+    def accepted_operation_count(self) -> int:
+        return len(self._load().receipts)
+
+    def pending_operations(self) -> tuple[EncryptedPatchOperation, ...]:
+        state = self._load()
+        pending = set(state.pending_operation_ids)
+        return tuple(sorted(item for item in state.operations if item.operation_id in pending))
+
+    def confirm_remote_acceptance(self, operation_id: str) -> None:
+        operation_id = _canonical_uuid(operation_id)
+        state = self._load()
+        if operation_id not in state.pending_operation_ids:
+            raise _error()
+        self._write(
+            state.operations,
+            state.snapshots,
+            (item for item in state.pending_operation_ids if item != operation_id),
+        )
+
+    def synchronize_to(self, remote: DurableEncryptedConvergentReplica) -> int:
+        if (
+            not isinstance(remote, DurableEncryptedConvergentReplica)
+            or remote._collection_id != self._collection_id
+        ):
+            raise _error()
+        accepted = 0
+        for operation in self.pending_operations():
+            remote.ingest_remote(operation)
+            self.confirm_remote_acceptance(operation.operation_id)
+            accepted += 1
+        return accepted
 
 
 def _outbox_default() -> dict[str, Any]:
