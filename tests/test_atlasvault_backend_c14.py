@@ -25,7 +25,9 @@ from atlasvault_api.app import (
 from atlasvault_api.controls import AbuseControlPolicy
 from atlasvault_api.storage import (
     EncryptedVaultMetadataEnvelopeModel,
+    InMemoryOpaqueStore,
     InvalidOpaqueStorageRequest,
+    OpaqueStorageCapacityExceeded,
     OpaqueStorageConflict,
 )
 from vaultsync.device_identity import DeviceIdentity, device_identity_from_private_keys
@@ -1490,3 +1492,92 @@ def test_c14_if_match_uses_strong_entity_tags_at_the_http_boundary(
         json=_metadata(revision="etag-r3", payload=b"third"),
     )
     assert unquoted.status_code == 422
+
+
+def test_c14_global_capacity_keeps_an_unallocatable_reserve() -> None:
+    first = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="reserve-r1", payload=b"opaque")
+    )
+    second = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        {
+            **_metadata(revision="reserve-r2", payload=b"opaque"),
+            "vault_id": "vault-c14-reserve-second",
+        }
+    )
+    envelope_bytes = len(first.model_dump_json().encode("utf-8"))
+    limits = AbuseControlPolicy(
+        max_retained_bytes=envelope_bytes * 2,
+        max_retained_bytes_per_account=envelope_bytes,
+        reserved_retained_bytes=envelope_bytes,
+    )
+    store = InMemoryOpaqueStore(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 2_000.0,
+        limits=limits,
+    )
+
+    store.put_metadata(
+        "reserve-account-a",
+        first.vault_id,
+        first,
+        expected_revision="*",
+        idempotency_key="reserve-first",
+    )
+    with pytest.raises(OpaqueStorageCapacityExceeded):
+        store.put_metadata(
+            "reserve-account-b",
+            second.vault_id,
+            second,
+            expected_revision="*",
+            idempotency_key="reserve-second",
+        )
+
+    assert store._retained_bytes == envelope_bytes
+    assert limits.max_retained_bytes - store._retained_bytes == (
+        limits.reserved_retained_bytes
+    )
+
+
+def test_c14_storage_clock_fails_closed_before_state_or_cursor_mutation() -> None:
+    now = [2_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    first = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="clock-r1", payload=b"opaque")
+    )
+    backend.storage.put_metadata(
+        ACCOUNT_ID,
+        first.vault_id,
+        first,
+        expected_revision="*",
+        idempotency_key="clock-first",
+    )
+
+    before = backend.storage._retained_bytes
+    now[0] = 1_999.0
+    with pytest.raises(InvalidOpaqueStorageRequest):
+        backend.storage.put_metadata(
+            ACCOUNT_ID,
+            first.vault_id,
+            EncryptedVaultMetadataEnvelopeModel.model_validate(
+                _metadata(revision="clock-r2", payload=b"changed")
+            ),
+            expected_revision="clock-r1",
+            idempotency_key="clock-regressed",
+        )
+    assert backend.storage._retained_bytes == before
+    assert backend.storage.get_metadata(ACCOUNT_ID, first.vault_id).revision == (
+        "clock-r1"
+    )
+
+    now[0] = float("nan")
+    with pytest.raises(InvalidOpaqueStorageRequest):
+        backend.storage.list_patches(
+            ACCOUNT_ID,
+            first.vault_id,
+            cursor=None,
+            page_size=1,
+        )
+    assert backend.storage._cursors == {}

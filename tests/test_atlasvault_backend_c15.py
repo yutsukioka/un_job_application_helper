@@ -1083,3 +1083,80 @@ def test_c15_account_signature_verification_is_globally_rate_limited(
         assert response.status_code == (400 if index == 0 else 429), response.text
 
     assert verification_calls == 1
+
+
+def test_c15_bootstrap_requires_one_time_account_bound_admission() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device_a, device_b = _identities()
+    first = _signed_transition(
+        account_id=ACCOUNT_A,
+        revision=REVISION_1,
+        parent_revision=None,
+        device=device_a,
+        signer=device_a,
+    )
+
+    public = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        json=first,
+    )
+    assert public.status_code == 401
+    assert backend._accounts == {}
+
+    admission = backend.issue_bootstrap_admission(ACCOUNT_A)
+    accepted = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        headers={"X-AtlasVault-Bootstrap-Admission": admission},
+        json=first,
+    )
+    assert accepted.status_code == 201, accepted.text
+
+    second = _signed_transition(
+        account_id=ACCOUNT_B,
+        revision="20000000-0000-4000-8000-000000000001",
+        parent_revision=None,
+        device=device_b,
+        signer=device_b,
+    )
+    replay = client.post(
+        f"/v1/accounts/{ACCOUNT_B}/devices/bootstrap",
+        headers={"X-AtlasVault-Bootstrap-Admission": admission},
+        json=second,
+    )
+    assert replay.status_code == 401
+    assert set(backend._accounts) == {ACCOUNT_A}
+
+
+def test_c15_public_bootstrap_cannot_exhaust_authenticated_verification_budget() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+        abuse_policy=AbuseControlPolicy(
+            bootstrap_verification_limit=1,
+            account_verification_limit=1,
+        ),
+    )
+    client = TestClient(create_app(backend))
+    device_a, device_b = _identities()
+    _bootstrap(client, device_a, account_id=ACCOUNT_A)
+
+    second_admission = backend.issue_bootstrap_admission(ACCOUNT_B)
+    exhausted = client.post(
+        f"/v1/accounts/{ACCOUNT_B}/devices/bootstrap",
+        headers={"X-AtlasVault-Bootstrap-Admission": second_admission},
+        json=_signed_transition(
+            account_id=ACCOUNT_B,
+            revision="20000000-0000-4000-8000-000000000001",
+            parent_revision=None,
+            device=device_b,
+            signer=device_b,
+        ),
+    )
+    assert exhausted.status_code == 429
+
+    token, _ = _session(client, device_a, account_id=ACCOUNT_A)
+    assert token.startswith("avt1-")
