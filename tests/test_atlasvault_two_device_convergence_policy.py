@@ -13,6 +13,9 @@ VECTOR = (
     / "atlasvault_two_device_convergence_vectors_v1.json"
 )
 ORCHESTRATOR = ROOT / "scripts" / "ci" / "atlasvault_two_device_convergence.py"
+SECURITY_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "atlasvault-cross-platform-security.yml"
+)
 CLIENTS = (
     ROOT
     / "packages"
@@ -72,3 +75,12 @@ def test_c20_proof_requires_real_tls_backend_and_three_language_pairs() -> None:
         assert required in source
     assert "synchronize_to(" not in source
     assert "synchronizeTo(" not in source
+
+
+def test_c20_real_proof_is_enforced_by_hosted_ci() -> None:
+    workflow = SECURITY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "Run C20 two-device convergence proof" in workflow
+    assert 'python -m pip install -e "services/atlasvault-api[dev]"' in workflow
+    assert "python scripts/ci/atlasvault_two_device_convergence.py" in workflow
+    assert '--output "$RUNNER_TEMP/atlasvault-c20-two-device-convergence.json"' in workflow

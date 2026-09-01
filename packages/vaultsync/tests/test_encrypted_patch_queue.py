@@ -148,6 +148,11 @@ def test_queue_creation_syncs_each_new_parent_and_cleans_abandoned_stages(
     DurableEncryptedOutbox(nested_path, encryption_key=_queue_key())
     assert not stale.exists()
 
+    unrelated = nested_path.parent / ".outbox.queue.not-a-uuid.tmp"
+    unrelated.write_bytes(b"unrelated")
+    DurableEncryptedOutbox(nested_path, encryption_key=_queue_key())
+    assert unrelated.read_bytes() == b"unrelated"
+
 
 def test_inbox_cursor_waits_for_durable_apply_and_duplicates_apply_once(
     tmp_path: Path,
