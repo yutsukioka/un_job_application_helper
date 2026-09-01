@@ -25,6 +25,7 @@ from atlasvault_api.app import (
 from atlasvault_api.storage import (
     EncryptedVaultMetadataEnvelopeModel,
     InvalidOpaqueStorageRequest,
+    OpaqueStorageConflict,
 )
 from vaultsync.device_identity import DeviceIdentity, device_identity_from_private_keys
 from vaultsync.service_contract_guard import find_raw_secret_wire_contract_violations
@@ -1102,4 +1103,99 @@ def test_c14_write_tokens_reject_non_visible_ascii(
             envelope,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
+        )
+
+
+def test_c14_cursor_pruning_does_not_scan_every_live_cursor() -> None:
+    class NoFullScanCursors(dict[str, object]):
+        def items(self) -> object:
+            raise AssertionError("full cursor scan is forbidden")
+
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 2_000.0,
+    )
+    client = TestClient(create_app(backend))
+    authorization = _authorize(client, _identity())
+    parent: str | None = None
+    for index in range(2):
+        revision = f"cursor-no-scan-r{index + 1}"
+        response = client.post(
+            f"/v1/vaults/{VAULT_ID}/patches",
+            headers=_write_headers(
+                authorization,
+                expected=parent or "*",
+                idempotency_key=f"cursor-no-scan-{index + 1}",
+            ),
+            json=_opaque_envelope(
+                object_id=f"cursor-no-scan-{index + 1}",
+                revision=revision,
+                parent_revision=parent,
+                payload=revision.encode("ascii"),
+            ),
+        )
+        assert response.status_code == 201, response.text
+        parent = revision
+
+    backend.storage._cursors = NoFullScanCursors()
+    page = client.get(
+        f"/v1/vaults/{VAULT_ID}/patches",
+        headers=authorization,
+        params={"page_size": 1},
+    )
+    assert page.status_code == 200, page.text
+    assert page.json()["next_cursor"] is not None
+
+
+def test_c14_expired_receipt_is_ignored_even_beyond_prune_budget() -> None:
+    now = [2_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    first = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="receipt-budget-r1", payload=b"first")
+    )
+    second = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="receipt-budget-r2", payload=b"second")
+    )
+    store = backend.storage
+    store.put_metadata(
+        ACCOUNT_ID,
+        VAULT_ID,
+        first,
+        expected_revision="*",
+        idempotency_key="receipt-budget-seed",
+    )
+    for index in range(65):
+        store.put_metadata(
+            ACCOUNT_ID,
+            VAULT_ID,
+            first,
+            expected_revision="*",
+            idempotency_key=f"receipt-budget-backlog-{index}",
+        )
+    store.put_metadata(
+        ACCOUNT_ID,
+        VAULT_ID,
+        first,
+        expected_revision="*",
+        idempotency_key="receipt-budget-target",
+    )
+    store.put_metadata(
+        ACCOUNT_ID,
+        VAULT_ID,
+        second,
+        expected_revision="receipt-budget-r1",
+        idempotency_key="receipt-budget-advance",
+    )
+
+    now[0] += _RECEIPT_LIFETIME_SECONDS + 1
+    with pytest.raises(OpaqueStorageConflict):
+        store.put_metadata(
+            ACCOUNT_ID,
+            VAULT_ID,
+            first,
+            expected_revision="*",
+            idempotency_key="receipt-budget-target",
         )

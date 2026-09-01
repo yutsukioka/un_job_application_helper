@@ -865,6 +865,64 @@ def test_c15_rate_limiter_does_not_scan_every_counter_on_each_request() -> None:
     limiter.consume(StoragePrincipal("account-a", "device-a"))
 
 
+def test_c15_invalid_session_challenge_does_not_scan_live_sessions() -> None:
+    class NoFullScanSessions(dict[bytes, object]):
+        def items(self) -> object:
+            raise AssertionError("full session expiry scan is forbidden")
+
+        def values(self) -> object:
+            raise AssertionError("full per-device session scan is forbidden")
+
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    backend._sessions = NoFullScanSessions()
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/sessions",
+        json={
+            "device_id": device.device_id,
+            "challenge_id": f"avc1-{'0' * 32}",
+            "signature": _encode64(bytes(64)),
+        },
+    )
+    assert response.status_code == 401
+
+
+def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
+    policy = AbuseControlPolicy(
+        account_request_limit=11,
+        device_request_limit=7,
+        window_seconds=31,
+        max_request_bytes=123_456,
+        max_account_request_bytes=4_096,
+        max_accounts=17,
+        max_challenges=19,
+        max_challenges_per_device=3,
+        max_sessions=23,
+        max_sessions_per_device=5,
+        max_devices_per_account=13,
+    )
+    schema = create_app(AtlasVaultBackend(abuse_policy=policy)).openapi()
+    assert schema["x-atlasvault-c15-controls"] == {
+        "accountRequestLimit": 11,
+        "deviceRequestLimit": 7,
+        "maxRetainedAccounts": 17,
+        "maxLiveChallenges": 19,
+        "maxChallengesPerDevice": 3,
+        "maxLiveSessions": 23,
+        "maxSessionsPerDevice": 5,
+        "maxDevicesPerAccount": 13,
+        "rateWindowSeconds": 31,
+        "maxRequestBytes": 123_456,
+        "maxAccountRequestBytes": 4_096,
+        "telemetryDimensions": ["category", "outcome", "count"],
+    }
+
+
 def test_c15_telemetry_coarsens_unknown_categories() -> None:
     telemetry = SecretFreeTelemetry()
     telemetry.record("user-controlled-value", 418)
