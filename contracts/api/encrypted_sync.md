@@ -67,8 +67,11 @@ blobs." Encryption answers "who can read the user data."
 
 The C13 account service uses the existing AtlasVault Ed25519 device identity:
 
-1. A self-signed add transition bootstraps an opaque account ID and its first
-   signed public-device descriptor.
+1. A server-side control plane mints a one-time admission bound to one opaque
+   account ID. The client presents it in
+   `X-AtlasVault-Bootstrap-Admission` with the self-signed initial add
+   transition. The service retains only the admission digest and consumes it
+   after successful bootstrap.
 2. An active device requests a one-time, short-lived challenge.
 3. The device signs a domain-separated proof binding the account ID, device ID,
    challenge ID, and challenge bytes.
@@ -91,6 +94,9 @@ None of those endpoints may receive:
 
 Authentication tokens are not encryption keys. Account IDs are not vault keys.
 Device IDs must be opaque sync identifiers and must not embed personal data.
+Bootstrap admissions are control-plane credentials, never data-plane vault
+material; they are issued only through the in-process administrative seam and
+have no public HTTP issuance endpoint.
 
 The current implementation uses injected ephemeral account, challenge,
 session, registry, and opaque-storage state. It requires no deployment
@@ -104,11 +110,12 @@ public signing and agreement keys, and a current opaque revision. A transition
 has an exact schema and is signed over canonical JSON with the domain
 `atlasvault-device-registry-transition-v1:`.
 
-Bootstrap is a self-signed `add` transition. Later additions require both an
-account-scoped session for the signer device and a transition signature from
-that same active device. The parent revision must equal the current registry
-revision, target descriptors must pass their existing self-signature and
-device-ID checks, and tampered or stale transitions fail closed.
+Bootstrap requires both an account-bound one-time admission and a self-signed
+`add` transition. Later additions require both an account-scoped session for
+the signer device and a transition signature from that same active device. The
+parent revision must equal the current registry revision, target descriptors
+must pass their existing self-signature and device-ID checks, and tampered or
+stale transitions fail closed.
 Public signing/agreement keys and authentication challenges are canonical
 base64 encodings of exactly 32 bytes; descriptor, transition, and session-proof
 signatures are canonical base64 encodings of exactly 64 bytes. Their schemas
@@ -138,7 +145,9 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 
 - 40 requests per authenticated account per 60-second window;
 - 24 requests per authenticated device per 60-second window;
-- 64 account-route signature verifications per process per 60-second window;
+- 64 bootstrap signature verifications per process per 60-second window;
+- a separate 64 session/device-add signature verifications per process per
+  60-second window;
 - 1,024 retained account registries per process;
 - 4,096 live authentication challenges per process;
 - 8 live authentication challenges per account/device pair;
@@ -152,24 +161,27 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 - 131,072 retained ciphertext revisions per account;
 - 1 GiB conservative retained ciphertext-revision bytes per process;
 - 256 MiB conservative retained ciphertext-revision bytes per account;
+- 256 MiB of the process byte ceiling reserved from tenant allocation;
 - 64 KiB maximum encoded HTTP request body on account-control routes;
 - 192 MiB maximum encoded HTTP request body on storage routes.
 
 Limits are keyed by authenticated account and device IDs rather than bearer
 tokens. Rotating a session, changing ciphertext endpoints, or adding another
 device therefore cannot reset the applicable device or account window. A
-non-finite or regressing monotonic clock fails closed for rate windows and all
-account challenge/session credentials. Expired process-local windows are
-removed through bounded heap-backed cleanup rather than a full counter scan on
-each request.
+non-finite or regressing monotonic clock fails closed for rate windows, account
+challenge/session credentials, storage idempotency receipts, and storage
+cursors. Each storage operation samples the clock once under the store lock
+before mutation and reuses that validated sample for all expirations. Expired
+process-local windows are removed through bounded heap-backed cleanup rather
+than a full counter scan on each request.
 
-Account bootstrap fails with 429 before insertion when the fixed process-local
-registry ceiling is reached. This bounds unauthenticated self-signed account
-creation without retaining request-derived dimensions in telemetry.
-Bootstrap, session proof, and signed device-addition verification also share a
-global fixed-window budget that is consumed before Ed25519 work. Random account
-IDs or authenticated registry updates therefore cannot trigger unbounded
-signature verification outside the storage request limiter.
+Account bootstrap fails with 401 unless the request presents a server-minted,
+one-time admission bound to the exact account ID, and fails with 429 before
+insertion when the fixed process-local registry ceiling is reached. Public
+self-signed requests therefore cannot occupy account slots. Bootstrap
+verification and session/device-add verification use separate fixed-window
+budgets consumed before Ed25519 work, so public bootstrap traffic cannot spend
+the capacity reserved for existing-account authentication and registry work.
 Challenge and session issuance enforce both process-wide and per-account/device
 ceilings, then fail with 429 before retaining state. Signed device addition
 likewise fails with 429 before mutation when its per-account ceiling is reached.
@@ -183,11 +195,13 @@ challenge is rejected before any capacity maintenance, and no request scans the
 session registry.
 
 The in-process opaque store enforces its vault, object, patch, revision, and
-byte budgets before mutation. Revision-byte accounting is deliberately
-conservative and cumulative: replacing a current envelope does not refund its
-budget because revision fingerprints and short-lived idempotency evidence remain
-retained. This fail-closed bound keeps the default embedded backend finite; a
-durable production backend must provide equivalent or stricter quotas.
+byte budgets before mutation. The tenant-allocatable byte ceiling excludes a
+fixed process reserve, so aggregate account quotas cannot consume the entire
+declared process budget. Revision-byte accounting is deliberately conservative
+and cumulative: replacing a current envelope does not refund its budget because
+revision fingerprints and short-lived idempotency evidence remain retained.
+This fail-closed bound keeps the default embedded backend finite; a durable
+production backend must provide equivalent or stricter quotas.
 The default per-account byte ceiling is one quarter of the process ceiling, so
 two accounts cannot consume the global retained-byte budget.
 Idempotency receipts retain only a fixed-size request-envelope fingerprint plus

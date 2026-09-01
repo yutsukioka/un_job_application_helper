@@ -9,6 +9,7 @@ import heapq
 import hmac
 import json
 import math
+import re
 import secrets
 import threading
 import time
@@ -81,6 +82,8 @@ BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$"
 BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{85}[AQgw]==$"
 CHALLENGE_LIFETIME_SECONDS = 120
 SESSION_LIFETIME_SECONDS = 900
+BOOTSTRAP_ADMISSION_PREFIX = "avba1-"
+BOOTSTRAP_ADMISSION_PATTERN = r"^avba1-[0-9a-f]{64}$"
 REGISTRY_REVISION_PATTERN = (
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
@@ -253,6 +256,10 @@ _ACCOUNT_PROOF_OPENAPI_RESPONSES = {
 }
 _ACCOUNT_BOOTSTRAP_OPENAPI_RESPONSES = {
     **_ACCOUNT_BODY_LIMIT_OPENAPI_RESPONSE,
+    401: {
+        "description": "Bootstrap admission is absent or invalid",
+        "model": FixedErrorResponse,
+    },
     400: {
         "description": "Signed registry transition is invalid",
         "model": FixedErrorResponse,
@@ -439,6 +446,7 @@ class AtlasVaultBackend:
         self._session_expiries: list[tuple[float, int, bytes]] = []
         self._sessions_per_device: dict[tuple[str, str], int] = {}
         self._next_session_expiry_sequence = 0
+        self._bootstrap_admissions: dict[str, bytes] = {}
         self._last_account_clock: float | None = None
         self.abuse_policy = abuse_policy or AbuseControlPolicy()
         self.storage = InMemoryOpaqueStore(
@@ -450,16 +458,39 @@ class AtlasVaultBackend:
             self.abuse_policy,
             monotonic=monotonic,
         )
+        self._bootstrap_verification_limiter = AccountVerificationRateLimiter(
+            limit=self.abuse_policy.bootstrap_verification_limit,
+            window_seconds=self.abuse_policy.window_seconds,
+            monotonic=monotonic,
+        )
         self._account_verification_limiter = AccountVerificationRateLimiter(
-            self.abuse_policy,
+            limit=self.abuse_policy.account_verification_limit,
+            window_seconds=self.abuse_policy.window_seconds,
             monotonic=monotonic,
         )
         self.telemetry = telemetry or SecretFreeTelemetry()
+
+    def issue_bootstrap_admission(self, account_id: str) -> str:
+        """Mint one process-local, one-time admission bound to an account ID."""
+        if re.fullmatch(ACCOUNT_ID_PATTERN, account_id) is None:
+            raise AuthorizationFailed
+        with self._lock:
+            if account_id in self._accounts:
+                raise RevisionConflict
+            if (
+                account_id not in self._bootstrap_admissions
+                and len(self._bootstrap_admissions) >= self.abuse_policy.max_accounts
+            ):
+                raise RequestRateExceeded
+            token = BOOTSTRAP_ADMISSION_PREFIX + _entropy_bytes(self._entropy, 32).hex()
+            self._bootstrap_admissions[account_id] = _token_digest(token)
+            return token
 
     def bootstrap_account(
         self,
         account_id: str,
         signed_transition: SignedDeviceRegistryTransitionModel,
+        admission_token: str | None,
     ) -> DeviceRegistryView:
         transition = signed_transition.transition
         _require_account_match(account_id, transition.account_id)
@@ -468,7 +499,8 @@ class AtlasVaultBackend:
             raise InvalidRegistryTransition
         with self._lock:
             self._require_account_capacity(account_id)
-        self._account_verification_limiter.consume()
+            self._require_bootstrap_admission(account_id, admission_token)
+        self._bootstrap_verification_limiter.consume()
         descriptor = transition.device.verified()
         if not hmac.compare_digest(
             transition.signer_device_id,
@@ -481,11 +513,13 @@ class AtlasVaultBackend:
         )
         with self._lock:
             self._require_account_capacity(account_id)
+            self._require_bootstrap_admission(account_id, admission_token)
             self._accounts[account_id] = _Account(
                 revision=transition.revision,
                 devices={descriptor.descriptor.device_id: transition.device},
                 used_revisions={transition.revision},
             )
+            self._bootstrap_admissions.pop(account_id, None)
             return self._registry_view(account_id)
 
     def issue_challenge(
@@ -682,6 +716,19 @@ class AtlasVaultBackend:
         if len(self._accounts) >= self.abuse_policy.max_accounts:
             raise RequestRateExceeded
 
+    def _require_bootstrap_admission(
+        self,
+        account_id: str,
+        admission_token: str | None,
+    ) -> None:
+        expected = self._bootstrap_admissions.get(account_id)
+        if (
+            admission_token is None
+            or expected is None
+            or not hmac.compare_digest(expected, _token_digest(admission_token))
+        ):
+            raise AuthorizationFailed
+
     def _require_session_capacity(self, account_id: str, device_id: str) -> None:
         if len(self._sessions) >= self.abuse_policy.max_sessions:
             raise RequestRateExceeded
@@ -758,6 +805,15 @@ class AtlasVaultBackend:
 
 
 AccountPath = Annotated[str, Path(pattern=ACCOUNT_ID_PATTERN)]
+BootstrapAdmissionHeader = Annotated[
+    str | None,
+    Header(
+        alias="X-AtlasVault-Bootstrap-Admission",
+        min_length=len(BOOTSTRAP_ADMISSION_PREFIX) + 64,
+        max_length=len(BOOTSTRAP_ADMISSION_PREFIX) + 64,
+        pattern=BOOTSTRAP_ADMISSION_PATTERN,
+    ),
+]
 _BEARER_SECURITY = HTTPBearer(auto_error=False, scheme_name="bearerAuth")
 BearerAuthorization = Annotated[
     HTTPAuthorizationCredentials | None,
@@ -930,9 +986,18 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     def bootstrap_account_device(
         account_id: AccountPath,
         request: SignedDeviceRegistryTransitionModel,
+        bootstrap_admission: BootstrapAdmissionHeader = None,
     ) -> DeviceRegistryView:
         try:
-            return service.bootstrap_account(account_id, request)
+            return service.bootstrap_account(
+                account_id,
+                request,
+                bootstrap_admission,
+            )
+        except AuthorizationFailed as exc:
+            raise HTTPException(
+                status_code=401, detail="Bootstrap admission failed."
+            ) from exc
         except InvalidRegistryTransition as exc:
             raise HTTPException(
                 status_code=400, detail="Invalid registry transition."
@@ -1229,6 +1294,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     served_schema["x-atlasvault-c15-controls"] = {
         "accountRequestLimit": policy.account_request_limit,
         "deviceRequestLimit": policy.device_request_limit,
+        "bootstrapVerificationLimit": policy.bootstrap_verification_limit,
         "accountVerificationLimit": policy.account_verification_limit,
         "maxRetainedAccounts": policy.max_accounts,
         "maxLiveChallenges": policy.max_challenges,
@@ -1243,6 +1309,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "maxRetainedRevisionsPerAccount": policy.max_retained_revisions_per_account,
         "maxRetainedBytes": policy.max_retained_bytes,
         "maxRetainedBytesPerAccount": policy.max_retained_bytes_per_account,
+        "reservedRetainedBytes": policy.reserved_retained_bytes,
         "rateWindowSeconds": policy.window_seconds,
         "maxRequestBytes": policy.max_request_bytes,
         "maxAccountRequestBytes": policy.max_account_request_bytes,

@@ -114,8 +114,10 @@ def _transition(identity: DeviceIdentity) -> dict[str, Any]:
 
 
 def _authorize(client: TestClient, identity: DeviceIdentity) -> dict[str, str]:
+    admission = client.app.state.backend.issue_bootstrap_admission(ACCOUNT_ID)
     bootstrap = client.post(
         f"/v1/accounts/{ACCOUNT_ID}/devices/bootstrap",
+        headers={"X-AtlasVault-Bootstrap-Admission": admission},
         json=_transition(identity),
     )
     assert bootstrap.status_code == 201, bootstrap.text
@@ -1345,7 +1347,8 @@ def test_c14_retained_storage_quotas_fail_before_mutation() -> None:
     retained_size = len(envelope.model_dump_json().encode("utf-8"))
     backend, client, authorization = client_for(
         max_retained_bytes=retained_size - 1,
-        max_retained_bytes_per_account=retained_size - 1,
+        max_retained_bytes_per_account=retained_size - 2,
+        reserved_retained_bytes=1,
     )
     limited = client.put(
         f"/v1/vaults/{VAULT_ID}/metadata",

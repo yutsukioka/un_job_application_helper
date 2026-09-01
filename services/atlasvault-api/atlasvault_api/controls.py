@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 DEFAULT_ACCOUNT_REQUEST_LIMIT = 40
 DEFAULT_DEVICE_REQUEST_LIMIT = 24
+DEFAULT_BOOTSTRAP_VERIFICATION_LIMIT = 64
 DEFAULT_ACCOUNT_VERIFICATION_LIMIT = 64
 DEFAULT_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_MAX_REQUEST_BYTES = 192 * 1024 * 1024
@@ -29,6 +30,7 @@ DEFAULT_MAX_RETAINED_PATCHES_PER_ACCOUNT = 65_536
 DEFAULT_MAX_RETAINED_REVISIONS_PER_ACCOUNT = 131_072
 DEFAULT_MAX_RETAINED_BYTES = 1024 * 1024 * 1024
 DEFAULT_MAX_RETAINED_BYTES_PER_ACCOUNT = 256 * 1024 * 1024
+DEFAULT_RESERVED_RETAINED_BYTES = 256 * 1024 * 1024
 MAX_RETAINED_SECURITY_EVENTS = 256
 MAX_COUNTER_PRUNE_PER_REQUEST = 64
 
@@ -54,6 +56,7 @@ class StoragePrincipal:
 class AbuseControlPolicy:
     account_request_limit: int = DEFAULT_ACCOUNT_REQUEST_LIMIT
     device_request_limit: int = DEFAULT_DEVICE_REQUEST_LIMIT
+    bootstrap_verification_limit: int = DEFAULT_BOOTSTRAP_VERIFICATION_LIMIT
     account_verification_limit: int = DEFAULT_ACCOUNT_VERIFICATION_LIMIT
     window_seconds: float = DEFAULT_RATE_WINDOW_SECONDS
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
@@ -71,11 +74,13 @@ class AbuseControlPolicy:
     max_retained_revisions_per_account: int = DEFAULT_MAX_RETAINED_REVISIONS_PER_ACCOUNT
     max_retained_bytes: int = DEFAULT_MAX_RETAINED_BYTES
     max_retained_bytes_per_account: int = DEFAULT_MAX_RETAINED_BYTES_PER_ACCOUNT
+    reserved_retained_bytes: int = DEFAULT_RESERVED_RETAINED_BYTES
 
     def __post_init__(self) -> None:
         integer_limits = (
             self.account_request_limit,
             self.device_request_limit,
+            self.bootstrap_verification_limit,
             self.account_verification_limit,
             self.max_request_bytes,
             self.max_account_request_bytes,
@@ -92,6 +97,7 @@ class AbuseControlPolicy:
             self.max_retained_revisions_per_account,
             self.max_retained_bytes,
             self.max_retained_bytes_per_account,
+            self.reserved_retained_bytes,
         )
         valid_window = (
             type(self.window_seconds) in (int, float)
@@ -102,6 +108,9 @@ class AbuseControlPolicy:
         if (
             any(type(limit) is not int or limit < 1 for limit in integer_limits)
             or not valid_window
+            or self.reserved_retained_bytes >= self.max_retained_bytes
+            or self.max_retained_bytes_per_account
+            > self.max_retained_bytes - self.reserved_retained_bytes
         ):
             raise ValueError("invalid abuse-control policy")
 
@@ -203,16 +212,17 @@ class AccountDeviceRateLimiter:
 
 
 class AccountVerificationRateLimiter:
-    """Global fixed-window limiter for account-route signature verification."""
+    """Fixed-window limiter for one account-route verification class."""
 
     def __init__(
         self,
-        policy: AbuseControlPolicy,
         *,
+        limit: int,
+        window_seconds: float,
         monotonic: Callable[[], float],
     ) -> None:
-        self._limit = policy.account_verification_limit
-        self._window_seconds = policy.window_seconds
+        self._limit = limit
+        self._window_seconds = window_seconds
         self._monotonic = monotonic
         self._lock = threading.Lock()
         self._window_started_at: float | None = None

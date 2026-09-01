@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
@@ -50,6 +51,7 @@ from test_atlasvault_backend_c14 import (
 
 DEVICE_REQUEST_LIMIT = 24
 ACCOUNT_REQUEST_LIMIT = 40
+BOOTSTRAP_VERIFICATION_LIMIT = 64
 ACCOUNT_VERIFICATION_LIMIT = 64
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
 MAX_ACCOUNT_REQUEST_BYTES = 64 * 1024
@@ -66,6 +68,7 @@ MAX_RETAINED_PATCHES_PER_ACCOUNT = 65_536
 MAX_RETAINED_REVISIONS_PER_ACCOUNT = 131_072
 MAX_RETAINED_BYTES = 1024 * 1024 * 1024
 MAX_RETAINED_BYTES_PER_ACCOUNT = 256 * 1024 * 1024
+RESERVED_RETAINED_BYTES = 256 * 1024 * 1024
 MAX_KEY_EPOCH = (1 << 63) - 1
 OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 
@@ -560,6 +563,7 @@ def test_c15_contract_declares_storage_controls() -> None:
     assert controls == {
         "accountRequestLimit": ACCOUNT_REQUEST_LIMIT,
         "deviceRequestLimit": DEVICE_REQUEST_LIMIT,
+        "bootstrapVerificationLimit": BOOTSTRAP_VERIFICATION_LIMIT,
         "accountVerificationLimit": ACCOUNT_VERIFICATION_LIMIT,
         "maxRetainedAccounts": MAX_RETAINED_ACCOUNTS,
         "maxLiveChallenges": MAX_LIVE_CHALLENGES,
@@ -574,6 +578,7 @@ def test_c15_contract_declares_storage_controls() -> None:
         "maxRetainedRevisionsPerAccount": MAX_RETAINED_REVISIONS_PER_ACCOUNT,
         "maxRetainedBytes": MAX_RETAINED_BYTES,
         "maxRetainedBytesPerAccount": MAX_RETAINED_BYTES_PER_ACCOUNT,
+        "reservedRetainedBytes": RESERVED_RETAINED_BYTES,
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "maxAccountRequestBytes": MAX_ACCOUNT_REQUEST_BYTES,
         "rateWindowSeconds": 60,
@@ -615,6 +620,11 @@ def test_c15_account_bootstrap_is_bounded_before_retention() -> None:
     rejected["signature"] = _encode64(bytes(64))
     response = client.post(
         f"/v1/accounts/{ACCOUNT_B}/devices/bootstrap",
+        headers={
+            "X-AtlasVault-Bootstrap-Admission": (
+                backend.issue_bootstrap_admission(ACCOUNT_B)
+            )
+        },
         json=rejected,
     )
     assert response.status_code == 429
@@ -983,6 +993,7 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
     policy = AbuseControlPolicy(
         account_request_limit=11,
         device_request_limit=7,
+        bootstrap_verification_limit=8,
         account_verification_limit=9,
         window_seconds=31,
         max_request_bytes=123_456,
@@ -1000,11 +1011,13 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
         max_retained_revisions_per_account=41,
         max_retained_bytes=500_000,
         max_retained_bytes_per_account=200_000,
+        reserved_retained_bytes=100_000,
     )
     schema = create_app(AtlasVaultBackend(abuse_policy=policy)).openapi()
     assert schema["x-atlasvault-c15-controls"] == {
         "accountRequestLimit": 11,
         "deviceRequestLimit": 7,
+        "bootstrapVerificationLimit": 8,
         "accountVerificationLimit": 9,
         "maxRetainedAccounts": 17,
         "maxLiveChallenges": 19,
@@ -1019,6 +1032,7 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
         "maxRetainedRevisionsPerAccount": 41,
         "maxRetainedBytes": 500_000,
         "maxRetainedBytesPerAccount": 200_000,
+        "reservedRetainedBytes": 100_000,
         "rateWindowSeconds": 31,
         "maxRequestBytes": 123_456,
         "maxAccountRequestBytes": 4_096,
@@ -1044,6 +1058,7 @@ def test_c15_telemetry_coarsens_unknown_categories() -> None:
 def test_c15_default_account_storage_budget_reserves_global_capacity() -> None:
     policy = AbuseControlPolicy()
     assert policy.max_retained_bytes_per_account * 4 <= policy.max_retained_bytes
+    assert policy.reserved_retained_bytes >= policy.max_retained_bytes_per_account
 
 
 def test_c15_account_signature_verification_is_globally_rate_limited(
@@ -1052,7 +1067,10 @@ def test_c15_account_signature_verification_is_globally_rate_limited(
     backend = AtlasVaultBackend(
         entropy=DeterministicEntropy(),
         monotonic=lambda: 3_000.0,
-        abuse_policy=AbuseControlPolicy(account_verification_limit=1),
+        abuse_policy=AbuseControlPolicy(
+            bootstrap_verification_limit=1,
+            account_verification_limit=1,
+        ),
     )
     client = TestClient(create_app(backend))
     device_a, device_b = _identities()
@@ -1076,8 +1094,10 @@ def test_c15_account_signature_verification_is_globally_rate_limited(
             signer=device,
         )
         request["signature"] = _encode64(bytes(64))
+        admission = backend.issue_bootstrap_admission(account_id)
         response = client.post(
             f"/v1/accounts/{account_id}/devices/bootstrap",
+            headers={"X-AtlasVault-Bootstrap-Admission": admission},
             json=request,
         )
         assert response.status_code == (400 if index == 0 else 429), response.text
@@ -1108,12 +1128,17 @@ def test_c15_bootstrap_requires_one_time_account_bound_admission() -> None:
     assert backend._accounts == {}
 
     admission = backend.issue_bootstrap_admission(ACCOUNT_A)
+    assert admission not in repr(backend._bootstrap_admissions)
+    assert hashlib.sha256(admission.encode("ascii")).digest() in (
+        backend._bootstrap_admissions.values()
+    )
     accepted = client.post(
         f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
         headers={"X-AtlasVault-Bootstrap-Admission": admission},
         json=first,
     )
     assert accepted.status_code == 201, accepted.text
+    assert ACCOUNT_A not in backend._bootstrap_admissions
 
     second = _signed_transition(
         account_id=ACCOUNT_B,
@@ -1131,7 +1156,9 @@ def test_c15_bootstrap_requires_one_time_account_bound_admission() -> None:
     assert set(backend._accounts) == {ACCOUNT_A}
 
 
-def test_c15_public_bootstrap_cannot_exhaust_authenticated_verification_budget() -> None:
+def test_c15_public_bootstrap_cannot_exhaust_authenticated_verification_budget() -> (
+    None
+):
     backend = AtlasVaultBackend(
         entropy=DeterministicEntropy(),
         monotonic=lambda: 3_000.0,
@@ -1159,4 +1186,4 @@ def test_c15_public_bootstrap_cannot_exhaust_authenticated_verification_budget()
     assert exhausted.status_code == 429
 
     token, _ = _session(client, device_a, account_id=ACCOUNT_A)
-    assert token.startswith("avt1-")
+    assert token

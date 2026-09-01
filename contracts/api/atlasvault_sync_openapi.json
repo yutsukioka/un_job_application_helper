@@ -8,6 +8,7 @@
   "x-atlasvault-c15-controls": {
     "accountRequestLimit": 40,
     "deviceRequestLimit": 24,
+    "bootstrapVerificationLimit": 64,
     "accountVerificationLimit": 64,
     "maxRetainedAccounts": 1024,
     "maxLiveChallenges": 4096,
@@ -22,6 +23,7 @@
     "maxRetainedRevisionsPerAccount": 131072,
     "maxRetainedBytes": 1073741824,
     "maxRetainedBytesPerAccount": 268435456,
+    "reservedRetainedBytes": 268435456,
     "rateWindowSeconds": 60,
     "maxRequestBytes": 201326592,
     "maxAccountRequestBytes": 65536,
@@ -39,6 +41,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/AccountId"
+          },
+          {
+            "$ref": "#/components/parameters/BootstrapAdmission"
           }
         ],
         "requestBody": {
@@ -67,6 +72,9 @@
           },
           "400": {
             "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
@@ -702,6 +710,18 @@
         "schema": {
           "type": "string",
           "pattern": "^ava1-[0-9a-f]{64}$"
+        }
+      },
+      "BootstrapAdmission": {
+        "name": "X-AtlasVault-Bootstrap-Admission",
+        "in": "header",
+        "required": false,
+        "description": "One-time process-local admission bound to this account ID; absence or mismatch fails with 401.",
+        "schema": {
+          "type": "string",
+          "minLength": 70,
+          "maxLength": 70,
+          "pattern": "^avba1-[0-9a-f]{64}$"
         }
       },
       "VaultId": {

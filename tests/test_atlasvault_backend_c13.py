@@ -138,8 +138,10 @@ def _bootstrap(
     account_id: str = ACCOUNT_A,
     revision: str = REVISION_1,
 ) -> dict[str, Any]:
+    admission = client.app.state.backend.issue_bootstrap_admission(account_id)
     response = client.post(
         f"/v1/accounts/{account_id}/devices/bootstrap",
+        headers={"X-AtlasVault-Bootstrap-Admission": admission},
         json=_signed_transition(
             account_id=account_id,
             revision=revision,
