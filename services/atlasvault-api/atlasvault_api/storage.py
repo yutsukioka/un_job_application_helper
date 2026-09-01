@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -22,6 +22,13 @@ CURSOR_LIFETIME_SECONDS = 300
 IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS = 600
 _REVISION_PATTERN = r"^[!-~]+$"
 _STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
+Base64EnvelopeValue = Annotated[
+    str,
+    Field(
+        min_length=1,
+        json_schema_extra={"contentEncoding": "base64"},
+    ),
+]
 
 
 class EncryptedVaultMetadataEnvelopeModel(BaseModel):
@@ -37,10 +44,10 @@ class EncryptedVaultMetadataEnvelopeModel(BaseModel):
         json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(ge=1)
-    nonce_b64: str = Field(min_length=1)
-    ciphertext_b64: str = Field(min_length=1)
-    aad_b64: str = Field(min_length=1)
-    signature_b64: str = Field(min_length=1)
+    nonce_b64: Base64EnvelopeValue
+    ciphertext_b64: Base64EnvelopeValue
+    aad_b64: Base64EnvelopeValue
+    signature_b64: Base64EnvelopeValue
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("revision")
@@ -70,10 +77,10 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
         json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(ge=1)
-    nonce_b64: str = Field(min_length=1)
-    ciphertext_b64: str = Field(min_length=1)
-    aad_b64: str = Field(min_length=1)
-    signature_b64: str = Field(min_length=1)
+    nonce_b64: Base64EnvelopeValue
+    ciphertext_b64: Base64EnvelopeValue
+    aad_b64: Base64EnvelopeValue
+    signature_b64: Base64EnvelopeValue
     tombstone: bool
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 

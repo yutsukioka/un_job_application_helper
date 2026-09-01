@@ -844,14 +844,16 @@
           },
           "revision": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
           },
           "parent_revision": {
             "type": [
               "string",
               "null"
             ],
-            "format": "uuid"
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
           },
           "operation": {
             "const": "add"
@@ -991,7 +993,8 @@
           },
           "revision": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
           },
           "devices": {
             "type": "array",
@@ -1044,18 +1047,22 @@
           },
           "nonce_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "ciphertext_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "aad_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "signature_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "content_sha256": {
@@ -1121,18 +1128,22 @@
           },
           "nonce_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "ciphertext_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "aad_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "signature_b64": {
             "type": "string",
+            "minLength": 1,
             "contentEncoding": "base64"
           },
           "tombstone": {

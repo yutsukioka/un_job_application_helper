@@ -80,6 +80,10 @@ RegistryRevision = Annotated[
         json_schema_extra={"format": "uuid"},
     ),
 ]
+Base64Value = Annotated[
+    str,
+    Field(json_schema_extra={"contentEncoding": "base64"}),
+]
 
 
 class DeviceDescriptorModel(BaseModel):
@@ -88,8 +92,8 @@ class DeviceDescriptorModel(BaseModel):
     format: Literal["atlasvault-device-descriptor"]
     version: Literal[1]
     device_id: str = Field(pattern=DEVICE_ID_PATTERN)
-    signing_public_key: str
-    agreement_public_key: str
+    signing_public_key: Base64Value
+    agreement_public_key: Base64Value
     created_at: str
     key_epoch: int = Field(
         ge=1,
@@ -113,7 +117,7 @@ class SignedDeviceDescriptorModel(BaseModel):
     format: Literal["atlasvault-signed-device-descriptor"]
     version: Literal[1]
     descriptor: DeviceDescriptorModel
-    signature: str
+    signature: Base64Value
 
     def verified(self) -> SignedDeviceDescriptor:
         try:
@@ -143,7 +147,7 @@ class SignedDeviceRegistryTransitionModel(BaseModel):
     format: Literal["atlasvault-signed-device-registry-transition"]
     version: Literal[1]
     transition: DeviceRegistryTransitionModel
-    signature: str
+    signature: Base64Value
 
 
 class AuthenticationChallengeRequest(BaseModel):
@@ -156,7 +160,7 @@ class AuthenticationChallenge(BaseModel):
     model_config = _STRICT_MODEL
 
     challenge_id: str = Field(pattern=CHALLENGE_ID_PATTERN)
-    challenge: str
+    challenge: Base64Value
     expires_in_seconds: Literal[CHALLENGE_LIFETIME_SECONDS]
 
 
@@ -165,7 +169,7 @@ class SessionProofRequest(BaseModel):
 
     device_id: str = Field(pattern=DEVICE_ID_PATTERN)
     challenge_id: str = Field(pattern=CHALLENGE_ID_PATTERN)
-    signature: str
+    signature: Base64Value
 
 
 class SessionGrant(BaseModel):
@@ -176,13 +180,19 @@ class SessionGrant(BaseModel):
     expires_in_seconds: Literal[SESSION_LIFETIME_SECONDS]
 
 
+class RequestValidationFailure(BaseModel):
+    model_config = _STRICT_MODEL
+
+    detail: Literal["Invalid request."]
+
+
 class DeviceRegistryView(BaseModel):
     model_config = _STRICT_MODEL
 
     format: Literal["atlasvault-server-device-registry"]
     version: Literal[1]
     account_id: str = Field(pattern=ACCOUNT_ID_PATTERN)
-    revision: str
+    revision: RegistryRevision
     devices: tuple[SignedDeviceDescriptorModel, ...]
 
 
@@ -590,6 +600,12 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             "Account authentication, signed public-device registry, opaque "
             "ciphertext storage, and C15 abuse and observability controls."
         ),
+        responses={
+            422: {
+                "description": "Request path, header, or body validation failed",
+                "model": RequestValidationFailure,
+            }
+        },
     )
     app.state.backend = service
     app.add_middleware(_SecurityBoundaryMiddleware, backend=service)

@@ -343,22 +343,27 @@ def test_c13_registry_revision_schema_matches_runtime_uuid_boundary() -> None:
         revision = canonical_schemas[schema_name]["properties"]["revision"]
         assert revision["format"] == "uuid"
         assert revision["pattern"] == (
-            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-            "[0-9a-f]{4}-[0-9a-f]{12}$"
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         )
     canonical_parent = canonical_schemas["DeviceRegistryTransition"]["properties"][
         "parent_revision"
     ]
-    assert canonical_parent["pattern"] == canonical_schemas[
-        "DeviceRegistryTransition"
-    ]["properties"]["revision"]["pattern"]
+    assert (
+        canonical_parent["pattern"]
+        == canonical_schemas["DeviceRegistryTransition"]["properties"]["revision"][
+            "pattern"
+        ]
+    )
 
     served_schemas = client.get("/openapi.json").json()["components"]["schemas"]
     schema = served_schemas["DeviceRegistryTransitionModel"]["properties"]
     assert schema["revision"]["format"] == "uuid"
-    assert schema["revision"]["pattern"] == canonical_schemas[
-        "DeviceRegistryTransition"
-    ]["properties"]["revision"]["pattern"]
+    assert (
+        schema["revision"]["pattern"]
+        == canonical_schemas["DeviceRegistryTransition"]["properties"]["revision"][
+            "pattern"
+        ]
+    )
     parent = next(
         option
         for option in schema["parent_revision"]["anyOf"]
