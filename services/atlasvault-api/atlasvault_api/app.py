@@ -427,7 +427,9 @@ class AtlasVaultBackend:
         self._lock = threading.RLock()
         self._accounts: dict[str, _Account] = {}
         self._challenges: dict[tuple[str, str], _Challenge] = {}
-        self._challenge_expiries: list[tuple[float, int, tuple[str, str]]] = []
+        self._challenge_expiries: list[
+            tuple[float, int, tuple[str, str], tuple[str, str]]
+        ] = []
         self._challenges_per_device: dict[tuple[str, str], int] = {}
         self._next_challenge_expiry_sequence = 0
         self._sessions: dict[bytes, _Session] = {}
@@ -489,7 +491,7 @@ class AtlasVaultBackend:
             if account is None or request.device_id not in account.devices:
                 raise AuthorizationFailed
             self._prune_expired_challenges(now)
-            if len(self._challenges) >= self.abuse_policy.max_challenges:
+            if len(self._challenge_expiries) >= self.abuse_policy.max_challenges:
                 raise RequestRateExceeded
             device_key = (account_id, request.device_id)
             device_challenges = self._challenges_per_device.get(device_key, 0)
@@ -513,6 +515,7 @@ class AtlasVaultBackend:
                     now + CHALLENGE_LIFETIME_SECONDS,
                     self._next_challenge_expiry_sequence,
                     key,
+                    device_key,
                 ),
             )
             return AuthenticationChallenge(
@@ -717,22 +720,21 @@ class AtlasVaultBackend:
 
     def _prune_expired_challenges(self, now: float) -> None:
         while self._challenge_expiries and self._challenge_expiries[0][0] <= now:
-            _, _, key = heapq.heappop(self._challenge_expiries)
+            _, _, key, device_key = heapq.heappop(self._challenge_expiries)
             challenge = self._challenges.get(key)
             if challenge is not None and challenge.expires_at <= now:
                 self._drop_challenge(key)
+            self._release_challenge_slot(device_key)
 
     def _drop_challenge(self, key: tuple[str, str]) -> _Challenge | None:
-        challenge = self._challenges.pop(key, None)
-        if challenge is None:
-            return None
-        device_key = (key[0], challenge.device_id)
+        return self._challenges.pop(key, None)
+
+    def _release_challenge_slot(self, device_key: tuple[str, str]) -> None:
         remaining = self._challenges_per_device.get(device_key, 0) - 1
         if remaining > 0:
             self._challenges_per_device[device_key] = remaining
         else:
             self._challenges_per_device.pop(device_key, None)
-        return challenge
 
     def _registry_view(self, account_id: str) -> DeviceRegistryView:
         account = self._accounts[account_id]

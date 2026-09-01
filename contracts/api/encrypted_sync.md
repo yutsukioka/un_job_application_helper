@@ -170,6 +170,9 @@ ceilings, then fail with 429 before retaining state. Signed device addition
 likewise fails with 429 before mutation when its per-account ceiling is reached.
 Live challenge capacity uses an expiry heap plus per-device counters, so neither
 expiry cleanup nor per-device accounting scans the live challenge registry.
+Consumed challenges keep their bounded global and per-device issuance slots
+until the corresponding 120-second expiry entry is reclaimed; invalid proofs
+therefore cannot turn the expiry heap into an unbounded side registry.
 Live session capacity uses an expiry heap plus per-device counters; an invalid
 challenge is rejected before any capacity maintenance, and no request scans the
 session registry.
@@ -180,6 +183,9 @@ conservative and cumulative: replacing a current envelope does not refund its
 budget because revision fingerprints and short-lived idempotency evidence remain
 retained. This fail-closed bound keeps the default embedded backend finite; a
 durable production backend must provide equivalent or stricter quotas.
+Idempotency receipts retain only a fixed-size request-envelope fingerprint plus
+a reference to the accepted current response; replaying a large duplicate under
+new idempotency keys cannot retain another full request envelope per receipt.
 
 The route-specific body ceiling is checked before request parsing from a valid
 declared length and while streaming request chunks. Oversized requests return a

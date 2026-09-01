@@ -168,7 +168,7 @@ StorageEnvelope = EncryptedVaultMetadataEnvelopeModel | OpaqueCiphertextEnvelope
 @dataclass(frozen=True)
 class _WriteAttempt:
     expected_revision: str
-    envelope: StorageEnvelope
+    envelope_fingerprint: bytes
 
 
 @dataclass(frozen=True)
@@ -643,7 +643,10 @@ class InMemoryOpaqueStore:
         if receipt.expires_at <= self._monotonic():
             state.receipts.pop((scope, idempotency_key), None)
             return None
-        if receipt.attempt != _WriteAttempt(expected_revision, envelope):
+        if receipt.attempt != _WriteAttempt(
+            expected_revision,
+            _envelope_fingerprint(envelope),
+        ):
             raise OpaqueStorageConflict
         return receipt.response
 
@@ -659,7 +662,10 @@ class InMemoryOpaqueStore:
         receipt_key = (scope, idempotency_key)
         expires_at = self._monotonic() + IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS
         state.receipts[receipt_key] = _Receipt(
-            attempt=_WriteAttempt(expected_revision, envelope),
+            attempt=_WriteAttempt(
+                expected_revision,
+                _envelope_fingerprint(envelope),
+            ),
             response=response,
             expires_at=expires_at,
         )
