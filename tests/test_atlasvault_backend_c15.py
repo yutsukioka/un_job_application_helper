@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -434,6 +435,71 @@ def test_c15_rate_limiter_is_windowed_and_fails_closed_on_clock_rollback() -> No
     now[0] = 69.0
     with pytest.raises(RequestRateExceeded):
         limiter.consume(StoragePrincipal("account-b", "device-c"))
+
+
+def test_c15_rate_limiter_samples_clock_after_request_scheduling() -> None:
+    samples = iter((10.0, 11.0))
+    sample_lock = threading.Lock()
+
+    def monotonic() -> float:
+        with sample_lock:
+            return next(samples)
+
+    class NewerRequestFirstLock:
+        def __init__(self) -> None:
+            self.older_waiting = threading.Event()
+            self.release_older = threading.Event()
+            self.mutex = threading.Lock()
+
+        def __enter__(self) -> None:
+            if threading.current_thread().name == "older-sample":
+                self.older_waiting.set()
+                assert self.release_older.wait(timeout=5)
+            self.mutex.acquire()
+
+        def __exit__(self, *_: object) -> None:
+            self.mutex.release()
+            if threading.current_thread().name == "newer-sample":
+                self.release_older.set()
+
+    limiter = AccountDeviceRateLimiter(
+        AbuseControlPolicy(
+            account_request_limit=4,
+            device_request_limit=4,
+            window_seconds=60.0,
+            max_request_bytes=1024,
+        ),
+        monotonic=monotonic,
+    )
+    scheduling_lock = NewerRequestFirstLock()
+    limiter._lock = scheduling_lock
+    errors: list[BaseException] = []
+
+    def consume(device_id: str) -> None:
+        try:
+            limiter.consume(StoragePrincipal("account", device_id))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    older = threading.Thread(
+        target=consume,
+        args=("older",),
+        name="older-sample",
+    )
+    newer = threading.Thread(
+        target=consume,
+        args=("newer",),
+        name="newer-sample",
+    )
+    older.start()
+    assert scheduling_lock.older_waiting.wait(timeout=5)
+    newer.start()
+    older.join(timeout=5)
+    newer.join(timeout=5)
+
+    assert not older.is_alive()
+    assert not newer.is_alive()
+    assert errors == []
 
 
 def test_c15_contract_declares_storage_controls() -> None:

@@ -36,6 +36,7 @@ ACCOUNT_ID = f"ava1-{hashlib.sha256(b'c14-account').hexdigest()}"
 VAULT_ID = "vault-c14-opaque"
 REGISTRY_REVISION = "14000000-0000-4000-8000-000000000001"
 _CURSOR_LIFETIME_SECONDS = 300
+_RECEIPT_LIFETIME_SECONDS = 600
 
 
 class DeterministicEntropy:
@@ -673,6 +674,70 @@ def test_c14_expired_pagination_cursors_are_reclaimed() -> None:
     expired = client.get(path, headers=authorization, params={"cursor": cursor})
     assert expired.status_code == 400
     assert backend.storage._cursors == {}
+
+
+def test_c14_expired_idempotency_receipts_are_reclaimed() -> None:
+    now = [2_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    client = TestClient(create_app(backend))
+    authorization = _authorize(client, _identity())
+    path = f"/v1/vaults/{VAULT_ID}/metadata"
+    first = _metadata(revision="receipt-r1", payload=b"first")
+    second = _metadata(revision="receipt-r2", payload=b"second")
+
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="receipt-first",
+            ),
+            json=first,
+        ).status_code
+        == 200
+    )
+    state = backend.storage._vaults[(ACCOUNT_ID, VAULT_ID)]
+    assert ("metadata", "receipt-first") in state.receipts
+
+    now[0] += _RECEIPT_LIFETIME_SECONDS + 1
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization,
+                expected="receipt-r1",
+                idempotency_key="receipt-second",
+            ),
+            json=second,
+        ).status_code
+        == 200
+    )
+    assert set(state.receipts) == {("metadata", "receipt-second")}
+
+
+def test_c14_rejected_write_does_not_retain_empty_vault_state(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+) -> None:
+    backend, client, authorization = storage_client
+    rejected_vault = "vault-rejected-before-allocation"
+    envelope = _metadata(revision="rejected-r1", payload=b"rejected")
+    envelope["vault_id"] = rejected_vault
+
+    response = client.put(
+        f"/v1/vaults/{rejected_vault}/metadata",
+        headers=_write_headers(
+            authorization,
+            expected="missing-revision",
+            idempotency_key="rejected-before-allocation",
+        ),
+        json=envelope,
+    )
+    assert response.status_code == 409
+    assert (ACCOUNT_ID, rejected_vault) not in backend.storage._vaults
 
 
 @pytest.mark.parametrize(

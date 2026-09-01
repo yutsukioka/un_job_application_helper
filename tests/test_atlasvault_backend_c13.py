@@ -269,6 +269,53 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
     assert find_raw_secret_wire_contract_violations(ROOT / "services") == []
 
 
+def test_c13_contract_publishes_runtime_bounds_and_validation_responses() -> None:
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    generated = create_app(AtlasVaultBackend()).openapi()
+    maximum = (1 << 63) - 1
+    assert (
+        contract["components"]["schemas"]["DeviceDescriptor"]["properties"][
+            "key_epoch"
+        ]["maximum"]
+        == maximum
+    )
+    assert (
+        generated["components"]["schemas"]["DeviceDescriptorModel"]["properties"][
+            "key_epoch"
+        ]["maximum"]
+        == maximum
+    )
+
+    for path, path_item in contract["paths"].items():
+        for method, operation in path_item.items():
+            assert "422" in operation["responses"], f"{method.upper()} {path}"
+
+
+def test_c13_account_wire_models_reject_coerced_json_types() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 1_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    transition = _signed_transition(
+        account_id=ACCOUNT_A,
+        revision=REVISION_1,
+        parent_revision=None,
+        device=device,
+        signer=device,
+    )
+    descriptor = transition["transition"]["device"]["descriptor"]
+    descriptor["key_epoch"] = str(descriptor["key_epoch"])
+
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        json=transition,
+    )
+    assert response.status_code == 422
+    assert backend._accounts == {}
+
+
 def test_c13_account_session_authenticates_device_and_stores_only_token_digest(
     backend_client: tuple[AtlasVaultBackend, TestClient],
 ) -> None:
