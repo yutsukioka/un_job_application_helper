@@ -35,6 +35,7 @@ OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 ACCOUNT_ID = f"ava1-{hashlib.sha256(b'c14-account').hexdigest()}"
 VAULT_ID = "vault-c14-opaque"
 REGISTRY_REVISION = "14000000-0000-4000-8000-000000000001"
+_CURSOR_LIFETIME_SECONDS = 300
 
 
 class DeterministicEntropy:
@@ -631,6 +632,49 @@ def test_c14_cursor_pages_are_stable_across_retry_and_later_appends(
     assert fresh["objects"] == [*patches, later]
 
 
+def test_c14_expired_pagination_cursors_are_reclaimed() -> None:
+    now = [2_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    client = TestClient(create_app(backend))
+    authorization = _authorize(client, _identity())
+    path = f"/v1/vaults/{VAULT_ID}/patches"
+    parent: str | None = None
+    for index in range(3):
+        revision = f"cursor-expiry-r{index + 1}"
+        patch = _opaque_envelope(
+            object_id=f"cursor-expiry-{index + 1}",
+            revision=revision,
+            parent_revision=parent,
+            payload=revision.encode("ascii"),
+        )
+        assert (
+            client.post(
+                path,
+                headers=_write_headers(
+                    authorization,
+                    expected=parent or "*",
+                    idempotency_key=f"cursor-expiry-{index + 1}",
+                ),
+                json=patch,
+            ).status_code
+            == 201
+        )
+        parent = revision
+
+    first = client.get(path, headers=authorization, params={"page_size": 1})
+    cursor = first.json()["next_cursor"]
+    assert cursor is not None
+    assert cursor in backend.storage._cursors
+
+    now[0] += _CURSOR_LIFETIME_SECONDS + 1
+    expired = client.get(path, headers=authorization, params={"cursor": cursor})
+    assert expired.status_code == 400
+    assert backend.storage._cursors == {}
+
+
 @pytest.mark.parametrize(
     "extra_field",
     ["plaintext", "passphrase", "raw_vault_key_b64", "unwrapped_key"],
@@ -694,6 +738,12 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
             opaque_properties["revision"],
             opaque_properties["parent_revision"],
         ):
+            revision_options = revision.get("anyOf", [revision])
+            string_revision = next(
+                option for option in revision_options if option.get("type") == "string"
+            )
+            assert string_revision["minLength"] == 1
+            assert string_revision["pattern"] == "^[!-~]+$"
             max_length = revision.get("maxLength")
             if max_length is None:
                 max_length = next(
@@ -703,6 +753,7 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
                 )
             assert max_length == 128
             assert revision["not"] == {"const": "*"}
+        assert "parent_revision" in schemas[opaque_name]["required"]
 
     for path, method in (
         ("/v1/vaults/{vault_id}/metadata", "put"),
@@ -748,6 +799,105 @@ def test_c14_creation_wildcard_cannot_be_stored_as_a_revision(
             authorization,
             expected="*",
             idempotency_key=f"wildcard-{resource}",
+        ),
+        json=envelope,
+    )
+    assert response.status_code == 422
+
+
+def test_c14_parent_revision_is_required_but_nullable(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+) -> None:
+    _, client, authorization = storage_client
+    path = f"/v1/vaults/{VAULT_ID}/objects/required-parent"
+    envelope = _opaque_envelope(
+        object_id="required-parent",
+        revision="required-parent-r1",
+        parent_revision=None,
+        payload=b"required-parent",
+    )
+    missing = dict(envelope)
+    del missing["parent_revision"]
+
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="missing-parent",
+            ),
+            json=missing,
+        ).status_code
+        == 422
+    )
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="explicit-null-parent",
+            ),
+            json=envelope,
+        ).status_code
+        == 200
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("key_epoch", "7"), ("tombstone", "false")],
+)
+def test_c14_opaque_wire_model_rejects_coerced_json_types(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+    field: str,
+    value: str,
+) -> None:
+    _, client, authorization = storage_client
+    object_id = f"strict-{field}"
+    envelope = _opaque_envelope(
+        object_id=object_id,
+        revision=f"strict-{field}-r1",
+        parent_revision=None,
+        payload=field.encode("ascii"),
+    )
+    envelope[field] = value
+    response = client.put(
+        f"/v1/vaults/{VAULT_ID}/objects/{object_id}",
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key=f"strict-{field}",
+        ),
+        json=envelope,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("resource", ["metadata", "object"])
+def test_c14_stored_revisions_use_header_safe_ascii(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+    resource: str,
+) -> None:
+    _, client, authorization = storage_client
+    if resource == "metadata":
+        path = f"/v1/vaults/{VAULT_ID}/metadata"
+        envelope = _metadata(revision="revision-é", payload=b"metadata")
+    else:
+        path = f"/v1/vaults/{VAULT_ID}/objects/header-safe"
+        envelope = _opaque_envelope(
+            object_id="header-safe",
+            revision="revision-é",
+            parent_revision=None,
+            payload=b"object",
+        )
+    response = client.put(
+        path,
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key=f"header-safe-{resource}",
         ),
         json=envelope,
     )
