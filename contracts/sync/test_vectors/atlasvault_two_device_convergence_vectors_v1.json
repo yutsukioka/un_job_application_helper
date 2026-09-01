@@ -116,7 +116,7 @@
         "nonce_b64": "DA0ODxAREhMUFRYX",
         "ciphertext_b64": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=",
         "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoLWRlbGV0ZSJ9",
-        "signature_b64": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+vw==",
+        "signature_b64": "/////////////////////////////////////////////////////////////////////////////////////w==",
         "tombstone": true,
         "content_sha256": "d9c2e699586b948f4022c7994ffe14c63a4e8e312ee2aee1ebe51bed85705cfd"
       }

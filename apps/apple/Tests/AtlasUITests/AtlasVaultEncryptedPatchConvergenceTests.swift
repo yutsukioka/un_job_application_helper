@@ -155,6 +155,31 @@ final class AtlasVaultEncryptedPatchConvergenceTests: XCTestCase {
         XCTAssertThrowsError(try target.mergeSnapshot(snapshots[1]))
     }
 
+    func testCausallyNewerSnapshotWinsBeforeDigestFallback() throws {
+        let directory = try temporaryDirectory("snapshot-dominance")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let operations = try loadOperations()
+        let source = try AtlasVaultDurableEncryptedPatchCollection(
+            fileURL: directory.appendingPathComponent("snapshot-source"),
+            encryptionKey: queueKey(),
+            authenticationKey: authenticationKey(),
+            collectionID: "collection_a"
+        )
+        try source.append(try XCTUnwrap(operations["base"]))
+        let older = try source.compact()
+        try source.append(try XCTUnwrap(operations["edit_a"]))
+        let newer = try source.compact()
+        XCTAssertGreaterThan(older.canonicalPayloadSHA256, newer.canonicalPayloadSHA256)
+
+        let target = try replica(directory.appendingPathComponent("target"))
+        XCTAssertTrue(try target.mergeSnapshot(older))
+        XCTAssertTrue(try target.mergeSnapshot(newer))
+        XCTAssertEqual(
+            try XCTUnwrap(target.currentRecords().first).revision,
+            try XCTUnwrap(operations["edit_a"]).envelope.revision
+        )
+    }
+
     private func loadOperations() throws -> [String: AtlasVaultEncryptedPatchOperation] {
         let root = try loadJSON(vectorURL())
         let raw = try XCTUnwrap(root["operations"] as? [String: [String: Any]])

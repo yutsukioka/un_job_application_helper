@@ -198,3 +198,23 @@ def test_snapshots_reject_conflicting_author_sequence_owners(tmp_path: Path) -> 
     assert target.merge_snapshot(snapshots[0]) is True
     with pytest.raises(PatchQueueError):
         target.merge_snapshot(snapshots[1])
+
+
+def test_causally_newer_snapshot_wins_before_digest_fallback(tmp_path: Path) -> None:
+    operations = _operations()
+    source = DurableEncryptedPatchCollection(
+        tmp_path / "snapshot-source",
+        encryption_key=_queue_key(),
+        authentication_key=_authentication_key(),
+        collection_id="collection_a",
+    )
+    source.append(operations["base"])
+    older = source.compact()
+    source.append(operations["edit_a"])
+    newer = source.compact()
+    assert older.canonical_payload_sha256 > newer.canonical_payload_sha256
+
+    target = _replica(tmp_path / "target")
+    assert target.merge_snapshot(older) is True
+    assert target.merge_snapshot(newer) is True
+    assert target.current_records()[0].revision == operations["edit_a"].envelope.revision

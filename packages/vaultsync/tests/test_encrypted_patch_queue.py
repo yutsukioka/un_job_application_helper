@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -123,6 +124,29 @@ def test_outbox_is_encrypted_durable_ordered_and_acknowledgement_gated(
         restarted.confirm_remote_acceptance(first.operation_id)
     with pytest.raises(PatchQueueError):
         DurableEncryptedOutbox(path, encryption_key=b"x" * 32).pending_operations()
+
+
+def test_queue_creation_syncs_each_new_parent_and_cleans_abandoned_stages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync_calls: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda descriptor: sync_calls.append(descriptor))
+    nested_path = tmp_path / "first" / "second" / "outbox.queue"
+
+    DurableEncryptedOutbox(nested_path, encryption_key=_queue_key()).enqueue(
+        _operations()[0]
+    )
+
+    assert nested_path.exists()
+    assert len(sync_calls) == 4
+
+    stale = nested_path.parent / (
+        ".outbox.queue.00000000000000000000000000000000.tmp"
+    )
+    stale.write_bytes(b"abandoned")
+    DurableEncryptedOutbox(nested_path, encryption_key=_queue_key())
+    assert not stale.exists()
 
 
 def test_inbox_cursor_waits_for_durable_apply_and_duplicates_apply_once(

@@ -66,10 +66,15 @@ void main() {
     expect(helperSource, contains("Platform.environment['PATH']"));
     expect(helperSource, contains('existsSync()'));
     expect(helperSource, isNot(contains('runInShell:')));
+    expect(helperSource, contains("'dart.bat'"));
+    expect(helperSource, contains("'flutter.bat'"));
+    expect(helperSource, contains("'cache'"));
+    expect(helperSource, contains("'dart-sdk'"));
 
     final queueSource = await File(
       'lib/src/atlas_vault/sync_queue.dart',
     ).readAsString();
+    expect(queueSource, contains('await _ensureDurableParentDirectory(file);'));
     final replacement = queueSource.indexOf('await replaceCacheFile(');
     final directorySync = queueSource.indexOf(
       'await _syncParentDirectory(file);',

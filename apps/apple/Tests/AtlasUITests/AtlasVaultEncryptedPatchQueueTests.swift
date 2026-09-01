@@ -78,6 +78,23 @@ final class AtlasVaultEncryptedPatchQueueTests: XCTestCase {
         )
     }
 
+    func testRestartRemovesRecognizedAbandonedQueueStage() throws {
+        let directory = try temporaryDirectory("abandoned-stage")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("outbox.queue")
+        let staged = directory.appendingPathComponent(
+            ".outbox.queue.00000000-0000-0000-0000-000000000000.tmp"
+        )
+        try Data("abandoned".utf8).write(to: staged)
+
+        _ = try AtlasVaultDurableEncryptedOutbox(
+            fileURL: fileURL,
+            encryptionKey: queueKey()
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+    }
+
     func testInboxCursorWaitsForDurableApplyAndDeduplicates() throws {
         let directory = try temporaryDirectory("inbox")
         defer { try? FileManager.default.removeItem(at: directory) }

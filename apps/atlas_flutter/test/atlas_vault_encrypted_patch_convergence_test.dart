@@ -223,4 +223,33 @@ void main() {
       throwsA(isA<AtlasVaultEncryptedPatchException>()),
     );
   });
+
+  test('causally newer snapshot wins before digest fallback', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'atlasvault-c19-snapshot-dominance-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final source = AtlasVaultDurableEncryptedPatchCollection(
+      File('${directory.path}/snapshot-source'),
+      encryptionKey: queueKey,
+      authenticationKey: authenticationKey,
+      collectionId: 'collection_a',
+    );
+    await source.append(operations['base']!);
+    final older = await source.compact();
+    await source.append(operations['edit_a']!);
+    final newer = await source.compact();
+    expect(
+      older.canonicalPayloadSha256.compareTo(newer.canonicalPayloadSha256),
+      greaterThan(0),
+    );
+
+    final target = replica(File('${directory.path}/target'));
+    expect(await target.mergeSnapshot(older), isTrue);
+    expect(await target.mergeSnapshot(newer), isTrue);
+    expect(
+      (await target.currentRecords()).single.revision,
+      operations['edit_a']!.envelope.revision,
+    );
+  });
 }
