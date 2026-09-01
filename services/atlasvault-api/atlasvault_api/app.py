@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import heapq
 import hmac
 import json
 import math
@@ -409,6 +410,9 @@ class AtlasVaultBackend:
         self._accounts: dict[str, _Account] = {}
         self._challenges: dict[tuple[str, str], _Challenge] = {}
         self._sessions: dict[bytes, _Session] = {}
+        self._session_expiries: list[tuple[float, int, bytes]] = []
+        self._sessions_per_device: dict[tuple[str, str], int] = {}
+        self._next_session_expiry_sequence = 0
         self._last_account_clock: float | None = None
         self.storage = InMemoryOpaqueStore(entropy=entropy, monotonic=monotonic)
         self.abuse_policy = abuse_policy or AbuseControlPolicy()
@@ -492,8 +496,6 @@ class AtlasVaultBackend:
     ) -> SessionGrant:
         with self._lock:
             now = self._credential_now()
-            self._prune_expired_sessions(now)
-            self._require_session_capacity(account_id, request.device_id)
             challenge = self._challenges.pop(
                 (account_id, request.challenge_id),
                 None,
@@ -527,10 +529,20 @@ class AtlasVaultBackend:
                 raise AuthorizationFailed
             if digest in self._sessions:
                 raise AuthorizationFailed
+            expires_at = now + SESSION_LIFETIME_SECONDS
             self._sessions[digest] = _Session(
                 account_id=account_id,
                 device_id=request.device_id,
-                expires_at=now + SESSION_LIFETIME_SECONDS,
+                expires_at=expires_at,
+            )
+            device_key = (account_id, request.device_id)
+            self._sessions_per_device[device_key] = (
+                self._sessions_per_device.get(device_key, 0) + 1
+            )
+            self._next_session_expiry_sequence += 1
+            heapq.heappush(
+                self._session_expiries,
+                (expires_at, self._next_session_expiry_sequence, digest),
             )
             return SessionGrant(
                 token_type="Bearer",
@@ -631,10 +643,7 @@ class AtlasVaultBackend:
     def _require_session_capacity(self, account_id: str, device_id: str) -> None:
         if len(self._sessions) >= self.abuse_policy.max_sessions:
             raise RequestRateExceeded
-        device_sessions = sum(
-            session.account_id == account_id and session.device_id == device_id
-            for session in self._sessions.values()
-        )
+        device_sessions = self._sessions_per_device.get((account_id, device_id), 0)
         if device_sessions >= self.abuse_policy.max_sessions_per_device:
             raise RequestRateExceeded
 
@@ -643,7 +652,7 @@ class AtlasVaultBackend:
         session = self._sessions.get(digest)
         now = self._credential_now()
         if session is None or session.expires_at <= now:
-            self._sessions.pop(digest, None)
+            self._drop_session(digest)
             raise AuthorizationFailed
         account = self._accounts.get(session.account_id)
         if account is None or session.device_id not in account.devices:
@@ -660,13 +669,22 @@ class AtlasVaultBackend:
         return now
 
     def _prune_expired_sessions(self, now: float) -> None:
-        expired = [
-            digest
-            for digest, session in self._sessions.items()
-            if session.expires_at <= now
-        ]
-        for digest in expired:
-            del self._sessions[digest]
+        while self._session_expiries and self._session_expiries[0][0] <= now:
+            _, _, digest = heapq.heappop(self._session_expiries)
+            session = self._sessions.get(digest)
+            if session is not None and session.expires_at <= now:
+                self._drop_session(digest)
+
+    def _drop_session(self, digest: bytes) -> None:
+        session = self._sessions.pop(digest, None)
+        if session is None:
+            return
+        device_key = (session.account_id, session.device_id)
+        remaining = self._sessions_per_device.get(device_key, 0) - 1
+        if remaining > 0:
+            self._sessions_per_device[device_key] = remaining
+        else:
+            self._sessions_per_device.pop(device_key, None)
 
     def _prune_expired_challenges(self, now: float) -> None:
         expired = [
@@ -1147,6 +1165,21 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             _raise_storage_http_error(exc)
 
     served_schema = app.openapi()
+    policy = service.abuse_policy
+    served_schema["x-atlasvault-c15-controls"] = {
+        "accountRequestLimit": policy.account_request_limit,
+        "deviceRequestLimit": policy.device_request_limit,
+        "maxRetainedAccounts": policy.max_accounts,
+        "maxLiveChallenges": policy.max_challenges,
+        "maxChallengesPerDevice": policy.max_challenges_per_device,
+        "maxLiveSessions": policy.max_sessions,
+        "maxSessionsPerDevice": policy.max_sessions_per_device,
+        "maxDevicesPerAccount": policy.max_devices_per_account,
+        "rateWindowSeconds": policy.window_seconds,
+        "maxRequestBytes": policy.max_request_bytes,
+        "maxAccountRequestBytes": policy.max_account_request_bytes,
+        "telemetryDimensions": ["category", "outcome", "count"],
+    }
     for schema_name in (
         "DeviceDescriptorModel",
         "EncryptedVaultMetadataEnvelopeModel",

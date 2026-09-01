@@ -215,6 +215,8 @@ class InMemoryOpaqueStore:
         self._lock = threading.RLock()
         self._vaults: dict[tuple[str, str], _VaultState] = {}
         self._cursors: dict[str, _Cursor] = {}
+        self._cursor_expiries: list[tuple[float, int, str]] = []
+        self._next_cursor_expiry_sequence = 0
         self._receipt_expiries: list[
             tuple[float, int, _VaultState, tuple[str, str]]
         ] = []
@@ -527,6 +529,9 @@ class InMemoryOpaqueStore:
         receipt = state.receipts.get((scope, idempotency_key))
         if receipt is None:
             return None
+        if receipt.expires_at <= self._monotonic():
+            state.receipts.pop((scope, idempotency_key), None)
+            return None
         if receipt.attempt != _WriteAttempt(expected_revision, envelope):
             raise OpaqueStorageConflict
         return receipt.response
@@ -615,24 +620,30 @@ class InMemoryOpaqueStore:
         for _ in range(8):
             token = f"{CURSOR_PREFIX}{_entropy_bytes(self._entropy, 16).hex()}"
             if token not in self._cursors:
+                expires_at = self._monotonic() + CURSOR_LIFETIME_SECONDS
                 self._cursors[token] = _Cursor(
                     account_id=account_id,
                     vault_id=vault_id,
                     start=start,
                     end=end,
                     page_size=page_size,
-                    expires_at=self._monotonic() + CURSOR_LIFETIME_SECONDS,
+                    expires_at=expires_at,
+                )
+                self._next_cursor_expiry_sequence += 1
+                heapq.heappush(
+                    self._cursor_expiries,
+                    (expires_at, self._next_cursor_expiry_sequence, token),
                 )
                 return token
         raise RuntimeError("cursor entropy source repeated")
 
     def _prune_expired_cursors(self) -> None:
         now = self._monotonic()
-        expired = [
-            token for token, cursor in self._cursors.items() if cursor.expires_at <= now
-        ]
-        for token in expired:
-            del self._cursors[token]
+        while self._cursor_expiries and self._cursor_expiries[0][0] <= now:
+            _, _, token = heapq.heappop(self._cursor_expiries)
+            cursor = self._cursors.get(token)
+            if cursor is not None and cursor.expires_at <= now:
+                self._cursors.pop(token, None)
 
 
 def _same_revision(

@@ -160,6 +160,9 @@ creation without retaining request-derived dimensions in telemetry.
 Challenge and session issuance enforce both process-wide and per-account/device
 ceilings, then fail with 429 before retaining state. Signed device addition
 likewise fails with 429 before mutation when its per-account ceiling is reached.
+Live session capacity uses an expiry heap plus per-device counters; an invalid
+challenge is rejected before any capacity maintenance, and no request scans the
+session registry.
 
 The route-specific body ceiling is checked before request parsing from a valid
 declared length and while streaming request chunks. Oversized requests return a
@@ -176,6 +179,9 @@ so the served and checked-in OpenAPI response sets remain identical.
 Each reusable canonical error response also publishes its JSON body schema:
 fixed failures return an object with a string `detail`, while validation
 failures return the exact generic `{"detail":"Invalid request."}` shape.
+The served `/openapi.json` also publishes `x-atlasvault-c15-controls` directly
+from the active `AbuseControlPolicy`, including custom deployment limits rather
+than copying only canonical defaults.
 
 ## Versioned Ciphertext Storage Shape
 
@@ -223,7 +229,8 @@ reclaimed. A retry outside that window is evaluated against current revision
 state rather than retaining obsolete ciphertext envelopes indefinitely.
 Receipt expiries are tracked globally in a min-heap and at most 64 due entries
 are reclaimed per write, so a write never scans every retained vault while
-holding the store lock.
+holding the store lock. Replay also checks the selected receipt's own expiry,
+so a due receipt beyond that bounded batch cannot return a stale response.
 
 Patch appends form a compare-and-set sequence at this backend storage layer.
 The server does not decrypt patches or decide record conflicts. Client patch
@@ -233,7 +240,8 @@ semantics, authenticated snapshot contents, and convergence remain P5 work.
 returns an opaque `next_cursor`. Cursor state captures the append boundary and
 page size. Retrying a cursor returns the same page and next cursor, while later
 appends appear only in a fresh listing. Cursor records expire after 300 seconds;
-an expired cursor fails closed and the client starts a fresh listing.
+an expired cursor fails closed and the client starts a fresh listing. Cursor
+expiry uses a min-heap, so listings do not scan the global live-cursor registry.
 
 ### Put Vault Metadata
 
