@@ -8,6 +8,7 @@
   "x-atlasvault-c15-controls": {
     "accountRequestLimit": 40,
     "deviceRequestLimit": 24,
+    "maxRetainedAccounts": 1024,
     "rateWindowSeconds": 60,
     "maxRequestBytes": 201326592,
     "telemetryDimensions": [
@@ -55,6 +56,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -669,7 +673,8 @@
         "schema": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._~-]+$"
         }
       },
       "ObjectId": {
@@ -679,7 +684,8 @@
         "schema": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._~-]+$"
         }
       },
       "IfMatch": {
@@ -784,7 +790,9 @@
             "contentEncoding": "base64"
           },
           "created_at": {
-            "type": "string"
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
           },
           "key_epoch": {
             "type": "integer",
@@ -1030,7 +1038,8 @@
           "vault_id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._~-]+$"
           },
           "revision": {
             "type": "string",
@@ -1099,7 +1108,8 @@
           "object_id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._~-]+$"
           },
           "revision": {
             "type": "string",

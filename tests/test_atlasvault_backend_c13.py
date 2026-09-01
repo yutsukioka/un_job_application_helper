@@ -46,9 +46,7 @@ ACCOUNT_A = f"ava1-{hashlib.sha256(b'account-a').hexdigest()}"
 ACCOUNT_B = f"ava1-{hashlib.sha256(b'account-b').hexdigest()}"
 REVISION_1 = "10000000-0000-4000-8000-000000000001"
 REVISION_2 = "10000000-0000-4000-8000-000000000002"
-UTC_SECONDS_PATTERN = (
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
-)
+UTC_SECONDS_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 
 
 class DeterministicEntropy:

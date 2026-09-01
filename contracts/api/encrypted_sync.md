@@ -130,6 +130,7 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 
 - 40 requests per authenticated account per 60-second window;
 - 24 requests per authenticated device per 60-second window;
+- 1,024 retained account registries per process;
 - 192 MiB maximum encoded HTTP request body.
 
 Limits are keyed by authenticated account and device IDs rather than bearer
@@ -137,6 +138,10 @@ tokens. Rotating a session, changing ciphertext endpoints, or adding another
 device therefore cannot reset the applicable device or account window. A
 non-finite or regressing monotonic clock fails closed. Expired process-local
 windows are removed rather than retained indefinitely.
+
+Account bootstrap fails with 429 before insertion when the fixed process-local
+registry ceiling is reached. This bounds unauthenticated self-signed account
+creation without retaining request-derived dimensions in telemetry.
 
 The body ceiling is checked before request parsing from a valid declared length
 and while streaming request chunks. Oversized requests return a fixed 413

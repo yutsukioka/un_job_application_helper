@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 OPAQUE_ID_MAX_LENGTH = 128
+OPAQUE_ID_PATTERN = r"^[A-Za-z0-9._~-]+$"
 REVISION_MAX_LENGTH = 128
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 DEFAULT_PAGE_SIZE = 100
@@ -36,7 +37,11 @@ class EncryptedVaultMetadataEnvelopeModel(BaseModel):
 
     format: Literal["atlasvault-encrypted-metadata-envelope"]
     version: int = Field(ge=1)
-    vault_id: str = Field(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH)
+    vault_id: str = Field(
+        min_length=1,
+        max_length=OPAQUE_ID_MAX_LENGTH,
+        pattern=OPAQUE_ID_PATTERN,
+    )
     revision: str = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,
@@ -63,7 +68,11 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
 
     format: Literal["atlasvault-opaque-ciphertext-envelope"]
     version: int = Field(ge=1)
-    object_id: str = Field(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH)
+    object_id: str = Field(
+        min_length=1,
+        max_length=OPAQUE_ID_MAX_LENGTH,
+        pattern=OPAQUE_ID_PATTERN,
+    )
     revision: str = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,

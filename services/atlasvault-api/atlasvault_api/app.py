@@ -49,6 +49,7 @@ from atlasvault_api.storage import (
     IDEMPOTENCY_KEY_MAX_LENGTH,
     MAX_PAGE_SIZE,
     OPAQUE_ID_MAX_LENGTH,
+    OPAQUE_ID_PATTERN,
     REVISION_MAX_LENGTH,
     EncryptedVaultMetadataEnvelopeModel,
     InMemoryOpaqueStore,
@@ -72,6 +73,7 @@ MAX_KEY_EPOCH = (1 << 63) - 1
 REGISTRY_REVISION_PATTERN = (
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+UTC_SECONDS_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 _STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
 RegistryRevision = Annotated[
     str,
@@ -84,6 +86,13 @@ Base64Value = Annotated[
     str,
     Field(json_schema_extra={"contentEncoding": "base64"}),
 ]
+UtcSecondsValue = Annotated[
+    str,
+    Field(
+        pattern=UTC_SECONDS_PATTERN,
+        json_schema_extra={"format": "date-time"},
+    ),
+]
 
 
 class DeviceDescriptorModel(BaseModel):
@@ -94,7 +103,7 @@ class DeviceDescriptorModel(BaseModel):
     device_id: str = Field(pattern=DEVICE_ID_PATTERN)
     signing_public_key: Base64Value
     agreement_public_key: Base64Value
-    created_at: str
+    created_at: UtcSecondsValue
     key_epoch: int = Field(
         ge=1,
         le=MAX_KEY_EPOCH,
@@ -184,6 +193,28 @@ class RequestValidationFailure(BaseModel):
     model_config = _STRICT_MODEL
 
     detail: Literal["Invalid request."]
+
+
+class FixedErrorResponse(BaseModel):
+    model_config = _STRICT_MODEL
+
+    detail: str
+
+
+_STORAGE_OPENAPI_RESPONSES = {
+    401: {
+        "description": "Account or device authorization failed",
+        "model": FixedErrorResponse,
+    },
+    413: {
+        "description": "Request body exceeds the fixed ciphertext request ceiling",
+        "model": FixedErrorResponse,
+    },
+    429: {
+        "description": "Authenticated account or device request window is exhausted",
+        "model": FixedErrorResponse,
+    },
+}
 
 
 class DeviceRegistryView(BaseModel):
@@ -281,6 +312,8 @@ class AtlasVaultBackend:
         with self._lock:
             if account_id in self._accounts:
                 raise RevisionConflict
+            if len(self._accounts) >= self.abuse_policy.max_accounts:
+                raise RequestRateExceeded
             self._accounts[account_id] = _Account(
                 revision=transition.revision,
                 devices={descriptor.descriptor.device_id: transition.device},
@@ -483,11 +516,19 @@ BearerAuthorization = Annotated[
 ]
 VaultPath = Annotated[
     str,
-    Path(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH),
+    Path(
+        min_length=1,
+        max_length=OPAQUE_ID_MAX_LENGTH,
+        pattern=OPAQUE_ID_PATTERN,
+    ),
 ]
 ObjectPath = Annotated[
     str,
-    Path(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH),
+    Path(
+        min_length=1,
+        max_length=OPAQUE_ID_MAX_LENGTH,
+        pattern=OPAQUE_ID_PATTERN,
+    ),
 ]
 IfMatchHeader = Annotated[
     str,
@@ -623,6 +664,12 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.post(
         "/v1/accounts/{account_id}/devices/bootstrap",
         response_model=DeviceRegistryView,
+        responses={
+            429: {
+                "description": "Account registration capacity is exhausted",
+                "model": FixedErrorResponse,
+            }
+        },
         status_code=status.HTTP_201_CREATED,
         operation_id="bootstrapAccountDevice",
     )
@@ -639,6 +686,10 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         except RevisionConflict as exc:
             raise HTTPException(
                 status_code=409, detail="Account already exists."
+            ) from exc
+        except RequestRateExceeded as exc:
+            raise HTTPException(
+                status_code=429, detail="Account capacity exceeded."
             ) from exc
 
     @app.post(
@@ -723,6 +774,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.put(
         "/v1/vaults/{vault_id}/metadata",
         response_model=EncryptedVaultMetadataEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="putEncryptedVaultMetadata",
     )
     def put_encrypted_vault_metadata(
@@ -747,6 +799,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.get(
         "/v1/vaults/{vault_id}/metadata",
         response_model=EncryptedVaultMetadataEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="getEncryptedVaultMetadata",
     )
     def get_encrypted_vault_metadata(
@@ -762,6 +815,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.put(
         "/v1/vaults/{vault_id}/objects/{object_id}",
         response_model=OpaqueCiphertextEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="putOpaqueCiphertextObject",
     )
     def put_opaque_ciphertext_object(
@@ -788,6 +842,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.get(
         "/v1/vaults/{vault_id}/objects/{object_id}",
         response_model=OpaqueCiphertextEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="getOpaqueCiphertextObject",
     )
     def get_opaque_ciphertext_object(
@@ -804,6 +859,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.post(
         "/v1/vaults/{vault_id}/patches",
         response_model=OpaqueCiphertextEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         status_code=status.HTTP_201_CREATED,
         operation_id="appendEncryptedPatch",
     )
@@ -829,6 +885,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.get(
         "/v1/vaults/{vault_id}/patches",
         response_model=OpaqueCiphertextPageModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="listEncryptedPatches",
     )
     def list_encrypted_patches(
@@ -851,6 +908,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.put(
         "/v1/vaults/{vault_id}/snapshots",
         response_model=OpaqueCiphertextEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="putEncryptedSnapshot",
     )
     def put_encrypted_snapshot(
@@ -875,6 +933,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.get(
         "/v1/vaults/{vault_id}/snapshots",
         response_model=OpaqueCiphertextEnvelopeModel,
+        responses=_STORAGE_OPENAPI_RESPONSES,
         operation_id="getEncryptedSnapshot",
     )
     def get_encrypted_snapshot(
