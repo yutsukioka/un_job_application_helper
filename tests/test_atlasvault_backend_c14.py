@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -811,7 +812,14 @@ def test_c14_storage_models_reject_secret_fields_and_wire_guard_stays_green(
 def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
     parameters = contract["components"]["parameters"]
-    path_id_pattern = r"^[A-Za-z0-9._~-]+$"
+    path_id_pattern = (
+        r"^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|"
+        r"\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|"
+        r"\.\.[A-Za-z0-9._~-]+)$"
+    )
+    assert re.fullmatch(path_id_pattern, ".") is None
+    assert re.fullmatch(path_id_pattern, "..") is None
+    assert re.fullmatch(path_id_pattern, "vault.with.dots") is not None
     assert parameters["IfMatch"]["name"] == "If-Match"
     assert parameters["IdempotencyKey"]["name"] == "Idempotency-Key"
     assert parameters["Cursor"]["name"] == "cursor"

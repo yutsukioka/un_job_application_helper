@@ -521,11 +521,12 @@ def test_c15_contract_declares_storage_controls() -> None:
         "/v1/vaults/{vault_id}/patches",
         "/v1/vaults/{vault_id}/snapshots",
     ):
-        for operation in contract["paths"][path].values():
+        for method, operation in contract["paths"][path].items():
             assert operation["security"] == [{"bearerAuth": []}]
             assert {"401", "413", "429"} <= set(operation["responses"])
-        for operation in generated["paths"][path].values():
-            assert {"401", "413", "429"} <= set(operation["responses"])
+            assert set(generated["paths"][path][method]["responses"]) == set(
+                operation["responses"]
+            )
 
 
 def test_c15_account_bootstrap_is_bounded_before_retention() -> None:
@@ -538,19 +539,70 @@ def test_c15_account_bootstrap_is_bounded_before_retention() -> None:
     device_a, device_b = _identities()
     _bootstrap(client, device_a, account_id=ACCOUNT_A)
 
+    rejected = _signed_transition(
+        account_id=ACCOUNT_B,
+        revision="20000000-0000-4000-8000-000000000001",
+        parent_revision=None,
+        device=device_b,
+        signer=device_b,
+    )
+    rejected["transition"]["device"]["signature"] = "AA=="
+    rejected["signature"] = "AA=="
     response = client.post(
         f"/v1/accounts/{ACCOUNT_B}/devices/bootstrap",
-        json=_signed_transition(
-            account_id=ACCOUNT_B,
-            revision="20000000-0000-4000-8000-000000000001",
-            parent_revision=None,
-            device=device_b,
-            signer=device_b,
-        ),
+        json=rejected,
     )
     assert response.status_code == 429
     assert response.json() == {"detail": "Account capacity exceeded."}
     assert set(backend._accounts) == {ACCOUNT_A}
+
+
+def test_c15_live_challenge_retention_is_bounded() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+        abuse_policy=AbuseControlPolicy(max_challenges=1),
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    path = f"/v1/accounts/{ACCOUNT_A}/auth/challenges"
+    body = {"device_id": device.device_id}
+
+    assert client.post(path, json=body).status_code == 201
+    limited = client.post(path, json=body)
+    assert limited.status_code == 429
+    assert limited.json() == {"detail": "Challenge capacity exceeded."}
+    assert len(backend._challenges) == 1
+
+
+def test_c15_devices_per_account_are_bounded_before_mutation() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+        abuse_policy=AbuseControlPolicy(max_devices_per_account=1),
+    )
+    client = TestClient(create_app(backend))
+    device_a, device_b = _identities()
+    _bootstrap(client, device_a, account_id=ACCOUNT_A)
+    token, _ = _session(client, device_a, account_id=ACCOUNT_A)
+
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_signed_transition(
+            account_id=ACCOUNT_A,
+            revision=REVISION_2,
+            parent_revision=REVISION_1,
+            device=device_b,
+            signer=device_a,
+        ),
+    )
+    assert response.status_code == 429
+    assert response.json() == {"detail": "Device capacity exceeded."}
+    account = backend._accounts[ACCOUNT_A]
+    assert set(account.devices) == {device_a.device_id}
+    assert account.used_revisions == {REVISION_1}
 
 
 def test_c15_telemetry_coarsens_unknown_categories() -> None:
