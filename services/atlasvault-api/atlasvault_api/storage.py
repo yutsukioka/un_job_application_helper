@@ -19,6 +19,7 @@ DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CURSOR_PREFIX = "avcur1-"
 CURSOR_LIFETIME_SECONDS = 300
+IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS = 600
 _REVISION_PATTERN = r"^[!-~]+$"
 _STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -116,6 +117,7 @@ class _WriteAttempt:
 class _Receipt:
     attempt: _WriteAttempt
     response: StorageEnvelope
+    expires_at: float
 
 
 @dataclass
@@ -174,6 +176,7 @@ class InMemoryOpaqueStore:
         if envelope.vault_id != vault_id:
             raise InvalidOpaqueStorageRequest
         with self._lock:
+            self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
             replay = self._replay(
                 state,
@@ -212,6 +215,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
+            self._retain_state(account_id, vault_id, state)
             return envelope
 
     def get_metadata(
@@ -238,6 +242,7 @@ class InMemoryOpaqueStore:
         if envelope.object_id != object_id:
             raise InvalidOpaqueStorageRequest
         with self._lock:
+            self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
             scope = f"object:{object_id}"
             replay = self._replay(
@@ -274,6 +279,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
+            self._retain_state(account_id, vault_id, state)
             return envelope
 
     def get_object(
@@ -298,6 +304,7 @@ class InMemoryOpaqueStore:
         idempotency_key: str,
     ) -> OpaqueCiphertextEnvelopeModel:
         with self._lock:
+            self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
             replay = self._replay(
                 state,
@@ -334,6 +341,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
+            self._retain_state(account_id, vault_id, state)
             return envelope
 
     def list_patches(
@@ -386,6 +394,7 @@ class InMemoryOpaqueStore:
         idempotency_key: str,
     ) -> OpaqueCiphertextEnvelopeModel:
         with self._lock:
+            self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
             replay = self._replay(
                 state,
@@ -424,6 +433,7 @@ class InMemoryOpaqueStore:
                 envelope,
                 envelope,
             )
+            self._retain_state(account_id, vault_id, state)
             return envelope
 
     def get_snapshot(
@@ -438,7 +448,15 @@ class InMemoryOpaqueStore:
             return state.snapshot
 
     def _state(self, account_id: str, vault_id: str) -> _VaultState:
-        return self._vaults.setdefault((account_id, vault_id), _VaultState())
+        return self._vaults.get((account_id, vault_id), _VaultState())
+
+    def _retain_state(
+        self,
+        account_id: str,
+        vault_id: str,
+        state: _VaultState,
+    ) -> None:
+        self._vaults[(account_id, vault_id)] = state
 
     def _replay(
         self,
@@ -468,7 +486,19 @@ class InMemoryOpaqueStore:
         state.receipts[(scope, idempotency_key)] = _Receipt(
             attempt=_WriteAttempt(expected_revision, envelope),
             response=response,
+            expires_at=self._monotonic() + IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS,
         )
+
+    def _prune_expired_receipts(self) -> None:
+        now = self._monotonic()
+        for state in self._vaults.values():
+            expired = [
+                key
+                for key, receipt in state.receipts.items()
+                if receipt.expires_at <= now
+            ]
+            for key in expired:
+                del state.receipts[key]
 
     def _page(
         self,

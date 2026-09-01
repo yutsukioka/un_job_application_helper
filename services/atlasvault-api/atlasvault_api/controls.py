@@ -70,10 +70,10 @@ class AccountDeviceRateLimiter:
         self._last_observed: float | None = None
 
     def consume(self, principal: StoragePrincipal) -> None:
-        now = self._monotonic()
-        if not math.isfinite(now):
-            raise RequestRateExceeded
         with self._lock:
+            now = self._monotonic()
+            if not math.isfinite(now):
+                raise RequestRateExceeded
             if self._last_observed is not None and now < self._last_observed:
                 raise RequestRateExceeded
             self._last_observed = now

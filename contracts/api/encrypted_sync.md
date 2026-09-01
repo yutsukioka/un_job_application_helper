@@ -181,6 +181,10 @@ conflict without mutation. Replaying the same operation returns its original
 response. Repeating the identical revision under a new idempotency key is also
 suppressed, so delivery is exactly-once in effect.
 
+Idempotency receipts are retained for a 600-second retry window and then
+reclaimed. A retry outside that window is evaluated against current revision
+state rather than retaining obsolete ciphertext envelopes indefinitely.
+
 Patch appends form a compare-and-set sequence at this backend storage layer.
 The server does not decrypt patches or decide record conflicts. Client patch
 semantics, authenticated snapshot contents, and convergence remain P5 work.
@@ -188,7 +192,8 @@ semantics, authenticated snapshot contents, and convergence remain P5 work.
 `GET /v1/vaults/{vault_id}/patches` accepts `page_size` on the first request and
 returns an opaque `next_cursor`. Cursor state captures the append boundary and
 page size. Retrying a cursor returns the same page and next cursor, while later
-appends appear only in a fresh listing.
+appends appear only in a fresh listing. Cursor records expire after 300 seconds;
+an expired cursor fails closed and the client starts a fresh listing.
 
 ### Put Vault Metadata
 

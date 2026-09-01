@@ -68,7 +68,8 @@ CHALLENGE_BYTES = 32
 SIGNATURE_BYTES = 64
 CHALLENGE_LIFETIME_SECONDS = 120
 SESSION_LIFETIME_SECONDS = 900
-_STRICT_MODEL = ConfigDict(extra="forbid", frozen=True)
+MAX_KEY_EPOCH = (1 << 63) - 1
+_STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class DeviceDescriptorModel(BaseModel):
@@ -80,7 +81,20 @@ class DeviceDescriptorModel(BaseModel):
     signing_public_key: str
     agreement_public_key: str
     created_at: str
-    key_epoch: int = Field(ge=1, le=(1 << 63) - 1)
+    key_epoch: int = Field(
+        ge=1,
+        le=MAX_KEY_EPOCH,
+    )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema: Any,
+        handler: Any,
+    ) -> dict[str, Any]:
+        schema = handler(core_schema)
+        schema["properties"]["key_epoch"]["maximum"] = MAX_KEY_EPOCH
+        return schema
 
 
 class SignedDeviceDescriptorModel(BaseModel):
@@ -847,6 +861,11 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         except _STORAGE_ERRORS as exc:
             _raise_storage_http_error(exc)
 
+    served_schema = app.openapi()
+    served_schema["components"]["schemas"]["DeviceDescriptorModel"]["properties"][
+        "key_epoch"
+    ]["maximum"] = MAX_KEY_EPOCH
+    app.openapi_schema = served_schema
     return app
 
 

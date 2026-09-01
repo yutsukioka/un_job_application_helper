@@ -37,6 +37,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "201": {
             "description": "Account and initial public device registered",
             "content": {
@@ -76,6 +79,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "201": {
             "description": "One-time device challenge",
             "content": {
@@ -112,6 +118,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "201": {
             "description": "Short-lived account and device session",
             "content": {
@@ -143,6 +152,9 @@
           }
         ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Current signed public-device registry",
             "content": {
@@ -182,6 +194,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Updated signed public-device registry",
             "content": {
@@ -235,6 +250,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque encrypted metadata accepted",
             "content": {
@@ -276,6 +294,9 @@
           }
         ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque encrypted metadata",
             "content": {
@@ -335,6 +356,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque ciphertext object accepted",
             "content": {
@@ -379,6 +403,9 @@
           }
         ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque ciphertext object",
             "content": {
@@ -435,6 +462,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "201": {
             "description": "Opaque encrypted patch accepted",
             "content": {
@@ -482,6 +512,9 @@
           }
         ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque encrypted patch page",
             "content": {
@@ -538,6 +571,9 @@
           }
         },
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque encrypted snapshot accepted",
             "content": {
@@ -579,6 +615,9 @@
           }
         ],
         "responses": {
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
           "200": {
             "description": "Opaque encrypted snapshot",
             "content": {
@@ -707,6 +746,9 @@
       },
       "RateLimited": {
         "description": "Authenticated account or device request window is exhausted"
+      },
+      "ValidationFailed": {
+        "description": "Request path, header, or body validation failed"
       }
     },
     "schemas": {
@@ -746,7 +788,8 @@
           },
           "key_epoch": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9223372036854775807
           }
         }
       },

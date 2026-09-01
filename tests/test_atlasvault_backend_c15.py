@@ -473,12 +473,12 @@ def test_c15_rate_limiter_samples_clock_after_request_scheduling() -> None:
     )
     scheduling_lock = NewerRequestFirstLock()
     limiter._lock = scheduling_lock
-    errors: list[BaseException] = []
+    errors: list[RequestRateExceeded] = []
 
     def consume(device_id: str) -> None:
         try:
             limiter.consume(StoragePrincipal("account", device_id))
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except RequestRateExceeded as exc:  # pragma: no cover - asserted below
             errors.append(exc)
 
     older = threading.Thread(
