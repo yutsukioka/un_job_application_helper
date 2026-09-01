@@ -191,4 +191,36 @@ void main() {
       throwsA(isA<AtlasVaultEncryptedPatchException>()),
     );
   });
+
+  test('snapshots reject conflicting author sequence owners', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'atlasvault-c19-snapshot-alias-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final base = operations['base']!;
+    final alias = AtlasVaultEncryptedPatchOperation.fromJson(
+      base.toJson()..['operation_id'] = '10000000-0000-4000-8000-000000000099',
+    );
+    final snapshots = <AtlasVaultAuthenticatedCollectionSnapshot>[];
+    for (final entry in <String, AtlasVaultEncryptedPatchOperation>{
+      'first': base,
+      'alias': alias,
+    }.entries) {
+      final source = AtlasVaultDurableEncryptedPatchCollection(
+        File('${directory.path}/snapshot-${entry.key}'),
+        encryptionKey: queueKey,
+        authenticationKey: authenticationKey,
+        collectionId: 'collection_a',
+      );
+      await source.append(entry.value);
+      snapshots.add(await source.compact());
+    }
+
+    final target = replica(File('${directory.path}/target'));
+    expect(await target.mergeSnapshot(snapshots.first), isTrue);
+    await expectLater(
+      target.mergeSnapshot(snapshots.last),
+      throwsA(isA<AtlasVaultEncryptedPatchException>()),
+    );
+  });
 }

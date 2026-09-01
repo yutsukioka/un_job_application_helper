@@ -131,6 +131,30 @@ final class AtlasVaultEncryptedPatchConvergenceTests: XCTestCase {
         )
     }
 
+    func testSnapshotsRejectConflictingAuthorSequenceOwners() throws {
+        let directory = try temporaryDirectory("snapshot-alias")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = try XCTUnwrap(loadOperations()["base"])
+        var aliasValue = base.jsonObject
+        aliasValue["operation_id"] = "10000000-0000-4000-8000-000000000099"
+        let alias = try AtlasVaultEncryptedPatchOperation(jsonObject: aliasValue)
+        var snapshots: [AtlasVaultAuthenticatedCollectionSnapshot] = []
+        for (name, operation) in [("first", base), ("alias", alias)] {
+            let source = try AtlasVaultDurableEncryptedPatchCollection(
+                fileURL: directory.appendingPathComponent("snapshot-\(name)"),
+                encryptionKey: queueKey(),
+                authenticationKey: authenticationKey(),
+                collectionID: "collection_a"
+            )
+            try source.append(operation)
+            snapshots.append(try source.compact())
+        }
+
+        let target = try replica(directory.appendingPathComponent("target"))
+        XCTAssertTrue(try target.mergeSnapshot(snapshots[0]))
+        XCTAssertThrowsError(try target.mergeSnapshot(snapshots[1]))
+    }
+
     private func loadOperations() throws -> [String: AtlasVaultEncryptedPatchOperation] {
         let root = try loadJSON(vectorURL())
         let raw = try XCTUnwrap(root["operations"] as? [String: [String: Any]])

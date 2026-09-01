@@ -4,13 +4,16 @@ import hashlib
 import json
 import multiprocessing
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from vaultsync.sync_queue import (
+    DurableEncryptedConvergentReplica,
     DurableEncryptedInbox,
     DurableEncryptedOutbox,
+    DurableEncryptedPatchCollection,
     EncryptedPatchOperation,
     PatchQueueError,
 )
@@ -43,6 +46,10 @@ def _queue_key() -> bytes:
     return hashlib.sha256(b"atlasvault-c17-synthetic-queue-key").digest()
 
 
+def _authentication_key() -> bytes:
+    return hashlib.sha256(b"atlasvault-c17-synthetic-authentication-key").digest()
+
+
 def _crash_writer(outbox_path: str, inbox_path: str, ready_path: str) -> None:
     first, second = _operations()
     outbox = DurableEncryptedOutbox(outbox_path, encryption_key=_queue_key())
@@ -63,9 +70,7 @@ def test_shared_patch_contract_is_strict_and_deterministically_ordered() -> None
     root = _root()
     operations = _operations()
 
-    assert [item.operation_id for item in sorted(operations)] == root[
-        "expected_transport_order"
-    ]
+    assert [item.operation_id for item in sorted(operations)] == root["expected_transport_order"]
     assert operations[0].idempotency_key == operations[0].operation_id
     assert operations[0].envelope.parent_revision is None
     assert operations[1].envelope.parent_revision == operations[0].envelope.revision
@@ -195,6 +200,38 @@ def test_inbox_rejects_order_and_parent_regressions_before_persistence(
             operations=(first, EncryptedPatchOperation.from_dict(invalid)),
         )
     assert not path.exists()
+
+
+def test_public_operation_objects_are_validated_before_persistence(
+    tmp_path: Path,
+) -> None:
+    invalid = replace(_operations()[0], operation_type="delete")
+    paths = {name: tmp_path / name for name in ("outbox", "inbox", "collection", "replica")}
+
+    with pytest.raises(PatchQueueError):
+        DurableEncryptedOutbox(paths["outbox"], encryption_key=_queue_key()).enqueue(invalid)
+    with pytest.raises(PatchQueueError):
+        DurableEncryptedInbox(paths["inbox"], encryption_key=_queue_key()).stage_page(
+            expected_cursor=None,
+            next_cursor="cursor-invalid",
+            operations=(invalid,),
+        )
+    with pytest.raises(PatchQueueError):
+        DurableEncryptedPatchCollection(
+            paths["collection"],
+            encryption_key=_queue_key(),
+            authentication_key=_authentication_key(),
+            collection_id="collection_a",
+        ).append(invalid)
+    with pytest.raises(PatchQueueError):
+        DurableEncryptedConvergentReplica(
+            paths["replica"],
+            encryption_key=_queue_key(),
+            authentication_key=_authentication_key(),
+            collection_id="collection_a",
+        ).ingest_remote(invalid)
+
+    assert all(not path.exists() for path in paths.values())
 
 
 def test_outbox_and_inbox_survive_process_kill_and_restart(tmp_path: Path) -> None:

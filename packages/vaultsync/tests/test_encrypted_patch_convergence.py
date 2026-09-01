@@ -41,9 +41,7 @@ def _queue_key() -> bytes:
 
 
 def _authentication_key() -> bytes:
-    return hashlib.sha256(
-        b"atlasvault-c19-synthetic-snapshot-authentication"
-    ).digest()
+    return hashlib.sha256(b"atlasvault-c19-synthetic-snapshot-authentication").digest()
 
 
 def _replica(path: Path) -> DurableEncryptedConvergentReplica:
@@ -177,3 +175,26 @@ def test_divergent_offline_edits_converge_and_receipt_aliases_fail_closed(
     changed["lamport"] = 99
     with pytest.raises(PatchQueueError):
         left.ingest_remote(EncryptedPatchOperation.from_dict(changed))
+
+
+def test_snapshots_reject_conflicting_author_sequence_owners(tmp_path: Path) -> None:
+    base = _operations()["base"]
+    alias_value = base.to_dict()
+    alias_value["operation_id"] = "10000000-0000-4000-8000-000000000099"
+    alias = EncryptedPatchOperation.from_dict(alias_value)
+
+    snapshots = []
+    for name, operation in (("first", base), ("alias", alias)):
+        source = DurableEncryptedPatchCollection(
+            tmp_path / f"snapshot-{name}",
+            encryption_key=_queue_key(),
+            authentication_key=_authentication_key(),
+            collection_id="collection_a",
+        )
+        source.append(operation)
+        snapshots.append(source.compact())
+
+    target = _replica(tmp_path / "target")
+    assert target.merge_snapshot(snapshots[0]) is True
+    with pytest.raises(PatchQueueError):
+        target.merge_snapshot(snapshots[1])

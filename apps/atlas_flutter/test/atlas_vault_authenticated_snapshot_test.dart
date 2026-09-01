@@ -162,6 +162,32 @@ void main() {
   });
 
   test(
+    'foreign snapshot receipts use canonical operation fingerprints',
+    () async {
+      final root = loadAtlasVaultVector(
+        'atlasvault_authenticated_snapshot_vectors_v1.json',
+      );
+      final snapshot = await AtlasVaultAuthenticatedCollectionSnapshot.decode(
+        atlasVaultObject(root['snapshot']),
+        authenticationKey: authenticationKey,
+      );
+      final directory = await Directory.systemTemp.createTemp(
+        'atlasvault-c18-foreign-fingerprint-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final replica = AtlasVaultDurableEncryptedConvergentReplica(
+        File('${directory.path}/replica'),
+        encryptionKey: queueKey,
+        authenticationKey: authenticationKey,
+        collectionId: 'collection_a',
+      );
+
+      expect(await replica.mergeSnapshot(snapshot), isTrue);
+      expect(await replica.ingestRemote(operations.first), isFalse);
+    },
+  );
+
+  test(
     'kill mid-compaction restarts at valid pre or post state',
     () async {
       final directory = await Directory.systemTemp.createTemp(
