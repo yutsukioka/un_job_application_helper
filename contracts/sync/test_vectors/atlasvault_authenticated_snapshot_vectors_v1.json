@@ -1,0 +1,53 @@
+{
+  "format": "atlasvault-authenticated-snapshot-vectors",
+  "version": 1,
+  "warning": "Synthetic test-only ciphertext fixtures; never use as production data.",
+  "authentication_key_derivation_label": "atlasvault-c18-synthetic-snapshot-authentication",
+  "expected_canonical_payload_sha256": "f4b00d950d4831164836844affd77ee593fc73ffb5ed280ea4dcc8c5616d07dd",
+  "snapshot": {
+    "format": "atlasvault-authenticated-collection-snapshot",
+    "version": 1,
+    "payload": {
+      "format": "atlasvault-authenticated-collection-snapshot-payload",
+      "version": 1,
+      "collection_id": "collection_a",
+      "collection_revision": 2,
+      "last_order": [
+        8,
+        "device_a",
+        2,
+        "00000000-0000-4000-8000-000000000002"
+      ],
+      "records": [
+        {
+          "format": "atlasvault-opaque-ciphertext-envelope",
+          "version": 1,
+          "object_id": "object_a",
+          "revision": "rev-002",
+          "parent_revision": "rev-001",
+          "key_epoch": 1,
+          "nonce_b64": "DA0ODxAREhMUFRYX",
+          "ciphertext_b64": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=",
+          "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoLWRlbGV0ZSJ9",
+          "signature_b64": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+vw==",
+          "tombstone": true,
+          "content_sha256": "d9c2e699586b948f4022c7994ffe14c63a4e8e312ee2aee1ebe51bed85705cfd"
+        }
+      ],
+      "applied_fingerprints": {
+        "00000000-0000-4000-8000-000000000001": "325dbb9a846943e84cc676e164c30520807d808957c7ef2277197562efe89d5d",
+        "00000000-0000-4000-8000-000000000002": "d15df355f675eeab66ff0c326bdf2b214189cf712d2e798cd3befbc65a739e77"
+      },
+      "author_sequences": {
+        "device_a": 2
+      },
+      "record_count": 1,
+      "live_record_count": 0,
+      "tombstone_count": 1
+    },
+    "authentication": {
+      "algorithm": "HMAC-SHA256",
+      "tag_b64": "nVCAa4+q4tn8EOTxmIN2R0Vyza6U1+8JEwG+tCO2ZYU="
+    }
+  }
+}
