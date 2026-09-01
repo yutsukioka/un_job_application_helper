@@ -811,10 +811,13 @@ def test_c14_storage_models_reject_secret_fields_and_wire_guard_stays_green(
 def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
     parameters = contract["components"]["parameters"]
+    path_id_pattern = r"^[A-Za-z0-9._~-]+$"
     assert parameters["IfMatch"]["name"] == "If-Match"
     assert parameters["IdempotencyKey"]["name"] == "Idempotency-Key"
     assert parameters["Cursor"]["name"] == "cursor"
     assert parameters["PageSize"]["name"] == "page_size"
+    assert parameters["VaultId"]["schema"]["pattern"] == path_id_pattern
+    assert parameters["ObjectId"]["schema"]["pattern"] == path_id_pattern
 
     generated = create_app(AtlasVaultBackend()).openapi()
     for schemas, metadata_name, opaque_name in (
@@ -837,6 +840,7 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
         ):
             assert identifier["minLength"] == 1
             assert identifier["maxLength"] == 128
+            assert identifier["pattern"] == path_id_pattern
         for encoded in (
             metadata_properties["nonce_b64"],
             metadata_properties["ciphertext_b64"],
@@ -896,6 +900,17 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     }
     assert "#/components/parameters/Cursor" in patch_refs
     assert "#/components/parameters/PageSize" in patch_refs
+
+    for path, parameter_name in (
+        ("/v1/vaults/{vault_id}/metadata", "vault_id"),
+        ("/v1/vaults/{vault_id}/objects/{object_id}", "object_id"),
+    ):
+        parameter = next(
+            item
+            for item in generated["paths"][path]["get"]["parameters"]
+            if item["name"] == parameter_name
+        )
+        assert parameter["schema"]["pattern"] == path_id_pattern
 
 
 @pytest.mark.parametrize("resource", ["metadata", "object"])

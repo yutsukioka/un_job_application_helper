@@ -46,6 +46,9 @@ ACCOUNT_A = f"ava1-{hashlib.sha256(b'account-a').hexdigest()}"
 ACCOUNT_B = f"ava1-{hashlib.sha256(b'account-b').hexdigest()}"
 REVISION_1 = "10000000-0000-4000-8000-000000000001"
 REVISION_2 = "10000000-0000-4000-8000-000000000002"
+UTC_SECONDS_PATTERN = (
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
 
 
 class DeterministicEntropy:
@@ -410,6 +413,42 @@ def test_c13_served_openapi_matches_account_encoding_and_validation_errors() -> 
             assert response["content"]["application/json"]["schema"] == {
                 "$ref": "#/components/schemas/RequestValidationFailure"
             }
+
+
+def test_c13_descriptor_timestamp_schema_matches_runtime_boundary() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 1_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    transition = _signed_transition(
+        account_id=ACCOUNT_A,
+        revision=REVISION_1,
+        parent_revision=None,
+        device=device,
+        signer=device,
+    )
+    transition["transition"]["device"]["descriptor"]["created_at"] = (
+        "2026-08-29T00:00:00+00:00"
+    )
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        json=transition,
+    )
+    assert response.status_code == 422
+    assert backend._accounts == {}
+
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    canonical = contract["components"]["schemas"]["DeviceDescriptor"]["properties"][
+        "created_at"
+    ]
+    served = client.get("/openapi.json").json()["components"]["schemas"][
+        "DeviceDescriptorModel"
+    ]["properties"]["created_at"]
+    for timestamp in (canonical, served):
+        assert timestamp["format"] == "date-time"
+        assert timestamp["pattern"] == UTC_SECONDS_PATTERN
 
 
 def test_c13_account_session_authenticates_device_and_stores_only_token_digest(
