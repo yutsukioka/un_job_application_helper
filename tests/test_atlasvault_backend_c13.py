@@ -316,6 +316,39 @@ def test_c13_account_wire_models_reject_coerced_json_types() -> None:
     assert backend._accounts == {}
 
 
+def test_c13_registry_revision_schema_matches_runtime_uuid_boundary() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 1_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    transition = _signed_transition(
+        account_id=ACCOUNT_A,
+        revision="not-a-uuid",
+        parent_revision=None,
+        device=device,
+        signer=device,
+    )
+
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        json=transition,
+    )
+    assert response.status_code == 422
+
+    schema = client.get("/openapi.json").json()["components"]["schemas"][
+        "DeviceRegistryTransitionModel"
+    ]["properties"]
+    assert schema["revision"]["format"] == "uuid"
+    parent = next(
+        option
+        for option in schema["parent_revision"]["anyOf"]
+        if option.get("type") == "string"
+    )
+    assert parent["format"] == "uuid"
+
+
 def test_c13_account_session_authenticates_device_and_stores_only_token_digest(
     backend_client: tuple[AtlasVaultBackend, TestClient],
 ) -> None:

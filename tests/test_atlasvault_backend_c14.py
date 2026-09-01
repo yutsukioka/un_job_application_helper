@@ -740,6 +740,45 @@ def test_c14_rejected_write_does_not_retain_empty_vault_state(
     assert (ACCOUNT_ID, rejected_vault) not in backend.storage._vaults
 
 
+def test_c14_rejected_object_write_does_not_retain_empty_history(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+) -> None:
+    backend, client, authorization = storage_client
+    metadata_path = f"/v1/vaults/{VAULT_ID}/metadata"
+    assert (
+        client.put(
+            metadata_path,
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="retain-vault",
+            ),
+            json=_metadata(revision="retain-vault-r1", payload=b"metadata"),
+        ).status_code
+        == 200
+    )
+
+    object_id = "rejected-object-history"
+    rejected = _opaque_envelope(
+        object_id=object_id,
+        revision="rejected-object-r1",
+        parent_revision="missing-parent",
+        payload=b"rejected-object",
+    )
+    response = client.put(
+        f"/v1/vaults/{VAULT_ID}/objects/{object_id}",
+        headers=_write_headers(
+            authorization,
+            expected="missing-parent",
+            idempotency_key="rejected-object-history",
+        ),
+        json=rejected,
+    )
+    assert response.status_code == 409
+    state = backend.storage._vaults[(ACCOUNT_ID, VAULT_ID)]
+    assert object_id not in state.object_revision_fingerprints
+
+
 @pytest.mark.parametrize(
     "extra_field",
     ["plaintext", "passphrase", "raw_vault_key_b64", "unwrapped_key"],
