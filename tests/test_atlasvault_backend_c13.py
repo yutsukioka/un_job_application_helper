@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 
 from atlasvault_api.app import (
     ACCOUNT_SESSION_PROOF_DOMAIN,
+    CHALLENGE_LIFETIME_SECONDS,
     DEVICE_REGISTRY_TRANSITION_DOMAIN,
     SESSION_LIFETIME_SECONDS,
     AtlasVaultBackend,
@@ -310,6 +311,32 @@ def test_c13_session_issuance_prunes_expired_digests() -> None:
     second_digest = hashlib.sha256(second_token.encode("ascii")).digest()
     assert first_digest not in backend._sessions
     assert set(backend._sessions) == {second_digest}
+
+
+def test_c13_challenge_issuance_prunes_expired_challenges() -> None:
+    now = [1_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    client = TestClient(create_app(backend))
+    device_a, _ = _identities()
+    _bootstrap(client, device_a)
+
+    first = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": device_a.device_id},
+    ).json()
+    first_key = (ACCOUNT_A, first["challenge_id"])
+    assert first_key in backend._challenges
+
+    now[0] += CHALLENGE_LIFETIME_SECONDS + 1
+    second = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": device_a.device_id},
+    ).json()
+    assert first_key not in backend._challenges
+    assert set(backend._challenges) == {(ACCOUNT_A, second["challenge_id"])}
 
 
 def test_c13_bearer_scheme_is_case_insensitive(

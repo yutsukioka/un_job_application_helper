@@ -350,6 +350,19 @@ def test_c14_changed_revision_reuse_is_rejected_across_resource_history(
         == 409
     )
     assert client.get(metadata_path, headers=authorization).json() == metadata_second
+    assert (
+        client.put(
+            metadata_path,
+            headers=_write_headers(
+                authorization,
+                expected="history-metadata-r2",
+                idempotency_key="history-metadata-exact-reuse",
+            ),
+            json=metadata_first,
+        ).status_code
+        == 409
+    )
+    assert client.get(metadata_path, headers=authorization).json() == metadata_second
 
     object_path = f"/v1/vaults/{VAULT_ID}/objects/history-object"
     object_first = _opaque_envelope(
@@ -655,14 +668,26 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     assert parameters["Cursor"]["name"] == "cursor"
     assert parameters["PageSize"]["name"] == "page_size"
 
-    schemas = contract["components"]["schemas"]
-    assert (
-        schemas["EncryptedVaultMetadataEnvelope"]["properties"]["revision"]["maxLength"]
-        == 128
-    )
-    opaque_properties = schemas["OpaqueCiphertextEnvelope"]["properties"]
-    assert opaque_properties["revision"]["maxLength"] == 128
-    assert opaque_properties["parent_revision"]["maxLength"] == 128
+    generated = create_app(AtlasVaultBackend()).openapi()
+    for schemas in (
+        contract["components"]["schemas"],
+        generated["components"]["schemas"],
+    ):
+        metadata_properties = schemas["EncryptedVaultMetadataEnvelope"]["properties"]
+        opaque_properties = schemas["OpaqueCiphertextEnvelope"]["properties"]
+        for identifier in (
+            metadata_properties["vault_id"],
+            opaque_properties["object_id"],
+        ):
+            assert identifier["minLength"] == 1
+            assert identifier["maxLength"] == 128
+        for revision in (
+            metadata_properties["revision"],
+            opaque_properties["revision"],
+            opaque_properties["parent_revision"],
+        ):
+            assert revision["maxLength"] == 128
+            assert revision["not"] == {"const": "*"}
 
     for path, method in (
         ("/v1/vaults/{vault_id}/metadata", "put"),
@@ -682,3 +707,33 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     }
     assert "#/components/parameters/Cursor" in patch_refs
     assert "#/components/parameters/PageSize" in patch_refs
+
+
+@pytest.mark.parametrize("resource", ["metadata", "object"])
+def test_c14_creation_wildcard_cannot_be_stored_as_a_revision(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+    resource: str,
+) -> None:
+    _, client, authorization = storage_client
+    if resource == "metadata":
+        path = f"/v1/vaults/{VAULT_ID}/metadata"
+        envelope = _metadata(revision="*", payload=b"wildcard-metadata")
+    else:
+        path = f"/v1/vaults/{VAULT_ID}/objects/wildcard-object"
+        envelope = _opaque_envelope(
+            object_id="wildcard-object",
+            revision="*",
+            parent_revision=None,
+            payload=b"wildcard-object",
+        )
+
+    response = client.put(
+        path,
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key=f"wildcard-{resource}",
+        ),
+        json=envelope,
+    )
+    assert response.status_code == 422
