@@ -337,16 +337,74 @@ def test_c13_registry_revision_schema_matches_runtime_uuid_boundary() -> None:
     )
     assert response.status_code == 422
 
-    schema = client.get("/openapi.json").json()["components"]["schemas"][
-        "DeviceRegistryTransitionModel"
-    ]["properties"]
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    canonical_schemas = contract["components"]["schemas"]
+    for schema_name in ("DeviceRegistryTransition", "DeviceRegistryView"):
+        revision = canonical_schemas[schema_name]["properties"]["revision"]
+        assert revision["format"] == "uuid"
+        assert revision["pattern"] == (
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            "[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
+    canonical_parent = canonical_schemas["DeviceRegistryTransition"]["properties"][
+        "parent_revision"
+    ]
+    assert canonical_parent["pattern"] == canonical_schemas[
+        "DeviceRegistryTransition"
+    ]["properties"]["revision"]["pattern"]
+
+    served_schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    schema = served_schemas["DeviceRegistryTransitionModel"]["properties"]
     assert schema["revision"]["format"] == "uuid"
+    assert schema["revision"]["pattern"] == canonical_schemas[
+        "DeviceRegistryTransition"
+    ]["properties"]["revision"]["pattern"]
     parent = next(
         option
         for option in schema["parent_revision"]["anyOf"]
         if option.get("type") == "string"
     )
     assert parent["format"] == "uuid"
+    assert parent["pattern"] == schema["revision"]["pattern"]
+    registry_view_revision = served_schemas["DeviceRegistryView"]["properties"][
+        "revision"
+    ]
+    assert registry_view_revision["format"] == "uuid"
+    assert registry_view_revision["pattern"] == schema["revision"]["pattern"]
+
+
+def test_c13_served_openapi_matches_account_encoding_and_validation_errors() -> None:
+    generated = create_app(AtlasVaultBackend()).openapi()
+    schemas = generated["components"]["schemas"]
+    encoded_fields = {
+        "DeviceDescriptorModel": (
+            "signing_public_key",
+            "agreement_public_key",
+        ),
+        "SignedDeviceDescriptorModel": ("signature",),
+        "SignedDeviceRegistryTransitionModel": ("signature",),
+        "AuthenticationChallenge": ("challenge",),
+        "SessionProofRequest": ("signature",),
+    }
+    for schema_name, fields in encoded_fields.items():
+        for field_name in fields:
+            assert (
+                schemas[schema_name]["properties"][field_name]["contentEncoding"]
+                == "base64"
+            )
+
+    validation_schema = schemas["RequestValidationFailure"]
+    assert validation_schema["properties"]["detail"] == {
+        "const": "Invalid request.",
+        "title": "Detail",
+        "type": "string",
+    }
+    for path_item in generated["paths"].values():
+        for operation in path_item.values():
+            response = operation["responses"]["422"]
+            assert response["content"]["application/json"]["schema"] == {
+                "$ref": "#/components/schemas/RequestValidationFailure"
+            }
 
 
 def test_c13_account_session_authenticates_device_and_stores_only_token_digest(

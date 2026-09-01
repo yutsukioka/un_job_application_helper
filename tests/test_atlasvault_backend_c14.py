@@ -837,6 +837,18 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
         ):
             assert identifier["minLength"] == 1
             assert identifier["maxLength"] == 128
+        for encoded in (
+            metadata_properties["nonce_b64"],
+            metadata_properties["ciphertext_b64"],
+            metadata_properties["aad_b64"],
+            metadata_properties["signature_b64"],
+            opaque_properties["nonce_b64"],
+            opaque_properties["ciphertext_b64"],
+            opaque_properties["aad_b64"],
+            opaque_properties["signature_b64"],
+        ):
+            assert encoded["minLength"] == 1
+            assert encoded["contentEncoding"] == "base64"
         for revision in (
             metadata_properties["revision"],
             opaque_properties["revision"],
