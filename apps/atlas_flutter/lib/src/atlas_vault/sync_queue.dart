@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -31,6 +32,51 @@ final class AtlasVaultEncryptedPatchException implements Exception {
 }
 
 Never _invalid() => throw const AtlasVaultEncryptedPatchException();
+
+typedef _MallocNative = Pointer<Void> Function(IntPtr);
+typedef _MallocDart = Pointer<Void> Function(int);
+typedef _FreeNative = Void Function(Pointer<Void>);
+typedef _FreeDart = void Function(Pointer<Void>);
+typedef _OpenNative = Int32 Function(Pointer<Uint8>, Int32);
+typedef _OpenDart = int Function(Pointer<Uint8>, int);
+typedef _FsyncNative = Int32 Function(Int32);
+typedef _FsyncDart = int Function(int);
+typedef _CloseNative = Int32 Function(Int32);
+typedef _CloseDart = int Function(int);
+
+Future<void> _syncParentDirectory(File file) async {
+  if (Platform.isWindows) return;
+  if (!(Platform.isLinux ||
+      Platform.isMacOS ||
+      Platform.isAndroid ||
+      Platform.isIOS)) {
+    _invalid();
+  }
+  final library = DynamicLibrary.process();
+  final malloc = library.lookupFunction<_MallocNative, _MallocDart>('malloc');
+  final free = library.lookupFunction<_FreeNative, _FreeDart>('free');
+  final open = library.lookupFunction<_OpenNative, _OpenDart>('open');
+  final fsync = library.lookupFunction<_FsyncNative, _FsyncDart>('fsync');
+  final close = library.lookupFunction<_CloseNative, _CloseDart>('close');
+  final bytes = utf8.encode(file.parent.path);
+  final path = malloc(bytes.length + 1).cast<Uint8>();
+  if (path.address == 0) _invalid();
+  var descriptor = -1;
+  try {
+    path.asTypedList(bytes.length + 1)
+      ..setRange(0, bytes.length, bytes)
+      ..[bytes.length] = 0;
+    descriptor = open(path, 0);
+    if (descriptor < 0) _invalid();
+    final syncResult = fsync(descriptor);
+    final closeResult = close(descriptor);
+    descriptor = -1;
+    if (syncResult != 0 || closeResult != 0) _invalid();
+  } finally {
+    if (descriptor >= 0) close(descriptor);
+    free(path.cast<Void>());
+  }
+}
 
 Map<String, Object?> _object(Object? value) {
   if (value is! Map) _invalid();
@@ -390,6 +436,7 @@ final class _EncryptedQueueFile {
         await staged.writeAsBytes(encoded, flush: true);
         if (beforeReplace != null) await beforeReplace();
         await replaceCacheFile(targetFile: file, stagedFile: staged);
+        await _syncParentDirectory(file);
       } finally {
         if (await staged.exists()) await staged.delete();
       }

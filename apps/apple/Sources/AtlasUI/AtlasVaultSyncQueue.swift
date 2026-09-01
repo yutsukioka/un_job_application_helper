@@ -97,7 +97,10 @@ private func canonicalBase64(
 private func canonicalJSON(_ value: [String: Any]) throws -> Data {
     guard JSONSerialization.isValidJSONObject(value) else { throw invalid() }
     do {
-        return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        return try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
     } catch {
         throw invalid()
     }
