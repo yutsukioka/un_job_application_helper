@@ -19,12 +19,14 @@ sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 from atlasvault_api.app import (
     ACCOUNT_SESSION_PROOF_DOMAIN,
     DEVICE_REGISTRY_TRANSITION_DOMAIN,
+    SESSION_LIFETIME_SECONDS,
     AtlasVaultBackend,
     create_app,
 )
 from vaultsync.device_identity import (
     DeviceIdentity,
     device_identity_from_private_keys,
+    generate_device_identity,
 )
 from vaultsync.service_contract_guard import (
     BANNED_WIRE_FIELD_NAMES,
@@ -289,6 +291,42 @@ def test_c13_account_session_authenticates_device_and_stores_only_token_digest(
     assert hashlib.sha256(token.encode("ascii")).digest() in backend._sessions
 
 
+def test_c13_session_issuance_prunes_expired_digests() -> None:
+    now = [1_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    client = TestClient(create_app(backend))
+    device_a, _ = _identities()
+    _bootstrap(client, device_a)
+
+    first_token, _ = _session(client, device_a)
+    first_digest = hashlib.sha256(first_token.encode("ascii")).digest()
+    assert first_digest in backend._sessions
+
+    now[0] += SESSION_LIFETIME_SECONDS + 1
+    second_token, _ = _session(client, device_a)
+    second_digest = hashlib.sha256(second_token.encode("ascii")).digest()
+    assert first_digest not in backend._sessions
+    assert set(backend._sessions) == {second_digest}
+
+
+def test_c13_bearer_scheme_is_case_insensitive(
+    backend_client: tuple[AtlasVaultBackend, TestClient],
+) -> None:
+    _, client = backend_client
+    device_a, _ = _identities()
+    _bootstrap(client, device_a)
+    token, _ = _session(client, device_a)
+
+    response = client.get(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers={"Authorization": f"bEaReR {token}"},
+    )
+    assert response.status_code == 200
+
+
 def test_c13_session_proof_is_single_use_and_account_scoped(
     backend_client: tuple[AtlasVaultBackend, TestClient],
 ) -> None:
@@ -350,6 +388,75 @@ def test_c13_signed_device_transition_adds_public_descriptor_only(
     serialized = json.dumps(registry, sort_keys=True)
     assert "private" not in serialized.casefold()
     assert "passphrase" not in serialized.casefold()
+
+
+def test_c13_registry_rejects_a_previously_used_revision(
+    backend_client: tuple[AtlasVaultBackend, TestClient],
+) -> None:
+    _, client = backend_client
+    device_a, device_b = _identities()
+    device_c = generate_device_identity(created_at="2026-08-29T00:00:00Z")
+    _bootstrap(client, device_a)
+    token, _ = _session(client, device_a)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    first = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers=headers,
+        json=_signed_transition(
+            account_id=ACCOUNT_A,
+            revision=REVISION_2,
+            parent_revision=REVISION_1,
+            device=device_b,
+            signer=device_a,
+        ),
+    )
+    assert first.status_code == 200, first.text
+
+    cycled = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers=headers,
+        json=_signed_transition(
+            account_id=ACCOUNT_A,
+            revision=REVISION_1,
+            parent_revision=REVISION_2,
+            device=device_c,
+            signer=device_a,
+        ),
+    )
+    assert cycled.status_code == 409
+    assert client.get(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers=headers,
+    ).json()["revision"] == REVISION_2
+
+
+def test_c13_served_openapi_declares_bearer_security() -> None:
+    generated = create_app().openapi()
+    assert generated["components"]["securitySchemes"]["bearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+    }
+
+    protected_operations = {
+        ("/v1/accounts/{account_id}/devices", "get"),
+        ("/v1/accounts/{account_id}/devices", "post"),
+        ("/v1/vaults/{vault_id}/metadata", "get"),
+        ("/v1/vaults/{vault_id}/metadata", "put"),
+        ("/v1/vaults/{vault_id}/objects/{object_id}", "get"),
+        ("/v1/vaults/{vault_id}/objects/{object_id}", "put"),
+        ("/v1/vaults/{vault_id}/patches", "get"),
+        ("/v1/vaults/{vault_id}/patches", "post"),
+        ("/v1/vaults/{vault_id}/snapshots", "get"),
+        ("/v1/vaults/{vault_id}/snapshots", "put"),
+    }
+    for path, method in protected_operations:
+        operation = generated["paths"][path][method]
+        assert operation["security"] == [{"bearerAuth": []}]
+        assert all(
+            parameter.get("name") != "Authorization"
+            for parameter in operation.get("parameters", [])
+        )
 
 
 def test_c13_registry_tamper_and_stale_parent_fail_closed(

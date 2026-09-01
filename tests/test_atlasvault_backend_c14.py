@@ -312,6 +312,126 @@ def test_c14_conditional_object_write_rejects_stale_parent(
     assert client.get(path, headers=authorization).json() == second
 
 
+def test_c14_changed_revision_reuse_is_rejected_across_resource_history(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+) -> None:
+    _, client, authorization = storage_client
+
+    metadata_path = f"/v1/vaults/{VAULT_ID}/metadata"
+    metadata_first = _metadata(revision="history-metadata-r1", payload=b"first")
+    metadata_second = _metadata(revision="history-metadata-r2", payload=b"second")
+    metadata_reused = _metadata(revision="history-metadata-r1", payload=b"changed")
+    for expected, key, envelope in (
+        ("*", "history-metadata-1", metadata_first),
+        ("history-metadata-r1", "history-metadata-2", metadata_second),
+    ):
+        assert client.put(
+            metadata_path,
+            headers=_write_headers(
+                authorization,
+                expected=expected,
+                idempotency_key=key,
+            ),
+            json=envelope,
+        ).status_code == 200
+    assert client.put(
+        metadata_path,
+        headers=_write_headers(
+            authorization,
+            expected="history-metadata-r2",
+            idempotency_key="history-metadata-reuse",
+        ),
+        json=metadata_reused,
+    ).status_code == 409
+    assert client.get(metadata_path, headers=authorization).json() == metadata_second
+
+    object_path = f"/v1/vaults/{VAULT_ID}/objects/history-object"
+    object_first = _opaque_envelope(
+        object_id="history-object",
+        revision="history-object-r1",
+        parent_revision=None,
+        payload=b"first",
+    )
+    object_second = _opaque_envelope(
+        object_id="history-object",
+        revision="history-object-r2",
+        parent_revision="history-object-r1",
+        payload=b"second",
+    )
+    object_reused = _opaque_envelope(
+        object_id="history-object",
+        revision="history-object-r1",
+        parent_revision="history-object-r2",
+        payload=b"changed",
+    )
+    for expected, key, envelope in (
+        ("*", "history-object-1", object_first),
+        ("history-object-r1", "history-object-2", object_second),
+    ):
+        assert client.put(
+            object_path,
+            headers=_write_headers(
+                authorization,
+                expected=expected,
+                idempotency_key=key,
+            ),
+            json=envelope,
+        ).status_code == 200
+    assert client.put(
+        object_path,
+        headers=_write_headers(
+            authorization,
+            expected="history-object-r2",
+            idempotency_key="history-object-reuse",
+        ),
+        json=object_reused,
+    ).status_code == 409
+    assert client.get(object_path, headers=authorization).json() == object_second
+
+    snapshot_path = f"/v1/vaults/{VAULT_ID}/snapshots"
+    snapshot_first = _opaque_envelope(
+        object_id="history-snapshot",
+        revision="history-snapshot-r1",
+        parent_revision=None,
+        payload=b"first",
+    )
+    snapshot_second = _opaque_envelope(
+        object_id="history-snapshot",
+        revision="history-snapshot-r2",
+        parent_revision="history-snapshot-r1",
+        payload=b"second",
+    )
+    snapshot_reused = _opaque_envelope(
+        object_id="history-snapshot",
+        revision="history-snapshot-r1",
+        parent_revision="history-snapshot-r2",
+        payload=b"changed",
+    )
+    for expected, key, envelope in (
+        ("*", "history-snapshot-1", snapshot_first),
+        ("history-snapshot-r1", "history-snapshot-2", snapshot_second),
+    ):
+        assert client.put(
+            snapshot_path,
+            headers=_write_headers(
+                authorization,
+                expected=expected,
+                idempotency_key=key,
+            ),
+            json=envelope,
+        ).status_code == 200
+    assert client.put(
+        snapshot_path,
+        headers=_write_headers(
+            authorization,
+            expected="history-snapshot-r2",
+            idempotency_key="history-snapshot-reuse",
+        ),
+        json=snapshot_reused,
+    ).status_code == 409
+    assert client.get(snapshot_path, headers=authorization).json() == snapshot_second
+
+
 def test_c14_concurrent_compare_and_set_accepts_exactly_one_writer(
     storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
 ) -> None:
@@ -516,6 +636,14 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     assert parameters["IdempotencyKey"]["name"] == "Idempotency-Key"
     assert parameters["Cursor"]["name"] == "cursor"
     assert parameters["PageSize"]["name"] == "page_size"
+
+    schemas = contract["components"]["schemas"]
+    assert schemas["EncryptedVaultMetadataEnvelope"]["properties"]["revision"][
+        "maxLength"
+    ] == 128
+    opaque_properties = schemas["OpaqueCiphertextEnvelope"]["properties"]
+    assert opaque_properties["revision"]["maxLength"] == 128
+    assert opaque_properties["parent_revision"]["maxLength"] == 128
 
     for path, method in (
         ("/v1/vaults/{vault_id}/metadata", "put"),
