@@ -255,7 +255,7 @@ class InMemoryOpaqueStore:
             if replay is not None:
                 return _require_opaque(replay)
             current = state.objects.get(object_id)
-            revisions = state.object_revision_fingerprints.setdefault(object_id, {})
+            revisions = state.object_revision_fingerprints.get(object_id, {})
             duplicate = _same_revision(current, envelope)
             if duplicate is not None:
                 self._record(
@@ -271,6 +271,7 @@ class InMemoryOpaqueStore:
             _require_parent_cas(current, envelope, expected_revision)
             state.objects[object_id] = envelope
             revisions[envelope.revision] = _envelope_fingerprint(envelope)
+            state.object_revision_fingerprints[object_id] = revisions
             self._record(
                 state,
                 scope,

@@ -69,7 +69,17 @@ SIGNATURE_BYTES = 64
 CHALLENGE_LIFETIME_SECONDS = 120
 SESSION_LIFETIME_SECONDS = 900
 MAX_KEY_EPOCH = (1 << 63) - 1
+REGISTRY_REVISION_PATTERN = (
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 _STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
+RegistryRevision = Annotated[
+    str,
+    Field(
+        pattern=REGISTRY_REVISION_PATTERN,
+        json_schema_extra={"format": "uuid"},
+    ),
+]
 
 
 class DeviceDescriptorModel(BaseModel):
@@ -120,8 +130,8 @@ class DeviceRegistryTransitionModel(BaseModel):
     format: Literal["atlasvault-device-registry-transition"]
     version: Literal[1]
     account_id: str = Field(pattern=ACCOUNT_ID_PATTERN)
-    revision: str
-    parent_revision: str | None
+    revision: RegistryRevision
+    parent_revision: RegistryRevision | None
     operation: Literal["add"]
     device: SignedDeviceDescriptorModel
     signer_device_id: str = Field(pattern=DEVICE_ID_PATTERN)
