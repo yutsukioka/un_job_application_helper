@@ -11,7 +11,7 @@ final class AtlasVaultRevocationTests: XCTestCase {
     directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     var root = URL(fileURLWithPath: #filePath)
-    for _ in 0..<6 { root.deleteLastPathComponent() }
+    for _ in 0..<5 { root.deleteLastPathComponent() }
     vector =
       try JSONSerialization.jsonObject(
         with: Data(

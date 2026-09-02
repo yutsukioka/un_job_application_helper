@@ -22,6 +22,17 @@ A, B = [e['device_id'] for e in V['registry']]
 KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
 
 
+def test_native_removal_prompts_are_explicit_and_fail_closed():
+    root = VECTOR.parents[3]
+    android = (root / 'apps/atlas_flutter/android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/AtlasVaultAndroidStorage.kt').read_text()
+    windows = (root / 'apps/atlas_flutter/windows/runner/atlas_vault_windows_storage.cpp').read_text()
+    for source in (android, windows):
+        assert 'authorizeDeviceRemoval' in source
+        assert 'Authorize AtlasVault device removal' in source
+    assert 'Activity.RESULT_OK' in android
+    assert 'UserConsentVerificationResult::Verified' in windows
+
+
 def store(path):
     return RevocationRegistry(path, bytes([7]) * 32, 'account-c25', 'vault-c25', 3,
                               V['registry'], 'ab' * 32)
