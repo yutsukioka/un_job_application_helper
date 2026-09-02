@@ -10,6 +10,7 @@ import 'package:pointycastle/export.dart' show SHA256Digest;
 import '../cache_file_replacement.dart';
 
 part 'authenticated_state_view.dart';
+part 'sync_recovery.dart';
 
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';

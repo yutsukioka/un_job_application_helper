@@ -26,7 +26,7 @@ private func viewBoundary<T>(_ body: () throws -> T) throws -> T {
   }
 }
 
-private func viewDigest(_ bytes: Data) -> String {
+func viewDigest(_ bytes: Data) -> String {
   SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 }
 
@@ -37,7 +37,7 @@ private func viewHex(_ raw: Any?) throws -> String {
   return value
 }
 
-private func viewIdentifier(_ raw: Any?) throws -> String {
+func viewIdentifier(_ raw: Any?) throws -> String {
   guard let value = raw as? String, (1...128).contains(value.utf8.count),
     value.utf8.allSatisfy({
       (48...57).contains($0) || (65...90).contains($0)
@@ -47,7 +47,7 @@ private func viewIdentifier(_ raw: Any?) throws -> String {
   return value
 }
 
-private func viewInteger(_ raw: Any?) throws -> Int64 {
+func viewInteger(_ raw: Any?) throws -> Int64 {
   guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
     ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(String(cString: number.objCType)),
     let value = Int64(number.stringValue), (1...9_007_199_254_740_991).contains(value)
@@ -78,7 +78,7 @@ private func viewMessage(_ root: String) -> Data {
   return Data("atlasvault-state-view-signature-v2\0".utf8) + Data(bytes)
 }
 
-private func verifiedView(_ value: [String: Any], publicKey: Data) throws -> [String: Any] {
+func verifiedView(_ value: [String: Any], publicKey: Data) throws -> [String: Any] {
   guard Set(value.keys) == Set(["format", "version", "root", "signature_b64"] + viewFields)
   else { throw AtlasVaultStateViewError.rejected }
   var unsigned = value

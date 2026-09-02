@@ -1,6 +1,19 @@
 {
   "format": "atlasvault-sync-recovery-vectors",
   "version": 1,
+  "expected_checkpoint": {
+    "sequence": 2,
+    "cursor": "34f29d468d7acd8a515b2935013465e815b12f215ba58fe1a25f0e0497b6d0e1",
+    "records": [
+      {
+        "object_id": "object_a",
+        "revision": "rev-002",
+        "content_sha256": "d9c2e699586b948f4022c7994ffe14c63a4e8e312ee2aee1ebe51bed85705cfd",
+        "envelope_sha256": "d49ed45671c6ba740cf5999102f58ee5ea75cabe305b7768fc61f556f2a9d5dc",
+        "tombstone": true
+      }
+    ]
+  },
   "warning": "Synthetic test-only ciphertext and public signatures. No private keys.",
   "signing_public_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
   "packets": {
