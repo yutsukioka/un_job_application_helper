@@ -46,6 +46,11 @@ def run(mode, directory, plan_path, output):
             else []
         )
         for action in actions:
+            def interrupt(point):
+                if action.get("stop_after") == point:
+                    Path(output).write_bytes(canonical({"interrupted_after": point}))
+                    while True:
+                        time.sleep(60)
             try:
                 if "peer" in action:
                     peer = json.loads(Path(action["peer"]).read_bytes())[name]["history"]
@@ -56,17 +61,21 @@ def run(mode, directory, plan_path, output):
                     accepted = c.ingest(
                         p["view"], p["registry"], p["collection"], base64.b64decode(p["opaque_b64"])
                     )
+                    interrupt("admission")
                     if accepted:
                         # Guard admission precedes receipt advancement; rejected input never enters queues.
                         op = EncryptedPatchOperation.from_dict(p["operation"])
                         outbox.enqueue(op)
+                        interrupt("outbox")
                         inbox.stage_page(
                             expected_cursor=inbox.cursor,
                             next_cursor=p["view"]["root"],
                             operations=[op],
                         )
+                        interrupt("inbox")
                         while inbox.apply_next(lambda _: None) is not None:
                             pass
+                        interrupt("receipt")
                         outbox.confirm_remote_acceptance(op.operation_id)
                     categories.append("ACCEPTED" if accepted else "IDEMPOTENT")
             except StateViewError as error:

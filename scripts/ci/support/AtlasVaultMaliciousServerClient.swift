@@ -43,6 +43,12 @@ private struct AtlasVaultMaliciousServerClient {
         ? scenario["baseline"] as! [[String: Any]]
         : mode == "attack" ? scenario["attack"] as! [[String: Any]] : []
       for action in actions {
+        func interrupt(_ point: String) throws {
+          if action["stop_after"] as? String == point {
+            try canonical(["interrupted_after": point]).write(to: URL(fileURLWithPath: args[3]), options: .atomic)
+            while true { Thread.sleep(forTimeInterval: 60) }
+          }
+        }
         do {
           if let path = action["peer"] as? String {
             let peer = try load(path)[name] as! [String: Any]
@@ -55,14 +61,18 @@ private struct AtlasVaultMaliciousServerClient {
               view: view, registry: p["registry"] as! [[String: Any]],
               collection: p["collection"] as! [String: Any],
               opaqueState: Data(base64Encoded: p["opaque_b64"] as! String)!)
+            try interrupt("admission")
             if accepted {
               let op = try AtlasVaultEncryptedPatchOperation(
                 jsonObject: p["operation"] as! [String: Any])
               try outbox.enqueue(op)
+              try interrupt("outbox")
               try inbox.stagePage(
                 expectedCursor: inbox.cursor(), nextCursor: view["root"] as? String,
                 operations: [op])
+              try interrupt("inbox")
               while try inbox.applyNext({ _ in }) != nil {}
+              try interrupt("receipt")
               try outbox.confirmRemoteAcceptance(op.operationID)
             }
             categories.append(accepted ? "ACCEPTED" : "IDEMPOTENT")

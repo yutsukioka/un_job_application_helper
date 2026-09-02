@@ -379,6 +379,39 @@
         "signature_b64": "443Gw1rYzQVIVrPru5AqwhrsxPqXERx/nvvD0MHk1DiP4RrtPg2NpE49x1inGz/l9/eHWs60tG+eSeNGqeokAg=="
       },
       "opaque_b64": "eyJmb3JtYXQiOiJhdGxhc3ZhdWx0LWd1YXJkZWQtY29sbGVjdGlvbiIsInJlY29yZHMiOlt7ImFhZF9iNjQiOiJleUpyYVc1a0lqb2laVzVqY25sd2RHVmtMWEJoZEdOb0xXUmxiR1YwWlNKOSIsImNpcGhlcnRleHRfYjY0IjoiTURFeU16UTFOamM0T1RvN1BEMCtQMEJCUWtORVJVWkhTRWxLUzB4TlRrOD0iLCJjb250ZW50X3NoYTI1NiI6ImQ5YzJlNjk5NTg2Yjk0OGY0MDIyYzc5OTRmZmUxNGM2M2E0ZThlMzEyZWUyYWVlMWViZTUxYmVkODU3MDVjZmQiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjoyLCJub25jZV9iNjQiOiJEQTBPRHhBUkVoTVVGUllYIiwib2JqZWN0X2lkIjoib2JqZWN0X2EiLCJwYXJlbnRfcmV2aXNpb24iOiJyZXYtMDAxIiwicmV2aXNpb24iOiJyZXYtMDAyIiwic2lnbmF0dXJlX2I2NCI6ImdJR0NnNFNGaG9lSWlZcUxqSTJPajVDUmtwT1VsWmFYbUptYW01eWRucCtnb2FLanBLV21wNmlwcXF1c3JhNnZzTEd5czdTMXRyZTR1YnE3dkwyK3Z3PT0iLCJ0b21ic3RvbmUiOnRydWUsInZlcnNpb24iOjF9XSwicm91dGUiOiJjb21wYWN0aW9uIiwidmVyc2lvbiI6MX0="
+    },
+    "unknown_envelope": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 3,
+        "previous_root": "34f29d468d7acd8a515b2935013465e815b12f215ba58fe1a25f0e0497b6d0e1",
+        "collection_root": "97402989d4eea132c8d5e361ece417e621090484ea40062a8d7b14cf61820490",
+        "registry_root": "94990d4ab01d0903d5a72d645888e0eff5d240e30cb2b8a29e021b60fea76fe8",
+        "previous_registry_root": "94990d4ab01d0903d5a72d645888e0eff5d240e30cb2b8a29e021b60fea76fe8",
+        "key_epoch": 2,
+        "root": "8bb06d7361bd934838093e8f8e2297ca010669f1d51e5442cad3effb47089be3",
+        "signature_b64": "MBxVjfbeXMRVY45uqMCTyo/FA9mZ2vf80DiAZYVD9xUre9wD5Q6wR6WLvdYiI+7T7+GARgk53V46QgZwRO5SAg=="
+      },
+      "registry": [
+        {
+          "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "descriptor_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 3,
+        "previous_root": "3b3c1fcbaf8325b51c486a78a62a0ce67675b2b3c851c0bcaa9c53223d5f35f6",
+        "state_sha256": "3e817aabdcc48d10b48b009f6a5e8cce425380c3641413e72b1790a69bb8f6e7",
+        "root": "97402989d4eea132c8d5e361ece417e621090484ea40062a8d7b14cf61820490",
+        "signature_b64": "QmGVoaD30PrmoZQKT89rgorwzNvlT9w5HXoC2k05RFAHhvL9cAOVSfTdUloPvB/h7MZwMf7UE9S4v8baAegdBQ=="
+      },
+      "opaque_b64": "eyJmb3JtYXQiOiJhdGxhc3ZhdWx0LWd1YXJkZWQtY29sbGVjdGlvbiIsInJlY29yZHMiOlt7ImFhZF9iNjQiOiJleUpyYVc1a0lqb2laVzVqY25sd2RHVmtMWEJoZEdOb0xXUmxiR1YwWlNKOSIsImNpcGhlcnRleHRfYjY0IjoiTURFeU16UTFOamM0T1RvN1BEMCtQMEJCUWtORVJVWkhTRWxLUzB4TlRrOD0iLCJjb250ZW50X3NoYTI1NiI6ImQ5YzJlNjk5NTg2Yjk0OGY0MDIyYzc5OTRmZmUxNGM2M2E0ZThlMzEyZWUyYWVlMWViZTUxYmVkODU3MDVjZmQiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjoyLCJub25jZV9iNjQiOiJEQTBPRHhBUkVoTVVGUllYIiwib2JqZWN0X2lkIjoib2JqZWN0X2EiLCJwYXJlbnRfcmV2aXNpb24iOiJyZXYtMDAxIiwicmV2aXNpb24iOiJyZXYtMDAyIiwic2lnbmF0dXJlX2I2NCI6ImdJR0NnNFNGaG9lSWlZcUxqSTJPajVDUmtwT1VsWmFYbUptYW01eWRucCtnb2FLanBLV21wNmlwcXF1c3JhNnZzTEd5czdTMXRyZTR1YnE3dkwyK3Z3PT0iLCJ0b21ic3RvbmUiOnRydWUsInZlcnNpb24iOjF9LHsiYWFkX2I2NCI6ImV5SnJhVzVrSWpvaVpXNWpjbmx3ZEdWa0xYQmhkR05vSW4wPSIsImNpcGhlcnRleHRfYjY0IjoiRUJFU0V4UVZGaGNZR1JvYkhCMGVIeUFoSWlNa0pTWW5LQ2txS3l3dExpOD0iLCJjb250ZW50X3NoYTI1NiI6Ijg5Yzc0NjA0NTJlZGRmZjExOWZlYTA0MTllNzg1Yzc0ZGUyZmZiMTM5ZGJlNzQzMjNhY2E0YTAxZTE5OGE1ZGMiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjoyLCJub25jZV9iNjQiOiJBQUVDQXdRRkJnY0lDUW9MIiwib2JqZWN0X2lkIjoiZm9ybWF0X3Byb2JlIiwicGFyZW50X3JldmlzaW9uIjpudWxsLCJyZXZpc2lvbiI6InJldi0wMDEiLCJzaWduYXR1cmVfYjY0IjoiUUVGQ1EwUkZSa2RJU1VwTFRFMU9UMUJSVWxOVVZWWlhXRmxhVzF4ZFhsOWdZV0pqWkdWbVoyaHBhbXRzYlc1dmNIRnljM1IxZG5kNGVYcDdmSDErZnc9PSIsInRvbWJzdG9uZSI6ZmFsc2UsInZlcnNpb24iOjJ9XSwicm91dGUiOiJjb21wYWN0aW9uIiwidmVyc2lvbiI6MX0="
     }
   },
   "attacks": [
@@ -430,6 +463,11 @@
     {
       "name": "epoch_regression",
       "packet": "epoch_regression",
+      "reason": "ATLAS_STATE_VIEW_REJECTED"
+    },
+    {
+      "name": "unknown_envelope",
+      "packet": "unknown_envelope",
       "reason": "ATLAS_STATE_VIEW_REJECTED"
     }
   ]

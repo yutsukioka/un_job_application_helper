@@ -55,6 +55,12 @@ Future<void> main(List<String> args) async {
         ? scenario['attack'] as List
         : [];
     for (final action in actions) {
+      Future<void> interrupt(String point) async {
+        if (action['stop_after'] == point) {
+          File(args[3]).writeAsBytesSync(canonical({'interrupted_after': point}), flush: true);
+          while (true) { await Future<void>.delayed(const Duration(seconds: 60)); }
+        }
+      }
       try {
         if (action['peer'] != null) {
           final peer =
@@ -72,17 +78,21 @@ Future<void> main(List<String> args) async {
             object(p['collection']),
             base64Decode(p['opaque_b64'] as String),
           );
+          await interrupt('admission');
           if (accepted) {
             final op = AtlasVaultEncryptedPatchOperation.fromJson(
               object(p['operation']),
             );
             await outbox.enqueue(op);
+            await interrupt('outbox');
             await inbox.stagePage(
               expectedCursor: await inbox.readCursor(),
               nextCursor: p['view']['root'] as String,
               operations: [op],
             );
+            await interrupt('inbox');
             while (await inbox.applyNext((_) async {}) != null) {}
+            await interrupt('receipt');
             await outbox.confirmRemoteAcceptance(op.operationId);
           }
           categories.add(accepted ? 'ACCEPTED' : 'IDEMPOTENT');

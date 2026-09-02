@@ -140,6 +140,7 @@ def packets():
     make("wrong_vault", "three", "two", vault_id="other_vault")
     make("wrong_epoch", "three", "two", key_epoch=descriptor["key_epoch"] + 1)
     make("epoch_regression", "three", "two", key_epoch=1)
+    make("unknown_envelope", "unknown_envelope", "two")
     for name, entries in (
         ("removed_device", registry[:1]),
         (
@@ -187,6 +188,7 @@ def scenarios():
         "cross_vault": ("wrong_vault", "ATLAS_STATE_VIEW_REJECTED"),
         "wrong_epoch": ("wrong_epoch", "ATLAS_STATE_VIEW_REJECTED"),
         "epoch_regression": ("epoch_regression", "ATLAS_STATE_VIEW_REJECTED"),
+        "unknown_envelope": ("unknown_envelope", "ATLAS_STATE_VIEW_REJECTED"),
     }
     cases = {
         name: {"baseline": ["one", "two"], "attack": p, "expected": category}
@@ -350,6 +352,40 @@ def backend_proof(request, all_packets, signer):
         "atomic_rejections": attacks,
         "stored_roots": [v["root"] for v in history],
     }
+
+
+def receipt_crashes(directory, binary, all_packets, descriptor):
+    """Kill after each durable handoff and require an exact retry to finish receipts."""
+    results = []
+    for language in CLIENTS:
+        for point in ("admission", "outbox", "inbox", "receipt"):
+            folder = directory / f"receipt-{language}-{point}"
+            folder.mkdir()
+            plan = {"public_b64": descriptor["signing_public_key"],
+                    "context": {"account_id": ACCOUNT, "vault_id": VAULT, "collection_id": "collection_c21", "key_epoch": descriptor["key_epoch"]},
+                    "packets": all_packets, "scenarios": {"receipt": {
+                        "baseline": [{"packet": "one"}, {"packet": "two"}],
+                        "attack": [{"packet": "three", "stop_after": point}]}}}
+            path = folder / "plan.json"
+            path.write_bytes(transport._canonical(plan))
+            state = folder / "device"
+            client(language, binary, "prepare", state, path, folder / "prepared.json")
+            marker, killed = client(language, binary, "attack", state, path, folder / "interrupted.json")
+            assert marker == {"interrupted_after": point}
+            del plan["scenarios"]["receipt"]["attack"][0]["stop_after"]
+            path.write_bytes(transport._canonical(plan))
+            resumed, resumed_pid = client(language, binary, "attack", state, path, folder / "resumed.json")
+            reopened, reopened_pid = client(language, binary, "inspect", state, path, folder / "reopened.json")
+            r, s = resumed["receipt"], reopened["receipt"]
+            passed = (r["categories"] == ["IDEMPOTENT"] and r["cursor"] == r["checkpoint"]["cursor"]
+                      == all_packets["three"]["view"]["root"] and r["pending_outbox"] == 0
+                      and r["recovery"]["status"] == "ACTIVE"
+                      and all(r[k] == s[k] for k in ("checkpoint", "cursor", "pending_outbox", "recovery")))
+            results.append({"language": language, "killed_after": point, "passed": passed,
+                            "process_ids": [killed, resumed_pid, reopened_pid],
+                            "final_state_sha256": s["state_sha256"], "cursor": s["cursor"],
+                            "accepted_root": s["checkpoint"]["cursor"], "pending_outbox": s["pending_outbox"]})
+    return results
 
 
 def proof(directory, binary, tls, tokens, all_packets, descriptor, signer):
@@ -555,6 +591,8 @@ def proof(directory, binary, tls, tokens, all_packets, descriptor, signer):
                 "attacks": records,
             }
         )
+    receipts = receipt_crashes(directory, binary, all_packets, descriptor)
+    assert all(r["passed"] for r in receipts), receipts
     return {
         "format": "atlasvault-c24-malicious-server-evidence",
         "version": 1,
@@ -566,6 +604,7 @@ def proof(directory, binary, tls, tokens, all_packets, descriptor, signer):
             "separate_processes": True,
         },
         "backend": backend,
+        "receipt_crashes": receipts,
         "pairings": pairings,
         "limitations": LIMITATIONS,
         "protected_artifacts_retained": False,
