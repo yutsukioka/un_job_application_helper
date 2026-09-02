@@ -1,0 +1,46 @@
+{
+  "format": "atlasvault-state-commitment-test-vectors",
+  "version": 1,
+  "signing_public_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "states": [
+    {
+      "opaque_b64": "YSWsZR3RiFSiOK2aM+Nn1ashHjrkD7wZdnwQuAT92wU8II9930ObphtxFrFbjZ6O",
+      "commitment": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state_sha256": "b203566c64fbb1706d53bad7ec0dcff53d7d91940ca697b9fda2d4ea333eefa8",
+        "root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "signature_b64": "7I203oF2XUN3Upsr0/9R0F4X2XQz4DNRATSQ1AVCY/5XYmNTjUjm0dCjJOJWKkyJ6Le+6d/GFU6PI8gW2gENAw=="
+      }
+    },
+    {
+      "opaque_b64": "bww3uS4O6ZzmTaAJeMVPhulWea+hGvXrepW70QHvka4MatSsnoYwxRVWvwuDNgV5",
+      "commitment": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 2,
+        "previous_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "state_sha256": "5a3c1118e63a13b9bdb45c9dcbcfa4b8d5bfe91e439e7762889000b1d6709d4f",
+        "root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "signature_b64": "VbqxD8yINIIEnPKitpLFGnWVKY6z5KltopwONLYIZ8rjxWeFPjDkkb8AjIAO3yd5RUUlqHlZ7/DUID9hAx7YAQ=="
+      }
+    },
+    {
+      "opaque_b64": "NtFEVerDNN+Voexnvj3o1MNSqc0ukGHkj6FUv9nBtkHfjeXX6h4FeYlWHnZl5YIt",
+      "commitment": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 3,
+        "previous_root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "state_sha256": "716301f4181abab0285e650ae9b87e87c520d34e367b2ae8b5ba4f1a44df69c2",
+        "root": "fc7ecf14dc194a3dd22e759b3a096440f23925c201af82b328de31b6b1c7701a",
+        "signature_b64": "L6nNmC1oJkG3zqF2rAjmmJ5VXqN521GDBOR9xEHZ8hb/l+14KliWnsWq7DQ0GeoeanjhQgYQxP0LPJXhVJioCw=="
+      }
+    }
+  ]
+}
