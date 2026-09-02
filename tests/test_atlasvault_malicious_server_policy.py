@@ -72,7 +72,12 @@ def test_c24_each_language_owns_real_persistent_guards_and_queues():
 
 
 def test_c24_python_and_dart_publish_atomic_results():
-    python = (ROOT / "packages/vaultsync/tests/support/malicious_server_client.py").read_text()
-    dart = (ROOT / "apps/atlas_flutter/test/support/atlas_vault_malicious_server_client.dart").read_text()
+    python = (
+        ROOT / "packages/vaultsync/tests/support/malicious_server_client.py"
+    ).read_text()
+    dart = (
+        ROOT
+        / "apps/atlas_flutter/test/support/atlas_vault_malicious_server_client.dart"
+    ).read_text()
     assert "os.replace(" in python
     assert "renameSync(" in dart

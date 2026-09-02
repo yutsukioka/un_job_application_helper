@@ -20,6 +20,12 @@ Future<String> digest(dynamic value) async => (await Sha256().hash(
   canonical(value),
 )).bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
+void publish(String output, dynamic value) {
+  final temporary = File('$output.pending');
+  temporary.writeAsBytesSync(canonical(value), flush: true);
+  temporary.renameSync(output);
+}
+
 Future<void> main(List<String> args) async {
   final mode = args[0], directory = args[1];
   final plan = jsonDecode(File(args[2]).readAsStringSync()) as Map;
@@ -57,10 +63,13 @@ Future<void> main(List<String> args) async {
     for (final action in actions) {
       Future<void> interrupt(String point) async {
         if (action['stop_after'] == point) {
-          File(args[3]).writeAsBytesSync(canonical({'interrupted_after': point}), flush: true);
-          while (true) { await Future<void>.delayed(const Duration(seconds: 60)); }
+          publish(args[3], {'interrupted_after': point});
+          while (true) {
+            await Future<void>.delayed(const Duration(seconds: 60));
+          }
         }
       }
+
       try {
         if (action['peer'] != null) {
           final peer =
@@ -79,22 +88,30 @@ Future<void> main(List<String> args) async {
             base64Decode(p['opaque_b64'] as String),
           );
           await interrupt('admission');
-          if (accepted) {
-            final op = AtlasVaultEncryptedPatchOperation.fromJson(
-              object(p['operation']),
-            );
-            await outbox.enqueue(op);
-            await interrupt('outbox');
+          final op = AtlasVaultEncryptedPatchOperation.fromJson(
+            object(p['operation']),
+          );
+          await outbox.enqueue(op);
+          await interrupt('outbox');
+          final pending = await inbox.pendingOperations();
+          if (pending.isNotEmpty &&
+              (pending.length != 1 ||
+                  jsonEncode(sorted(pending.single.toJson())) !=
+                      jsonEncode(sorted(op.toJson())))) {
+            throw StateError('C24 unexpected pending receipt');
+          }
+          if (await inbox.readCursor() != p['view']['root'] &&
+              pending.isEmpty) {
             await inbox.stagePage(
               expectedCursor: await inbox.readCursor(),
               nextCursor: p['view']['root'] as String,
               operations: [op],
             );
-            await interrupt('inbox');
-            while (await inbox.applyNext((_) async {}) != null) {}
-            await interrupt('receipt');
-            await outbox.confirmRemoteAcceptance(op.operationId);
           }
+          await interrupt('inbox');
+          while (await inbox.applyNext((_) async {}) != null) {}
+          await interrupt('receipt');
+          await outbox.confirmRemoteAcceptance(op.operationId);
           categories.add(accepted ? 'ACCEPTED' : 'IDEMPOTENT');
         }
       } on AtlasVaultStateViewException catch (error) {
@@ -124,7 +141,7 @@ Future<void> main(List<String> args) async {
       'recovery_sha256': await digest(recovery),
     };
   }
-  File(args[3]).writeAsBytesSync(canonical(results), flush: true);
+  publish(args[3], results);
   if (mode != 'inspect') {
     while (true) {
       await Future<void>.delayed(const Duration(seconds: 60));

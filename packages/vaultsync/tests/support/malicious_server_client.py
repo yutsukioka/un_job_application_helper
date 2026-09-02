@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -18,6 +19,15 @@ from vaultsync.sync_recovery import GuardedSyncState
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def publish(output, value):
+    temporary = Path(str(output) + ".pending")
+    with temporary.open("wb") as stream:
+        stream.write(canonical(value))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, output)
 
 
 def run(mode, directory, plan_path, output):
@@ -46,11 +56,13 @@ def run(mode, directory, plan_path, output):
             else []
         )
         for action in actions:
-            def interrupt(point):
+
+            def interrupt(point, action=action):
                 if action.get("stop_after") == point:
-                    Path(output).write_bytes(canonical({"interrupted_after": point}))
+                    publish(output, {"interrupted_after": point})
                     while True:
                         time.sleep(60)
+
             try:
                 if "peer" in action:
                     peer = json.loads(Path(action["peer"]).read_bytes())[name]["history"]
@@ -62,21 +74,24 @@ def run(mode, directory, plan_path, output):
                         p["view"], p["registry"], p["collection"], base64.b64decode(p["opaque_b64"])
                     )
                     interrupt("admission")
-                    if accepted:
-                        # Guard admission precedes receipt advancement; rejected input never enters queues.
-                        op = EncryptedPatchOperation.from_dict(p["operation"])
-                        outbox.enqueue(op)
-                        interrupt("outbox")
+                    # A valid idempotent admission can still have unfinished queue receipts.
+                    op = EncryptedPatchOperation.from_dict(p["operation"])
+                    outbox.enqueue(op)
+                    interrupt("outbox")
+                    pending = inbox.pending_operations()
+                    if pending and pending != (op,):
+                        raise RuntimeError("C24 unexpected pending receipt")
+                    if inbox.cursor != p["view"]["root"] and not pending:
                         inbox.stage_page(
                             expected_cursor=inbox.cursor,
                             next_cursor=p["view"]["root"],
                             operations=[op],
                         )
-                        interrupt("inbox")
-                        while inbox.apply_next(lambda _: None) is not None:
-                            pass
-                        interrupt("receipt")
-                        outbox.confirm_remote_acceptance(op.operation_id)
+                    interrupt("inbox")
+                    while inbox.apply_next(lambda _: None) is not None:
+                        pass
+                    interrupt("receipt")
+                    outbox.confirm_remote_acceptance(op.operation_id)
                     categories.append("ACCEPTED" if accepted else "IDEMPOTENT")
             except StateViewError as error:
                 categories.append(str(error))
@@ -99,7 +114,7 @@ def run(mode, directory, plan_path, output):
             "state_sha256": hashlib.sha256(canonical(checkpoint)).hexdigest(),
             "recovery_sha256": hashlib.sha256(canonical(recovery)).hexdigest(),
         }
-    Path(output).write_bytes(canonical(results))
+    publish(output, results)
     if mode != "inspect":
         while True:
             time.sleep(60)

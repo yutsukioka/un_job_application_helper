@@ -45,7 +45,8 @@ private struct AtlasVaultMaliciousServerClient {
       for action in actions {
         func interrupt(_ point: String) throws {
           if action["stop_after"] as? String == point {
-            try canonical(["interrupted_after": point]).write(to: URL(fileURLWithPath: args[3]), options: .atomic)
+            try canonical(["interrupted_after": point]).write(
+              to: URL(fileURLWithPath: args[3]), options: .atomic)
             while true { Thread.sleep(forTimeInterval: 60) }
           }
         }
@@ -62,19 +63,27 @@ private struct AtlasVaultMaliciousServerClient {
               collection: p["collection"] as! [String: Any],
               opaqueState: Data(base64Encoded: p["opaque_b64"] as! String)!)
             try interrupt("admission")
-            if accepted {
-              let op = try AtlasVaultEncryptedPatchOperation(
-                jsonObject: p["operation"] as! [String: Any])
-              try outbox.enqueue(op)
-              try interrupt("outbox")
+            let op = try AtlasVaultEncryptedPatchOperation(
+              jsonObject: p["operation"] as! [String: Any])
+            try outbox.enqueue(op)
+            try interrupt("outbox")
+            let pending = try inbox.pendingOperations()
+            if !pending.isEmpty
+              && (pending.count != 1
+                || NSDictionary(dictionary: pending[0].jsonObject)
+                  != NSDictionary(dictionary: op.jsonObject))
+            {
+              throw NSError(domain: "C24UnexpectedReceipt", code: 1)
+            }
+            if try inbox.cursor() != view["root"] as? String && pending.isEmpty {
               try inbox.stagePage(
                 expectedCursor: inbox.cursor(), nextCursor: view["root"] as? String,
                 operations: [op])
-              try interrupt("inbox")
-              while try inbox.applyNext({ _ in }) != nil {}
-              try interrupt("receipt")
-              try outbox.confirmRemoteAcceptance(op.operationID)
             }
+            try interrupt("inbox")
+            while try inbox.applyNext({ _ in }) != nil {}
+            try interrupt("receipt")
+            try outbox.confirmRemoteAcceptance(op.operationID)
             categories.append(accepted ? "ACCEPTED" : "IDEMPOTENT")
           }
         } catch let error as AtlasVaultSyncRecoveryError {

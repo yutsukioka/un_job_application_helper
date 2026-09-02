@@ -361,30 +361,63 @@ def receipt_crashes(directory, binary, all_packets, descriptor):
         for point in ("admission", "outbox", "inbox", "receipt"):
             folder = directory / f"receipt-{language}-{point}"
             folder.mkdir()
-            plan = {"public_b64": descriptor["signing_public_key"],
-                    "context": {"account_id": ACCOUNT, "vault_id": VAULT, "collection_id": "collection_c21", "key_epoch": descriptor["key_epoch"]},
-                    "packets": all_packets, "scenarios": {"receipt": {
+            plan = {
+                "public_b64": descriptor["signing_public_key"],
+                "context": {
+                    "account_id": ACCOUNT,
+                    "vault_id": VAULT,
+                    "collection_id": "collection_c21",
+                    "key_epoch": descriptor["key_epoch"],
+                },
+                "packets": all_packets,
+                "scenarios": {
+                    "receipt": {
                         "baseline": [{"packet": "one"}, {"packet": "two"}],
-                        "attack": [{"packet": "three", "stop_after": point}]}}}
+                        "attack": [{"packet": "three", "stop_after": point}],
+                    }
+                },
+            }
             path = folder / "plan.json"
             path.write_bytes(transport._canonical(plan))
             state = folder / "device"
             client(language, binary, "prepare", state, path, folder / "prepared.json")
-            marker, killed = client(language, binary, "attack", state, path, folder / "interrupted.json")
+            marker, killed = client(
+                language, binary, "attack", state, path, folder / "interrupted.json"
+            )
             assert marker == {"interrupted_after": point}
             del plan["scenarios"]["receipt"]["attack"][0]["stop_after"]
             path.write_bytes(transport._canonical(plan))
-            resumed, resumed_pid = client(language, binary, "attack", state, path, folder / "resumed.json")
-            reopened, reopened_pid = client(language, binary, "inspect", state, path, folder / "reopened.json")
+            resumed, resumed_pid = client(
+                language, binary, "attack", state, path, folder / "resumed.json"
+            )
+            reopened, reopened_pid = client(
+                language, binary, "inspect", state, path, folder / "reopened.json"
+            )
             r, s = resumed["receipt"], reopened["receipt"]
-            passed = (r["categories"] == ["IDEMPOTENT"] and r["cursor"] == r["checkpoint"]["cursor"]
-                      == all_packets["three"]["view"]["root"] and r["pending_outbox"] == 0
-                      and r["recovery"]["status"] == "ACTIVE"
-                      and all(r[k] == s[k] for k in ("checkpoint", "cursor", "pending_outbox", "recovery")))
-            results.append({"language": language, "killed_after": point, "passed": passed,
-                            "process_ids": [killed, resumed_pid, reopened_pid],
-                            "final_state_sha256": s["state_sha256"], "cursor": s["cursor"],
-                            "accepted_root": s["checkpoint"]["cursor"], "pending_outbox": s["pending_outbox"]})
+            passed = (
+                r["categories"] == ["IDEMPOTENT"]
+                and r["cursor"]
+                == r["checkpoint"]["cursor"]
+                == all_packets["three"]["view"]["root"]
+                and r["pending_outbox"] == 0
+                and r["recovery"]["status"] == "ACTIVE"
+                and all(
+                    r[k] == s[k]
+                    for k in ("checkpoint", "cursor", "pending_outbox", "recovery")
+                )
+            )
+            results.append(
+                {
+                    "language": language,
+                    "killed_after": point,
+                    "passed": passed,
+                    "process_ids": [killed, resumed_pid, reopened_pid],
+                    "final_state_sha256": s["state_sha256"],
+                    "cursor": s["cursor"],
+                    "accepted_root": s["checkpoint"]["cursor"],
+                    "pending_outbox": s["pending_outbox"],
+                }
+            )
     return results
 
 

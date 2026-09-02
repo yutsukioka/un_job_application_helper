@@ -295,7 +295,11 @@ class GuardedSyncState:
                     records = {}
                     for raw in body["records"]:
                         r = OpaqueCiphertextEnvelope.from_dict(raw)
-                        if r.object_id in records or r.key_epoch != view["key_epoch"]:
+                        if (
+                            r.version != 1
+                            or r.object_id in records
+                            or r.key_epoch != view["key_epoch"]
+                        ):
                             _reject()
                         records[r.object_id] = {
                             "object_id": r.object_id,

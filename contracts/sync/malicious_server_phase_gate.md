@@ -33,6 +33,10 @@ Each process is killed after persisting its baseline, then again after persistin
 the attack result. A fresh process reopens every state. The report compares
 accepted-state, recovery, cursor, and authenticated-evidence hashes across restart.
 This tests durable fences, not arbitrary crash points between separate queue files.
+Additional fault probes kill each language after admission, outbox enqueue, inbox
+staging, and receipt application. An exact idempotent admission must resume any
+unfinished queue work; it is not treated as proof that receipts already finished.
+Result files are published atomically before the parent reads or kills a process.
 
 ## Required Attacks
 
@@ -41,6 +45,8 @@ This tests durable fences, not arbitrary crash points between separate queue fil
 - Same-sequence conflicting roots and invalid predecessors.
 - Replayed, added, removed, or substituted registry views.
 - Cross-account, cross-vault, and incorrect or regressing epoch contexts.
+- Authenticated candidates containing an unknown envelope version. The guarded
+  v1 collection admits only v1 envelopes, not future formats with unknown semantics.
 - Independently persisted split histories and registry forks, followed by explicit
   authenticated evidence exchange. Both clients fence without selecting a branch.
 - Exact accepted retries, which do not advance state or create another receipt.

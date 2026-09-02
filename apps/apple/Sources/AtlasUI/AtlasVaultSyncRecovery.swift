@@ -294,7 +294,9 @@ public final class AtlasVaultGuardedSyncState {
           var records = [String: Any]()
           for raw in rawRecords {
             let r = try AtlasVaultOpaqueCiphertextEnvelope(jsonObject: raw)
-            guard records[r.objectID] == nil, r.keyEpoch == (try viewInteger(v["key_epoch"])) else {
+            guard r.version == 1, records[r.objectID] == nil,
+              r.keyEpoch == (try viewInteger(v["key_epoch"]))
+            else {
               throw AtlasVaultSyncRecoveryError.rejected
             }
             let fingerprint = viewDigest(

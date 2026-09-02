@@ -351,7 +351,8 @@ final class AtlasVaultGuardedSyncState {
             final r = AtlasVaultOpaqueCiphertextEnvelope.fromJson(
               _object(item),
             );
-            if (records.containsKey(r.objectId) ||
+            if (r.version != 1 ||
+                records.containsKey(r.objectId) ||
                 r.keyEpoch != v['key_epoch']) {
               _viewFail();
             }
