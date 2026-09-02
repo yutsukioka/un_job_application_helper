@@ -354,7 +354,7 @@ private func removeAbandonedQueueStages(for fileURL: URL) throws {
     }
 }
 
-private struct EncryptedQueueFile {
+struct EncryptedQueueFile {
     let fileURL: URL
     private let key: SymmetricKey
     private let aad: Data
@@ -1663,7 +1663,7 @@ public struct AtlasVaultSignedStateCommitment {
          "root": root, "signature_b64": signature.base64EncodedString()]
     }
 
-    fileprivate func verify(publicKey: Data) throws -> Bool {
+    func verify(publicKey: Data) throws -> Bool {
         try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
             .isValidSignature(signature, for: rootSignatureMessage(root))
     }
