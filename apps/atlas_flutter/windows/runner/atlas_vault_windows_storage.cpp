@@ -1725,7 +1725,7 @@ StorageCapabilities ProbeStorageCapabilities() {
   return capabilities;
 }
 
-bool AuthorizePairingKeyRelease(HWND owner_window) {
+bool AuthorizePairingKeyRelease(HWND owner_window, bool device_removal = false) {
   try {
     if (owner_window == nullptr || !IsWindow(owner_window)) {
       return false;
@@ -1743,7 +1743,9 @@ bool AuthorizePairingKeyRelease(HWND owner_window) {
         UserConsentVerifierAvailability::Available) {
       return false;
     }
-    const winrt::hstring message(L"Authorize AtlasVault vault-key delivery");
+    const winrt::hstring message(
+        device_removal ? L"Authorize AtlasVault device removal"
+                       : L"Authorize AtlasVault vault-key delivery");
     auto interop = winrt::get_activation_factory<
         UserConsentVerifier, IUserConsentVerifierInterop>();
     winrt::Windows::Foundation::IAsyncOperation<
@@ -2372,13 +2374,14 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
     return;
   }
 
-  if (method == "authorizePairingKeyRelease") {
+  if (method == "authorizePairingKeyRelease" || method == "authorizeDeviceRemoval") {
     if (!HasNoArguments(call)) {
       result->Success(flutter::EncodableValue(false));
       return;
     }
     result->Success(
-        flutter::EncodableValue(AuthorizePairingKeyRelease(owner_window_)));
+        flutter::EncodableValue(AuthorizePairingKeyRelease(
+            owner_window_, method == "authorizeDeviceRemoval")));
     return;
   }
 

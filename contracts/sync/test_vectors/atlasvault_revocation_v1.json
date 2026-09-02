@@ -63,5 +63,174 @@
   "limitations": [
     "No private keys in this fixture.",
     "Rotation plan is not an applied epoch or delivery artifact."
-  ]
+  ],
+  "attacks": [
+    {
+      "name": "signed_substitution_account_id",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "other-account",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 3,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "ef1d7780ccaa1af2ef8535eade33d9a96a2c4585e622d788b153869238a71eb8",
+        "signature_b64": "ErQ+42vsTPYKejVKUhuEzVg73uOFk0Hd2cCJZKzkMfDg8I94tfn47KpOWYVIR22ARtzLsP0Qih7shroAygXxBg=="
+      }
+    },
+    {
+      "name": "signed_substitution_vault_id",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "other-vault",
+        "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 3,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "23d99cdfd60b0a6f49670d913c0ad8b841c72801140e70270b1c4cf6f1b704f3",
+        "signature_b64": "kZtO+/CpJeFj6uma3anc53JEbClRhTRuDx1TODDIESOUNVLrAayblfd7eLD20v6LBZJJfj6pR0UZxZCAt38nBA=="
+      }
+    },
+    {
+      "name": "signed_substitution_key_epoch",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 2,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "d98fe6c7f2ed5a700f0d1d948e6007470484b86989ba584e0b798e7290c1056e",
+        "signature_b64": "etLxzMEY0ucM2gCSHnsj0ODUNdLWz3vW77THcilJYDFZBhnsQjlA/aVLYcufFqF3799NEWQWzTpVHWrNoFIABQ=="
+      }
+    },
+    {
+      "name": "signed_substitution_sequence",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 3,
+        "sequence": 2,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "d802d0ae158a8a32a4715df2405cf59c7e6cb98096016f6fb1f77eb0e661ad9b",
+        "signature_b64": "1P1/RMGZz3HeOsllOX5/rEogOfkbrZQRRdxHAFLwCpSk90xSHBkDsqAB5jJ1zhqdX051Xjy/ViCbAVEdxWkWDQ=="
+      }
+    },
+    {
+      "name": "signed_substitution_prior_registry_root",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 3,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "f91bd83509c230519a324e6e4e5f188d869f26f4998a3816a5cdb7b3b184e22c",
+        "signature_b64": "UexbpOwKm3Dfhi8hl37xkWnsESayB5cJBbsFUWXTYaKSB12yRnDzZsqgFddDZRqNZaD6ci7sFn7NRlGfcjS0Aw=="
+      }
+    },
+    {
+      "name": "signed_substitution_target_device_id",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 3,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "f95ae5fb08e4fbad7557233d4829b83a012f82d304b4b14cd6fe8a0e92f79f54",
+        "signature_b64": "0w+Kklrmz4Af7fwe2oQU9z4V+0uUzobFfJD/Mq7KI+2S6E/jFvf7EhsIiq2xfPfEgzkR3iRwT7xWJvqJrXF1Aw=="
+      }
+    },
+    {
+      "name": "signed_substitution_initiator_device_id",
+      "after_revocation": false,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+        "initiator_device_id": "avd1-efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+        "key_epoch": 3,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "3928852a6894d3152d64bc5f6b63849d0594e0e642eed245dcd5ea6bd1a01d80",
+        "signature_b64": "faRXKKuSa49px0XHc+LeKoT3e6QZ/jXcDW9dT7ULv8T9mDu0ch480ycSAA5ZRwZtr7WeQ7JoK/+ZUPyyONLnDg=="
+      }
+    },
+    {
+      "name": "same_sequence_valid_conflicting_result",
+      "after_revocation": true,
+      "transition": {
+        "format": "atlasvault-device-revocation",
+        "version": 1,
+        "account_id": "account-c25",
+        "vault_id": "vault-c25",
+        "target_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+        "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+        "resulting_registry_root": "ac1a4efce40b4685263602578c6fc6e384f70c7c1f61cb8eb138c65fc2845dd3",
+        "key_epoch": 3,
+        "sequence": 1,
+        "authorization_category": "DEVICE_PRESENCE",
+        "root": "e6bf478d51cf3513c87686449f524523a243fa111e5ed25541aed659a4d83f9c",
+        "signature_b64": "mv3qcbbV+MmkwXLGpE4b7PLegvXHcyHcJ2HJaRIMM39xEg/c8D5LBjjTD7Thepo5QtBv43R+zW3VmolxtM2JBQ=="
+      }
+    }
+  ],
+  "swift_transition": {
+    "account_id": "account-c25",
+    "authorization_category": "DEVICE_PRESENCE",
+    "format": "atlasvault-device-revocation",
+    "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+    "key_epoch": 3,
+    "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+    "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+    "root": "cdcda0762ad993fd9291dcc930d7ea465082739223c0872175170390c0ac1e58",
+    "sequence": 1,
+    "signature_b64": "NAXL0ow/geBGqQTd4TR7NOE3PGj6eZNmor7z93URFXB5seWptgQNIYUT2v+PNzbgqJjo8vR0qgMBnIZ6PuylCQ==",
+    "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+    "vault_id": "vault-c25",
+    "version": 1
+  }
 }

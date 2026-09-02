@@ -11,6 +11,7 @@ import '../cache_file_replacement.dart';
 
 part 'authenticated_state_view.dart';
 part 'sync_recovery.dart';
+part 'revocation.dart';
 
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';
