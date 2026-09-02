@@ -1,6 +1,8 @@
 import base64
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -119,3 +121,56 @@ def test_wrong_signer_and_tampered_signature_rejected(tmp_path):
     other.initialize()
     with pytest.raises(ValueError):
         HostileServer(STATES[0]).serve(other)
+
+
+def test_swift_randomized_signatures_share_commitment_identity(tmp_path):
+    client = tracker(tmp_path / 'anchor')
+    client.initialize()
+    for state in STATES:
+        server = HostileServer(state)
+        server.commitment['signature_b64'] = state['swift_signature_b64']
+        assert server.serve(client)
+        assert not HostileServer(state).serve(client)
+
+
+def test_process_kill_after_observation_preserves_root(tmp_path):
+    path = tmp_path / 'anchor'
+    worker = '''
+import base64, json, os, signal
+from pathlib import Path
+from vaultsync.sync_queue import RollbackTracker
+v = json.loads(Path(sys.argv[2]).read_text())
+c = RollbackTracker(Path(sys.argv[1]), encryption_key=bytes(range(32)), collection_id='collection_c21', trusted_signer=base64.b64decode(v['signing_public_b64']))
+c.initialize()
+for state in v['states'][:2]:
+    c.accept(state['commitment'], base64.b64decode(state['opaque_b64']))
+os.kill(os.getpid(), signal.SIGKILL)
+'''
+    bootstrap = 'import sys; sys.path[:] = ' + repr(sys.path) + '\n' + worker
+    result = subprocess.run([sys.executable, '-S', '-c', bootstrap, str(path), str(ROOT / 'contracts/sync/test_vectors/atlasvault_state_commitment_vectors_v1.json')], timeout=20, capture_output=True)
+    assert result.returncode == -9
+    restarted = tracker(path)
+    assert restarted.checkpoint()['sequence'] == 2
+    with pytest.raises(ValueError):
+        HostileServer(STATES[0]).serve(restarted)
+
+
+def test_interrupted_anchor_replace_keeps_prior_root(tmp_path, monkeypatch):
+    import vaultsync.sync_queue as module
+    path = tmp_path / 'anchor'
+    client = tracker(path)
+    client.initialize()
+    HostileServer(STATES[0]).serve(client)
+    before = path.read_bytes()
+    original = module._EncryptedQueueFile.write
+
+    def interrupted(store, value):
+        def fail():
+            raise OSError('injected before replace')
+        return original(store, value, before_replace=fail)
+
+    monkeypatch.setattr(module._EncryptedQueueFile, 'write', interrupted)
+    with pytest.raises(ValueError):
+        HostileServer(STATES[1]).serve(client)
+    assert path.read_bytes() == before
+    assert tracker(path).checkpoint()['sequence'] == 1

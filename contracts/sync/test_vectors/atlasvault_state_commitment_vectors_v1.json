@@ -5,6 +5,7 @@
   "states": [
     {
       "opaque_b64": "YSWsZR3RiFSiOK2aM+Nn1ashHjrkD7wZdnwQuAT92wU8II9930ObphtxFrFbjZ6O",
+      "swift_signature_b64": "y9bV6m9yBQdHxDvMPf0yz3FkLubtrpuP0KlUOi8tPPSwiO0FFoImO8jqXWPBn3quaN+wOqux3VocUAo8jT9ECA==",
       "commitment": {
         "format": "atlasvault-state-commitment",
         "version": 1,
@@ -18,6 +19,7 @@
     },
     {
       "opaque_b64": "bww3uS4O6ZzmTaAJeMVPhulWea+hGvXrepW70QHvka4MatSsnoYwxRVWvwuDNgV5",
+      "swift_signature_b64": "0lnupSKzOInGQXhXPcoISr+ETgRR8v9W+KDNPrG16DAtvhGGzeGXSRXDNOsNqpNDPBNwUf7GVJl35GDS0VQvCg==",
       "commitment": {
         "format": "atlasvault-state-commitment",
         "version": 1,
@@ -31,6 +33,7 @@
     },
     {
       "opaque_b64": "NtFEVerDNN+Voexnvj3o1MNSqc0ukGHkj6FUv9nBtkHfjeXX6h4FeYlWHnZl5YIt",
+      "swift_signature_b64": "qZ3gM0TcKaRYNZJf9ZrpkOa/XgKjp/Df4fU+22Vxo39dTW0oMBc9HetrtVoA+HTtf2jqSSzXjuEtJ6SpPTb+Dw==",
       "commitment": {
         "format": "atlasvault-state-commitment",
         "version": 1,

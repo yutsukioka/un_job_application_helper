@@ -8,13 +8,15 @@ import json
 import os
 import re
 import secrets
+import threading
 import uuid
 from dataclasses import dataclass, replace
 from functools import total_ordering
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidSignature, InvalidTag
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
@@ -1557,3 +1559,131 @@ class DurableEncryptedInbox:
         )
         self._store.write(_inbox_dict(updated))
         return operation
+
+
+_COMMITMENT_FORMAT = 'atlasvault-state-commitment'
+_ZERO_ROOT = '0' * 64
+_MAX_COMMITMENT_SEQUENCE = 9007199254740991
+_ROOT_SIGNATURE_DOMAIN = b'atlasvault-state-root-signature-v1\0'
+
+
+def _commitment_hex(value: Any) -> str:
+    if not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{64}', value) is None:
+        raise _error()
+    return value
+
+
+def _commitment_sequence(value: Any, *, allow_zero: bool = False) -> int:
+    if type(value) is not int or not (0 if allow_zero else 1) <= value <= _MAX_COMMITMENT_SEQUENCE:
+        raise _error()
+    return value
+
+
+def _state_digest(value: bytes) -> str:
+    if not isinstance(value, bytes) or not 16 <= len(value) <= MAXIMUM_QUEUE_FILE_BYTES:
+        raise _error()
+    return hashlib.sha256(value).hexdigest()
+
+
+def _commitment_root(collection: str, sequence: int, previous: str, digest: str) -> str:
+    transcript = f'atlasvault-state-commitment-v1\n{collection}\n{sequence}\n{previous}\n{digest}\n'
+    return hashlib.sha256(transcript.encode('ascii')).hexdigest()
+
+
+@dataclass(frozen=True)
+class SignedStateCommitment:
+    collection_id: str
+    sequence: int
+    previous_root: str
+    state_sha256: str
+    root: str
+    signature_b64: str
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> SignedStateCommitment:
+        value = _mapping(value)
+        _exact(value, {'format', 'version', 'collection_id', 'sequence', 'previous_root', 'state_sha256', 'root', 'signature_b64'})
+        if value['format'] != _COMMITMENT_FORMAT or type(value['version']) is not int or value['version'] != 1:
+            raise _error()
+        collection = _identifier(value['collection_id'])
+        sequence = _commitment_sequence(value['sequence'])
+        previous = _commitment_hex(value['previous_root'])
+        digest = _commitment_hex(value['state_sha256'])
+        root = _commitment_hex(value['root'])
+        if not isinstance(value['signature_b64'], str) or len(value['signature_b64']) != 88:
+            raise _error()
+        _canonical_base64(value['signature_b64'], exact_bytes=64)
+        if (sequence == 1) != (previous == _ZERO_ROOT) or root != _commitment_root(collection, sequence, previous, digest):
+            raise _error()
+        return cls(collection, sequence, previous, digest, root, value['signature_b64'])
+
+    @classmethod
+    def sign(cls, opaque_state: bytes, *, collection_id: str, sequence: int, previous_root: str, signing_key: Ed25519PrivateKey) -> SignedStateCommitment:
+        collection = _identifier(collection_id)
+        sequence = _commitment_sequence(sequence)
+        previous = _commitment_hex(previous_root)
+        digest = _state_digest(opaque_state)
+        root = _commitment_root(collection, sequence, previous, digest)
+        signature = signing_key.sign(_ROOT_SIGNATURE_DOMAIN + bytes.fromhex(root))
+        return cls.from_dict(dict(format=_COMMITMENT_FORMAT, version=1, collection_id=collection,
+                                  sequence=sequence, previous_root=previous, state_sha256=digest,
+                                  root=root, signature_b64=base64.b64encode(signature).decode('ascii')))
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(format=_COMMITMENT_FORMAT, version=1, collection_id=self.collection_id,
+                    sequence=self.sequence, previous_root=self.previous_root, state_sha256=self.state_sha256,
+                    root=self.root, signature_b64=self.signature_b64)
+
+
+class RollbackTracker:
+    """Durable observation anchor. One owning client per checkpoint path."""
+
+    def __init__(self, path: Path, *, encryption_key: bytes, collection_id: str, trusted_signer: bytes):
+        if not isinstance(trusted_signer, bytes) or len(trusted_signer) != 32:
+            raise _error()
+        self._collection = _identifier(collection_id)
+        self._public = trusted_signer
+        self._store = _EncryptedQueueFile(Path(path), encryption_key=encryption_key, kind='rollback-anchor')
+        self._lock = threading.Lock()
+
+    def _anchor(self, sequence: int, root: str) -> dict[str, Any]:
+        return dict(collection_id=self._collection, signing_public_b64=base64.b64encode(self._public).decode('ascii'), sequence=sequence, root=root)
+
+    def initialize(self) -> None:
+        with self._lock:
+            if self._store.path.exists():
+                raise _error()
+            self._store.write(self._anchor(0, _ZERO_ROOT))
+
+    def _load(self) -> dict[str, Any]:
+        state = self._store.read({})
+        _exact(state, {'collection_id', 'signing_public_b64', 'sequence', 'root'})
+        sequence = _commitment_sequence(state['sequence'], allow_zero=True)
+        root = _commitment_hex(state['root'])
+        if state != self._anchor(sequence, root) or (sequence == 0) != (root == _ZERO_ROOT):
+            raise _error()
+        return state
+
+    def checkpoint(self) -> dict[str, Any]:
+        with self._lock:
+            return self._load()
+
+    def accept(self, served: Mapping[str, Any], opaque_state: bytes) -> bool:
+        with self._lock:
+            state = self._load()
+            commitment = SignedStateCommitment.from_dict(served)
+            if commitment.collection_id != self._collection or commitment.state_sha256 != _state_digest(opaque_state):
+                raise _error()
+            try:
+                Ed25519PublicKey.from_public_bytes(self._public).verify(
+                    base64.b64decode(commitment.signature_b64),
+                    _ROOT_SIGNATURE_DOMAIN + bytes.fromhex(commitment.root),
+                )
+            except (InvalidSignature, ValueError):
+                raise _error() from None
+            if commitment.sequence == state['sequence'] and commitment.root == state['root']:
+                return False
+            if commitment.sequence != state['sequence'] + 1 or commitment.previous_root != state['root']:
+                raise _error()
+            self._store.write(self._anchor(commitment.sequence, commitment.root))
+            return True

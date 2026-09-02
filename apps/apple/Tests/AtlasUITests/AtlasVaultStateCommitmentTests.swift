@@ -37,7 +37,19 @@ final class AtlasVaultStateCommitmentTests: XCTestCase {
             let server = HostileServer(state)
             let c = server.commitment
             let actual = try AtlasVaultSignedStateCommitment.sign(server.body, collectionID: c["collection_id"] as! String, sequence: c["sequence"] as! Int64, previousRoot: c["previous_root"] as! String, signingKey: signer)
-            XCTAssertEqual(NSDictionary(dictionary: actual.jsonObject), NSDictionary(dictionary: c))
+            var actualFields = actual.jsonObject
+            var expectedFields = c
+            actualFields.removeValue(forKey: "signature_b64")
+            expectedFields.removeValue(forKey: "signature_b64")
+            XCTAssertEqual(NSDictionary(dictionary: actualFields), NSDictionary(dictionary: expectedFields))
+            let rootBytes = stride(from: 0, to: actual.root.count, by: 2).map { offset -> UInt8 in
+                let chars = Array(actual.root)
+                return UInt8(String(chars[offset...offset + 1]), radix: 16)!
+            }
+            let message = Data("atlasvault-state-root-signature-v1\0".utf8) + Data(rootBytes)
+            for encoded in [actual.jsonObject["signature_b64"] as! String, c["signature_b64"] as! String] {
+                XCTAssertTrue(signer.publicKey.isValidSignature(Data(base64Encoded: encoded)!, for: message))
+            }
         }
     }
 

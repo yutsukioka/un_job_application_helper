@@ -39,7 +39,7 @@ it is NEVER accepted from the served commitment. Trust rotation is not C21.
 An explicitly initialized encrypted checkpoint pins collection, signer, seq 0
 and the zero root. Opening an existing client never implicitly initializes a
 missing checkpoint. Callers serialize ownership of each checkpoint path across
-processes; the client rejects overlapping operations on its own instance.
+processes; operations on one instance are serialized or rejected if overlapping.
 
 On every accept, read and authenticate the checkpoint, validate the closed
 commitment, verify the signature and exact opaque-state digest, then require:
@@ -76,4 +76,8 @@ No global fork/equivocation or availability guarantee is claimed (C22/C24).
 
 Vectors: `test_vectors/atlasvault_state_commitment_vectors_v1.json` contains
 synthetic encrypted bytes, public keys and signatures only. Python, Dart and
-Swift reproduce the same roots/signatures and enforce the same sequence rules.
+Swift reproduce the same roots and enforce the same sequence rules. Signatures
+are verified cross-language, not required to have identical bytes: Apple
+[CryptoKit Ed25519 signing](https://developer.apple.com/documentation/cryptokit/curve25519/signing/privatekey/signature(for:))
+uses randomization. The fixture also contains Swift-produced valid signatures
+which Python and Dart accept without changing commitment identity (the root).

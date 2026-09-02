@@ -60,6 +60,17 @@ void main() {
     }
   });
 
+  test('Swift signatures share roots and duplicate identity', () async {
+    final client = tracker(File('${directory.path}/anchor'));
+    await client.initialize();
+    for (final state in states) {
+      final server = HostileServer(state);
+      server.commitment['signature_b64'] = state['swift_signature_b64'];
+      expect(await server.serve(client), isTrue);
+      expect(await HostileServer(state).serve(client), isFalse);
+    }
+  });
+
   for (final attack in [
     'replay',
     'old_snapshot',
