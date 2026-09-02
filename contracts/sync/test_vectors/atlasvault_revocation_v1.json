@@ -1,0 +1,67 @@
+{
+  "format": "atlasvault-c25-public-vectors",
+  "version": 1,
+  "registry": [
+    {
+      "device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+      "signing_public_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+      "agreement_public_b64": "eaYx7t4b+cmPEgMs3q3Q56B5OY/HhriMyEbsia+FpRo=",
+      "state": "ACTIVE"
+    },
+    {
+      "device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+      "signing_public_b64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+      "agreement_public_b64": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8=",
+      "state": "ACTIVE"
+    }
+  ],
+  "revoked_registry": [
+    {
+      "device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+      "signing_public_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+      "agreement_public_b64": "eaYx7t4b+cmPEgMs3q3Q56B5OY/HhriMyEbsia+FpRo=",
+      "state": "ACTIVE"
+    },
+    {
+      "device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+      "signing_public_b64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+      "agreement_public_b64": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8=",
+      "state": "REVOKED"
+    }
+  ],
+  "transition": {
+    "format": "atlasvault-device-revocation",
+    "version": 1,
+    "account_id": "account-c25",
+    "vault_id": "vault-c25",
+    "target_device_id": "avd1-87950f4353b6e14251a39a24a3d03202be39769ffd93d3f5d5259d71870a5b89",
+    "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+    "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+    "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+    "key_epoch": 3,
+    "sequence": 1,
+    "authorization_category": "DEVICE_PRESENCE",
+    "root": "cdcda0762ad993fd9291dcc930d7ea465082739223c0872175170390c0ac1e58",
+    "signature_b64": "nXOU6OYuNAOmhVaaZTftVv4E9T9Jx5ZATYkdPxIMlC7hn+mzSVbcbdvKVLj5mYc80Lw4uXO54VOd2mInIJdlDg=="
+  },
+  "rotation_plan": {
+    "format": "atlasvault-rotation-plan",
+    "version": 1,
+    "account_id": "account-c25",
+    "vault_id": "vault-c25",
+    "previous_epoch": 3,
+    "new_epoch": 4,
+    "prior_registry_root": "2582be93c6de570db9e86ab8331cff9d6657e6277f036d2b8cdd3d7309c67db8",
+    "resulting_registry_root": "d04ac4e90ef97f13fdecb52f8bec2b459f4a4ec3efa32a5f7a3280b72191148f",
+    "state_root": "abababababababababababababababababababababababababababababababab",
+    "initiator_device_id": "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1",
+    "revocation_root": "cdcda0762ad993fd9291dcc930d7ea465082739223c0872175170390c0ac1e58",
+    "recipients": [
+      "avd1-6715b488ac4f929030018b49d3c0c72eb1330b6b2e0871f7ff40f3a5f6f839c1"
+    ]
+  },
+  "limitations": [
+    "No private keys in this fixture.",
+    "Rotation plan is not an applied epoch or delivery artifact."
+  ]
+}
