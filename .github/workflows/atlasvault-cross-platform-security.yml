@@ -173,6 +173,15 @@ jobs:
           PY
           rm -f -- "$RUNNER_TEMP/atlasvault-c20-two-device-convergence.json"
 
+      - name: Run C24 multi-device malicious-server proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/atlasvault-c24-malicious-server.json"
+          trap 'rm -f -- "$report"' EXIT
+          python scripts/ci/atlasvault_malicious_server.py --output "$report"
+          shasum -a 256 "$report"
+
       - name: Run AtlasVault Swift security checks
         run: ./scripts/ci/atlasvault_swift.sh
 
