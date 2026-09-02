@@ -9,6 +9,9 @@ import 'package:pointycastle/export.dart' show SHA256Digest;
 
 import '../cache_file_replacement.dart';
 
+part 'authenticated_state_view.dart';
+part 'sync_recovery.dart';
+
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';
 const _queueEnvelopeFormat = 'atlasvault-encrypted-transfer-queue';
@@ -1802,5 +1805,226 @@ final class AtlasVaultDurableEncryptedInbox {
       ),
     );
     return operation;
+  }
+}
+
+const _commitmentFormat = 'atlasvault-state-commitment';
+const _maximumCommitmentSequence = 9007199254740991;
+final _zeroRoot = '0' * 64;
+
+String _commitmentHex(Object? value) {
+  if (value is! String ||
+      value.length != 64 ||
+      !RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+    _invalid();
+  }
+  return value;
+}
+
+String _commitmentIdentifier(Object? value) {
+  final text = _identifier(value);
+  if (RegExp(r'[^A-Za-z0-9._~-]').hasMatch(text)) _invalid();
+  return text;
+}
+
+int _commitmentSequence(Object? value, {bool allowZero = false}) {
+  if (value is! int ||
+      value < (allowZero ? 0 : 1) ||
+      value > _maximumCommitmentSequence) {
+    _invalid();
+  }
+  return value;
+}
+
+String _commitmentDigest(Uint8List bytes) {
+  if (bytes.length < 16 || bytes.length > _maximumQueueBytes) _invalid();
+  return _sha256Hex(bytes);
+}
+
+String _commitmentRoot(
+  String collection,
+  int sequence,
+  String previous,
+  String digest,
+) => _sha256Hex(
+  ascii.encode(
+    'atlasvault-state-commitment-v1\n$collection\n$sequence\n$previous\n$digest\n',
+  ),
+);
+
+Uint8List _rootSignatureMessage(String root) => Uint8List.fromList([
+  ...ascii.encode('atlasvault-state-root-signature-v1\x00'),
+  for (var i = 0; i < root.length; i += 2)
+    int.parse(root.substring(i, i + 2), radix: 16),
+]);
+
+final class AtlasVaultSignedStateCommitment {
+  AtlasVaultSignedStateCommitment._(this._value);
+  final Map<String, Object?> _value;
+  int get sequence => _value['sequence']! as int;
+  String get root => _value['root']! as String;
+  String get previousRoot => _value['previous_root']! as String;
+  String get collectionId => _value['collection_id']! as String;
+
+  factory AtlasVaultSignedStateCommitment.fromJson(Map<String, Object?> value) {
+    _exact(value, {
+      'format',
+      'version',
+      'collection_id',
+      'sequence',
+      'previous_root',
+      'state_sha256',
+      'root',
+      'signature_b64',
+    });
+    if (value['format'] != _commitmentFormat ||
+        value['version'] is! int ||
+        value['version'] != 1) {
+      _invalid();
+    }
+    final collection = _commitmentIdentifier(value['collection_id']);
+    final sequence = _commitmentSequence(value['sequence']);
+    final previous = _commitmentHex(value['previous_root']);
+    final digest = _commitmentHex(value['state_sha256']);
+    final root = _commitmentHex(value['root']);
+    if (value['signature_b64'] is! String ||
+        (value['signature_b64']! as String).length != 88) {
+      _invalid();
+    }
+    _base64(value['signature_b64'], exactLength: 64);
+    if ((sequence == 1) != (previous == _zeroRoot) ||
+        root != _commitmentRoot(collection, sequence, previous, digest)) {
+      _invalid();
+    }
+    return AtlasVaultSignedStateCommitment._(Map.unmodifiable(value));
+  }
+
+  static Future<AtlasVaultSignedStateCommitment> sign(
+    Uint8List opaqueState, {
+    required String collectionId,
+    required int sequence,
+    required String previousRoot,
+    required SimpleKeyPair signingKey,
+  }) async {
+    final collection = _commitmentIdentifier(collectionId);
+    _commitmentSequence(sequence);
+    _commitmentHex(previousRoot);
+    final digest = _commitmentDigest(opaqueState);
+    final root = _commitmentRoot(collection, sequence, previousRoot, digest);
+    final signature = await Ed25519().sign(
+      _rootSignatureMessage(root),
+      keyPair: signingKey,
+    );
+    return AtlasVaultSignedStateCommitment.fromJson({
+      'format': _commitmentFormat,
+      'version': 1,
+      'collection_id': collection,
+      'sequence': sequence,
+      'previous_root': previousRoot,
+      'state_sha256': digest,
+      'root': root,
+      'signature_b64': base64Encode(signature.bytes),
+    });
+  }
+
+  Map<String, Object?> toJson() => Map.of(_value);
+}
+
+/// Durable observation anchor; callers give each path one owning client.
+final class AtlasVaultRollbackTracker {
+  AtlasVaultRollbackTracker({
+    required File file,
+    required Uint8List encryptionKey,
+    required String collectionId,
+    required Uint8List trustedSigner,
+  }) : _store = _EncryptedQueueFile(
+         file,
+         encryptionKey,
+         kind: 'rollback-anchor',
+       ),
+       _collection = _commitmentIdentifier(collectionId),
+       _public = Uint8List.fromList(trustedSigner) {
+    if (_public.length != 32) _invalid();
+  }
+  final _EncryptedQueueFile _store;
+  final String _collection;
+  final Uint8List _public;
+  bool _busy = false;
+
+  Future<T> _exclusive<T>(Future<T> Function() operation) async {
+    if (_busy) _invalid();
+    _busy = true;
+    try {
+      return await operation();
+    } on AtlasVaultEncryptedPatchException {
+      rethrow;
+    } catch (_) {
+      _invalid();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Map<String, Object?> _anchor(int sequence, String root) => {
+    'collection_id': _collection,
+    'signing_public_b64': base64Encode(_public),
+    'sequence': sequence,
+    'root': root,
+  };
+
+  Future<void> initialize() => _exclusive(() async {
+    if ((await _store.read({})).isNotEmpty || await _store.file.exists()) {
+      _invalid();
+    }
+    await _store.write(_anchor(0, _zeroRoot));
+  });
+
+  Future<Map<String, Object?>> _load() async {
+    final state = await _store.read({});
+    _exact(state, {'collection_id', 'signing_public_b64', 'sequence', 'root'});
+    final sequence = _commitmentSequence(state['sequence'], allowZero: true);
+    final root = _commitmentHex(state['root']);
+    if (state['collection_id'] != _collection ||
+        state['signing_public_b64'] != base64Encode(_public) ||
+        (sequence == 0) != (root == _zeroRoot)) {
+      _invalid();
+    }
+    return state;
+  }
+
+  Future<Map<String, Object?>> checkpoint() => _exclusive(_load);
+
+  Future<bool> accept(
+    Map<String, Object?> served,
+    Uint8List opaqueState,
+  ) async {
+    // Freeze caller-owned input before the first await.
+    final commitment = AtlasVaultSignedStateCommitment.fromJson(served);
+    final digest = _commitmentDigest(opaqueState);
+    return _exclusive(() async {
+      final state = await _load();
+      if (commitment.collectionId != _collection ||
+          commitment._value['state_sha256'] != digest) {
+        _invalid();
+      }
+      final valid = await Ed25519().verify(
+        _rootSignatureMessage(commitment.root),
+        signature: Signature(
+          _base64(commitment._value['signature_b64'], exactLength: 64),
+          publicKey: SimplePublicKey(_public, type: KeyPairType.ed25519),
+        ),
+      );
+      if (!valid) _invalid();
+      if (commitment.sequence == state['sequence'] &&
+          commitment.root == state['root']) {
+        return false;
+      }
+      if (commitment.sequence != (state['sequence']! as int) + 1 ||
+          commitment.previousRoot != state['root']) {
+        _invalid();
+      }
+      await _store.write(_anchor(commitment.sequence, commitment.root));
+      return true;
+    });
   }
 }

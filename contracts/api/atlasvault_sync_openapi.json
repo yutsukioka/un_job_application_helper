@@ -692,6 +692,220 @@
           }
         }
       }
+    },
+    "/v1/vaults/{vault_id}/commitments": {
+      "post": {
+        "summary": "Append State Commitment",
+        "operationId": "appendStateCommitment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StateViewModel"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitmentAppendResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Account or device authorization failed",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the fixed ciphertext request ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authenticated account or device request window is exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Opaque storage request is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Opaque revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-atlasvault-implementation-chunk": "C23"
+      },
+      "get": {
+        "summary": "List State Commitments",
+        "operationId": "listStateCommitments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StateViewModel"
+                  },
+                  "title": "Response Liststatecommitments"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Account or device authorization failed",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the fixed ciphertext request ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authenticated account or device request window is exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Opaque resource was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-atlasvault-implementation-chunk": "C23"
+      }
     }
   },
   "components": {
@@ -1339,6 +1553,113 @@
             ]
           }
         }
+      },
+      "StateViewModel": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-authenticated-state-view",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 2,
+            "title": "Version"
+          },
+          "account_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Account Id"
+          },
+          "vault_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Vault Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Sequence"
+          },
+          "previous_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Previous Root"
+          },
+          "collection_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Collection Root"
+          },
+          "registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Registry Root"
+          },
+          "previous_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Previous Registry Root"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Key Epoch"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Root"
+          },
+          "signature_b64": {
+            "type": "string",
+            "maxLength": 88,
+            "minLength": 88,
+            "pattern": "^[A-Za-z0-9+/]+==$",
+            "title": "Signature B64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "vault_id",
+          "sequence",
+          "previous_root",
+          "collection_root",
+          "registry_root",
+          "previous_registry_root",
+          "key_epoch",
+          "root",
+          "signature_b64"
+        ],
+        "title": "StateViewModel"
+      },
+      "CommitmentAppendResult": {
+        "properties": {
+          "commitment": {
+            "$ref": "#/components/schemas/StateViewModel"
+          },
+          "appended": {
+            "type": "boolean",
+            "title": "Appended"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commitment",
+          "appended"
+        ],
+        "title": "CommitmentAppendResult"
       }
     }
   }

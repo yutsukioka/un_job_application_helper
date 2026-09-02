@@ -35,12 +35,19 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from vaultsync.authenticated_state_view import registry_root
 from vaultsync.device_identity import (
     DeviceIdentityError,
     SignedDeviceDescriptor,
     verify_signed_device_descriptor,
 )
 
+from atlasvault_api.commitments import (
+    CommitmentAppendResult,
+    CommitmentConflict,
+    CommitmentLog,
+    StateViewModel,
+)
 from atlasvault_api.controls import (
     AbuseControlPolicy,
     AccountDeviceRateLimiter,
@@ -469,6 +476,33 @@ class AtlasVaultBackend:
             monotonic=monotonic,
         )
         self.telemetry = telemetry or SecretFreeTelemetry()
+        self.commitments = CommitmentLog()
+
+    def append_commitment(
+        self, token: str, vault_id: str, view: StateViewModel
+    ) -> bool:
+        # Registry admission and append share a lock with signed registry transitions.
+        with self._lock:
+            session = self._authorize_token(token)
+            devices = self._accounts[session.account_id].devices
+            entries = [
+                {
+                    "device_id": hashlib.sha256(device_id.encode("ascii")).hexdigest(),
+                    "descriptor_sha256": hashlib.sha256(
+                        _canonical_bytes(signed.descriptor.model_dump(mode="json"))
+                    ).hexdigest(),
+                }
+                for device_id, signed in devices.items()
+            ]
+            signer = devices[session.device_id].verified().descriptor
+            return self.commitments.append(
+                session.account_id,
+                vault_id,
+                view.model_dump(),
+                registry_root(entries),
+                signer.signing_public_key,
+                signer.key_epoch,
+            )
 
     def issue_bootstrap_admission(self, account_id: str) -> str:
         """Mint one process-local, one-time admission bound to an account ID."""
@@ -1198,6 +1232,45 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             return service.storage.get_object(account_id, vault_id, object_id)
         except _STORAGE_ERRORS as exc:
             _raise_storage_http_error(exc)
+
+    @app.post(
+        "/v1/vaults/{vault_id}/commitments",
+        response_model=CommitmentAppendResult,
+        responses=_STORAGE_WRITE_OPENAPI_RESPONSES,
+        operation_id="appendStateCommitment",
+    )
+    def append_state_commitment(
+        vault_id: VaultPath,
+        request: StateViewModel,
+        authorization: BearerAuthorization = None,
+    ) -> CommitmentAppendResult:
+        _authorized_storage_account(service, authorization)
+        try:
+            appended = service.append_commitment(
+                _credential_token(authorization), vault_id, request
+            )
+            return CommitmentAppendResult(commitment=request, appended=appended)
+        except AuthorizationFailed as exc:
+            raise _bearer_authorization_error() from exc
+        except CommitmentConflict:
+            raise HTTPException(
+                status_code=409, detail="Commitment conflict."
+            ) from None
+
+    @app.get(
+        "/v1/vaults/{vault_id}/commitments",
+        response_model=list[StateViewModel],
+        responses=_STORAGE_READ_OPENAPI_RESPONSES,
+        operation_id="listStateCommitments",
+    )
+    def list_state_commitments(
+        vault_id: VaultPath, authorization: BearerAuthorization = None
+    ) -> list[StateViewModel]:
+        account_id = _authorized_storage_account(service, authorization)
+        return [
+            StateViewModel(**value)
+            for value in service.commitments.read(account_id, vault_id)
+        ]
 
     @app.post(
         "/v1/vaults/{vault_id}/patches",

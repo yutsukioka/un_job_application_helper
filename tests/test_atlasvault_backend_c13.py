@@ -214,6 +214,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         "/v1/vaults/{vault_id}/objects/{object_id}",
         "/v1/vaults/{vault_id}/patches",
         "/v1/vaults/{vault_id}/snapshots",
+        "/v1/vaults/{vault_id}/commitments",
     }
     properties = {
         property_name.casefold()
@@ -260,6 +261,8 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         ("/v1/vaults/{vault_id}/patches", "get"),
         ("/v1/vaults/{vault_id}/snapshots", "put"),
         ("/v1/vaults/{vault_id}/snapshots", "get"),
+        ("/v1/vaults/{vault_id}/commitments", "post"),
+        ("/v1/vaults/{vault_id}/commitments", "get"),
     }
     assert {
         (path, method)

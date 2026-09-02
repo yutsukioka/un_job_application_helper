@@ -354,7 +354,7 @@ private func removeAbandonedQueueStages(for fileURL: URL) throws {
     }
 }
 
-private struct EncryptedQueueFile {
+struct EncryptedQueueFile {
     let fileURL: URL
     private let key: SymmetricKey
     private let aad: Data
@@ -1576,5 +1576,156 @@ public final class AtlasVaultDurableEncryptedInbox {
         }
         try store.write(state.jsonObject)
         return operation
+    }
+}
+
+private let commitmentFormat = "atlasvault-state-commitment"
+private let zeroCommitmentRoot = String(repeating: "0", count: 64)
+private let maximumCommitmentSequence: Int64 = 9_007_199_254_740_991
+
+private func commitmentHex(_ value: Any?) throws -> String {
+    guard let value = value as? String, value.utf8.count == 64,
+          value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+    else { throw invalid() }
+    return value
+}
+
+private func commitmentSequence(_ value: Any?, allowZero: Bool = false) throws -> Int64 {
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number) != CFBooleanGetTypeID(),
+          ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(String(cString: number.objCType)),
+          let sequence = Int64(number.stringValue),
+          sequence >= (allowZero ? 0 : 1), sequence <= maximumCommitmentSequence
+    else { throw invalid() }
+    return sequence
+}
+
+private func commitmentStateDigest(_ bytes: Data) throws -> String {
+    guard bytes.count >= 16, bytes.count <= maximumQueueBytes else { throw invalid() }
+    return sha256Hex(bytes)
+}
+
+private func commitmentRoot(_ collection: String, _ sequence: Int64, _ previous: String, _ digest: String) -> String {
+    sha256Hex(Data("atlasvault-state-commitment-v1\n\(collection)\n\(sequence)\n\(previous)\n\(digest)\n".utf8))
+}
+
+private func rootSignatureMessage(_ root: String) -> Data {
+    let characters = Array(root)
+    let bytes = stride(from: 0, to: characters.count, by: 2).map {
+        UInt8(String(characters[$0...($0 + 1)]), radix: 16)!
+    }
+    return Data("atlasvault-state-root-signature-v1\0".utf8) + Data(bytes)
+}
+
+public struct AtlasVaultSignedStateCommitment {
+    public let collectionID: String
+    public let sequence: Int64
+    public let previousRoot: String
+    public let stateSHA256: String
+    public let root: String
+    private let signature: Data
+
+    public init(jsonObject value: [String: Any]) throws {
+        try exactKeys(value, ["format", "version", "collection_id", "sequence", "previous_root", "state_sha256", "root", "signature_b64"])
+        guard value["format"] as? String == commitmentFormat,
+              try commitmentSequence(value["version"]) == 1 else { throw invalid() }
+        collectionID = try identifier(value["collection_id"])
+        sequence = try commitmentSequence(value["sequence"])
+        previousRoot = try commitmentHex(value["previous_root"])
+        stateSHA256 = try commitmentHex(value["state_sha256"])
+        root = try commitmentHex(value["root"])
+        guard let encodedSignature = value["signature_b64"] as? String,
+              encodedSignature.utf8.count == 88 else { throw invalid() }
+        signature = try canonicalBase64(value["signature_b64"], exactLength: 64)
+        guard (sequence == 1) == (previousRoot == zeroCommitmentRoot),
+              root == commitmentRoot(collectionID, sequence, previousRoot, stateSHA256)
+        else { throw invalid() }
+    }
+
+    public static func sign(_ opaqueState: Data, collectionID: String, sequence: Int64,
+                            previousRoot: String, signingKey: Curve25519.Signing.PrivateKey) throws -> Self {
+        let collection = try identifier(collectionID)
+        let sequence = try commitmentSequence(sequence)
+        let previous = try commitmentHex(previousRoot)
+        let digest = try commitmentStateDigest(opaqueState)
+        let root = commitmentRoot(collection, sequence, previous, digest)
+        let signature = try signingKey.signature(for: rootSignatureMessage(root))
+        return try Self(jsonObject: [
+            "format": commitmentFormat, "version": 1, "collection_id": collection,
+            "sequence": sequence, "previous_root": previous, "state_sha256": digest,
+            "root": root, "signature_b64": signature.base64EncodedString(),
+        ])
+    }
+
+    public var jsonObject: [String: Any] {
+        ["format": commitmentFormat, "version": 1, "collection_id": collectionID,
+         "sequence": sequence, "previous_root": previousRoot, "state_sha256": stateSHA256,
+         "root": root, "signature_b64": signature.base64EncodedString()]
+    }
+
+    func verify(publicKey: Data) throws -> Bool {
+        try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
+            .isValidSignature(signature, for: rootSignatureMessage(root))
+    }
+}
+
+/// Durable observation anchor. Each checkpoint path has one owning client.
+public final class AtlasVaultRollbackTracker {
+    private let store: EncryptedQueueFile
+    private let collection: String
+    private let publicKey: Data
+    private let lock = NSLock()
+
+    public init(fileURL: URL, encryptionKey: Data, collectionID: String, trustedSigner: Data) throws {
+        guard trustedSigner.count == 32 else { throw invalid() }
+        collection = try identifier(collectionID)
+        publicKey = trustedSigner
+        store = try EncryptedQueueFile(fileURL: fileURL, encryptionKey: encryptionKey, kind: "rollback-anchor")
+    }
+
+    private func anchor(_ sequence: Int64, _ root: String) -> [String: Any] {
+        ["collection_id": collection, "signing_public_b64": publicKey.base64EncodedString(), "sequence": sequence, "root": root]
+    }
+
+    public func initialize() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !FileManager.default.fileExists(atPath: store.fileURL.path) else { throw invalid() }
+        try store.write(anchor(0, zeroCommitmentRoot))
+    }
+
+    private func load() throws -> [String: Any] {
+        let state = try store.read(default: [:])
+        try exactKeys(state, ["collection_id", "signing_public_b64", "sequence", "root"])
+        let sequence = try commitmentSequence(state["sequence"], allowZero: true)
+        let root = try commitmentHex(state["root"])
+        guard state["collection_id"] as? String == collection,
+              state["signing_public_b64"] as? String == publicKey.base64EncodedString(),
+              (sequence == 0) == (root == zeroCommitmentRoot)
+        else { throw invalid() }
+        return anchor(sequence, root)
+    }
+
+    public func checkpoint() throws -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return try load()
+    }
+
+    public func accept(jsonObject served: [String: Any], opaqueState: Data) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let state = try load()
+        let commitment = try AtlasVaultSignedStateCommitment(jsonObject: served)
+        guard commitment.collectionID == collection,
+              commitment.stateSHA256 == (try commitmentStateDigest(opaqueState)),
+              try commitment.verify(publicKey: publicKey)
+        else { throw invalid() }
+        let sequence = try commitmentSequence(state["sequence"], allowZero: true)
+        let root = try commitmentHex(state["root"])
+        if commitment.sequence == sequence, commitment.root == root { return false }
+        guard commitment.sequence == sequence + 1, commitment.previousRoot == root else { throw invalid() }
+        try store.write(anchor(commitment.sequence, commitment.root))
+        return true
     }
 }

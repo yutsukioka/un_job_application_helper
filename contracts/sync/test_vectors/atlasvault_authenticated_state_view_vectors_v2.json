@@ -1,0 +1,313 @@
+{
+  "format": "atlasvault-authenticated-state-view-vectors",
+  "version": 2,
+  "signing_public_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "empty_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+  "packages": {
+    "one": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "collection_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+        "key_epoch": 1,
+        "root": "caa3643c6a0caf4b34180f5c226d0d3cf15d3b17a3937794c8c295887fd49baa",
+        "signature_b64": "nnsiQcqYCidPYs11JQ6GlYuWDjP1Qb8M2J+eM0WkH6QDASYfdjMbSpL3OAl7ZNZjebqG0slnYBG420hg/AeHBA=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state_sha256": "b203566c64fbb1706d53bad7ec0dcff53d7d91940ca697b9fda2d4ea333eefa8",
+        "root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "signature_b64": "7I203oF2XUN3Upsr0/9R0F4X2XQz4DNRATSQ1AVCY/5XYmNTjUjm0dCjJOJWKkyJ6Le+6d/GFU6PI8gW2gENAw=="
+      },
+      "opaque_b64": "YSWsZR3RiFSiOK2aM+Nn1ashHjrkD7wZdnwQuAT92wU8II9930ObphtxFrFbjZ6O"
+    },
+    "two": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 2,
+        "previous_root": "caa3643c6a0caf4b34180f5c226d0d3cf15d3b17a3937794c8c295887fd49baa",
+        "collection_root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "registry_root": "6ace90d3c82c8e0c6c0c66dcc0db44809109b286801da67497fff702788ddba9",
+        "previous_registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "key_epoch": 1,
+        "root": "ae9ec3f2bd8e4eec731873df84cd537750f811d9d86938bf6781cf753eace644",
+        "signature_b64": "3N2JkYPpgZdXg4zu2zl3golzPySWYKZlhUxaMpUcrDlNg4sHwnlepVv33p11y8nBwqiYpHIHo5P2tB6z3+xfDg=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        },
+        {
+          "device_id": "824b89e95e8f1e6998a167cecfc27be23638ad55d7aa7f6cfc0e07e726997998",
+          "descriptor_sha256": "7b9ccf132bb105184db48d26f85b23219ab1fa1664ab03a847669214cc83dc6e"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 2,
+        "previous_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "state_sha256": "5a3c1118e63a13b9bdb45c9dcbcfa4b8d5bfe91e439e7762889000b1d6709d4f",
+        "root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "signature_b64": "VbqxD8yINIIEnPKitpLFGnWVKY6z5KltopwONLYIZ8rjxWeFPjDkkb8AjIAO3yd5RUUlqHlZ7/DUID9hAx7YAQ=="
+      },
+      "opaque_b64": "bww3uS4O6ZzmTaAJeMVPhulWea+hGvXrepW70QHvka4MatSsnoYwxRVWvwuDNgV5"
+    },
+    "three": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 3,
+        "previous_root": "ae9ec3f2bd8e4eec731873df84cd537750f811d9d86938bf6781cf753eace644",
+        "collection_root": "fc7ecf14dc194a3dd22e759b3a096440f23925c201af82b328de31b6b1c7701a",
+        "registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "previous_registry_root": "6ace90d3c82c8e0c6c0c66dcc0db44809109b286801da67497fff702788ddba9",
+        "key_epoch": 1,
+        "root": "5183ac8505e99bfee50e69b7cb644704469c6f0e49659d909abd009351625f5c",
+        "signature_b64": "mpoRoxCIHx355ADuzPlDM3X1RJxxErUPFXeElp6wwA56XoRoYmEfQESUK+yxoAnzukZmRkLpznhCGmIlpJp+Cg=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 3,
+        "previous_root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "state_sha256": "716301f4181abab0285e650ae9b87e87c520d34e367b2ae8b5ba4f1a44df69c2",
+        "root": "fc7ecf14dc194a3dd22e759b3a096440f23925c201af82b328de31b6b1c7701a",
+        "signature_b64": "L6nNmC1oJkG3zqF2rAjmmJ5VXqN521GDBOR9xEHZ8hb/l+14KliWnsWq7DQ0GeoeanjhQgYQxP0LPJXhVJioCw=="
+      },
+      "opaque_b64": "NtFEVerDNN+Voexnvj3o1MNSqc0ukGHkj6FUv9nBtkHfjeXX6h4FeYlWHnZl5YIt"
+    },
+    "fork_two": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 2,
+        "previous_root": "caa3643c6a0caf4b34180f5c226d0d3cf15d3b17a3937794c8c295887fd49baa",
+        "collection_root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "registry_root": "38801e8196233f0350adcdd877f8c5ab768b49b6ba809935374be3abaad9a1d6",
+        "previous_registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "key_epoch": 1,
+        "root": "c730ad1478a8b527f4ca14a8e7f51a06c97773aebd32fafbd70fa291f3c82e03",
+        "signature_b64": "5QDMW7wv7M+wt5ZGCz98hTBoLPzwgbamPy487qOnQBYXiE2l6VooVTIN/fB4YaXeBmA9x1r+kSurWPxybLL9Bw=="
+      },
+      "registry": [
+        {
+          "device_id": "824b89e95e8f1e6998a167cecfc27be23638ad55d7aa7f6cfc0e07e726997998",
+          "descriptor_sha256": "7b9ccf132bb105184db48d26f85b23219ab1fa1664ab03a847669214cc83dc6e"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 2,
+        "previous_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "state_sha256": "5a3c1118e63a13b9bdb45c9dcbcfa4b8d5bfe91e439e7762889000b1d6709d4f",
+        "root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "signature_b64": "VbqxD8yINIIEnPKitpLFGnWVKY6z5KltopwONLYIZ8rjxWeFPjDkkb8AjIAO3yd5RUUlqHlZ7/DUID9hAx7YAQ=="
+      },
+      "opaque_b64": "bww3uS4O6ZzmTaAJeMVPhulWea+hGvXrepW70QHvka4MatSsnoYwxRVWvwuDNgV5"
+    },
+    "fork_three": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 3,
+        "previous_root": "c730ad1478a8b527f4ca14a8e7f51a06c97773aebd32fafbd70fa291f3c82e03",
+        "collection_root": "fc7ecf14dc194a3dd22e759b3a096440f23925c201af82b328de31b6b1c7701a",
+        "registry_root": "38801e8196233f0350adcdd877f8c5ab768b49b6ba809935374be3abaad9a1d6",
+        "previous_registry_root": "38801e8196233f0350adcdd877f8c5ab768b49b6ba809935374be3abaad9a1d6",
+        "key_epoch": 1,
+        "root": "7a8246a0edbc5bf205748e23737cb3a16f84703bac3ec881a1342b6bf6a25b13",
+        "signature_b64": "ymIAXzH9KOJtoZvdzrNCL1arN4/l8byg9Oe7xkpC/Qy1HTH5RAKIYNWCYsLO5kKacafdS636mpwpLWyYBvQgDQ=="
+      },
+      "registry": [
+        {
+          "device_id": "824b89e95e8f1e6998a167cecfc27be23638ad55d7aa7f6cfc0e07e726997998",
+          "descriptor_sha256": "7b9ccf132bb105184db48d26f85b23219ab1fa1664ab03a847669214cc83dc6e"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 3,
+        "previous_root": "730f1cf47c5e3868db653171232f131ce41fbeb3af997b50745577ac09e4c3b5",
+        "state_sha256": "716301f4181abab0285e650ae9b87e87c520d34e367b2ae8b5ba4f1a44df69c2",
+        "root": "fc7ecf14dc194a3dd22e759b3a096440f23925c201af82b328de31b6b1c7701a",
+        "signature_b64": "L6nNmC1oJkG3zqF2rAjmmJ5VXqN521GDBOR9xEHZ8hb/l+14KliWnsWq7DQ0GeoeanjhQgYQxP0LPJXhVJioCw=="
+      },
+      "opaque_b64": "NtFEVerDNN+Voexnvj3o1MNSqc0ukGHkj6FUv9nBtkHfjeXX6h4FeYlWHnZl5YIt"
+    },
+    "other_account": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "other_account",
+        "vault_id": "vault_c22",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "collection_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+        "key_epoch": 1,
+        "root": "586eb6fbb2c31ad8a4b08ffd177d568ad95ccbac35aee682d0b59da452abb30f",
+        "signature_b64": "Moz1ZoTwKJnjBzczC6SzmLVaXlgcvCRO2SsUNg2KJZK5GITZ0stc4AuvhPwz0lGeO66cNo1aF/eYHObZi6STCw=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state_sha256": "b203566c64fbb1706d53bad7ec0dcff53d7d91940ca697b9fda2d4ea333eefa8",
+        "root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "signature_b64": "7I203oF2XUN3Upsr0/9R0F4X2XQz4DNRATSQ1AVCY/5XYmNTjUjm0dCjJOJWKkyJ6Le+6d/GFU6PI8gW2gENAw=="
+      },
+      "opaque_b64": "YSWsZR3RiFSiOK2aM+Nn1ashHjrkD7wZdnwQuAT92wU8II9930ObphtxFrFbjZ6O"
+    },
+    "other_vault": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "other_vault",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "collection_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+        "key_epoch": 1,
+        "root": "2354dc5610dc6ad2a555322bc1008c96268f7517f9f47b217fb148236981872a",
+        "signature_b64": "iWZ2vf8TM354rtZZ7EvhvOTviJR84NY+wQBCb/C1Jp5uHxCjrbHRESlB9p3KzQN4zld2r/oOv562GTKEOJdZAw=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state_sha256": "b203566c64fbb1706d53bad7ec0dcff53d7d91940ca697b9fda2d4ea333eefa8",
+        "root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "signature_b64": "7I203oF2XUN3Upsr0/9R0F4X2XQz4DNRATSQ1AVCY/5XYmNTjUjm0dCjJOJWKkyJ6Le+6d/GFU6PI8gW2gENAw=="
+      },
+      "opaque_b64": "YSWsZR3RiFSiOK2aM+Nn1ashHjrkD7wZdnwQuAT92wU8II9930ObphtxFrFbjZ6O"
+    },
+    "other_epoch": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "collection_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+        "key_epoch": 2,
+        "root": "43125f9cb060dabcf4b6ea0e83266cd6c40b3511db614859a7f1d782506c3147",
+        "signature_b64": "GyAeQ6gla27NlcpJfTAcOXv1vNi5abgRNkgMxT+d4AN0hyr+InZQ2EVfZ/qQ4xYtXFfq3Tb032DiQ0/23F+6BQ=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 1,
+        "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state_sha256": "b203566c64fbb1706d53bad7ec0dcff53d7d91940ca697b9fda2d4ea333eefa8",
+        "root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "signature_b64": "7I203oF2XUN3Upsr0/9R0F4X2XQz4DNRATSQ1AVCY/5XYmNTjUjm0dCjJOJWKkyJ6Le+6d/GFU6PI8gW2gENAw=="
+      },
+      "opaque_b64": "YSWsZR3RiFSiOK2aM+Nn1ashHjrkD7wZdnwQuAT92wU8II9930ObphtxFrFbjZ6O"
+    },
+    "fork_state": {
+      "view": {
+        "format": "atlasvault-authenticated-state-view",
+        "version": 2,
+        "account_id": "account_c22",
+        "vault_id": "vault_c22",
+        "sequence": 2,
+        "previous_root": "caa3643c6a0caf4b34180f5c226d0d3cf15d3b17a3937794c8c295887fd49baa",
+        "collection_root": "73cd27c856d98021b5948ded5aa7503f64853d96519e3e74adb0ccd02d771167",
+        "registry_root": "6ace90d3c82c8e0c6c0c66dcc0db44809109b286801da67497fff702788ddba9",
+        "previous_registry_root": "fcd265e7670c03dbd95550956971d0fa96e3bb404e2303fb96e67f75db180292",
+        "key_epoch": 1,
+        "root": "c75227c82a08789f7da119d89725457f974b7f03bcb69cee4089e309156e3b52",
+        "signature_b64": "WCj+isGgZTM3jYY7k2juFEbqo0Qd+DuAo6yp3ZvPpkEkIn4C8fvXPXILqTsu8Jmd3pXwfcMv45s6pZals/OCCg=="
+      },
+      "registry": [
+        {
+          "device_id": "82f3570016705bd87c9e145f29b5fa4032bc2faaa11b89aa262fe7cd23fe0ac1",
+          "descriptor_sha256": "7c2812e980f2e304fa565e97e7122b275c521e276e83ff0512e05af62d600296"
+        },
+        {
+          "device_id": "824b89e95e8f1e6998a167cecfc27be23638ad55d7aa7f6cfc0e07e726997998",
+          "descriptor_sha256": "7b9ccf132bb105184db48d26f85b23219ab1fa1664ab03a847669214cc83dc6e"
+        }
+      ],
+      "collection": {
+        "format": "atlasvault-state-commitment",
+        "version": 1,
+        "collection_id": "collection_c21",
+        "sequence": 2,
+        "previous_root": "66b970d78d56fd878c817f95026e9083de303e94874fd05f533d8b1e79f35c5f",
+        "state_sha256": "716301f4181abab0285e650ae9b87e87c520d34e367b2ae8b5ba4f1a44df69c2",
+        "root": "73cd27c856d98021b5948ded5aa7503f64853d96519e3e74adb0ccd02d771167",
+        "signature_b64": "BxovCmfQKml6LVY1ROwcu0CSrY3+442UmM5sp1GLwskifkY+TYepI9VSWpKxWiGgO9mh+G5jtPEn64VCldUeBg=="
+      },
+      "opaque_b64": "NtFEVerDNN+Voexnvj3o1MNSqc0ukGHkj6FUv9nBtkHfjeXX6h4FeYlWHnZl5YIt"
+    }
+  }
+}
