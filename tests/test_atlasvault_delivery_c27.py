@@ -11,6 +11,8 @@ def test_legacy_fenced_then_only_own_proof_returned(tmp_path):
     route = f"/v1/vaults/{VAULT}/activations"
     accepted = http.post(route, json=proof, headers=headers[0])
     assert accepted.status_code == 200
+    assert set(accepted.json())=={'format','version','status','transition_id','key_epoch'}
+    assert all(w['ciphertext_b64'] not in accepted.text for w in proof['deliveries'])
     record = backend.commitments.activation(proof["plan"]["account_id"], VAULT)
     before = copy.deepcopy(record)
     response = http.get(route, headers=headers[1])
