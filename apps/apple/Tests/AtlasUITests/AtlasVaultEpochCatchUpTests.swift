@@ -1,10 +1,52 @@
 import CryptoKit
 import Foundation
 import XCTest
+import Darwin
 
 @testable import AtlasUI
 
 final class AtlasVaultEpochCatchUpTests: XCTestCase {
+  func testCatchUpCrashChild() throws {
+    guard let path=ProcessInfo.processInfo.environment["ATLAS_C27_CHILD"],let stage=ProcessInfo.processInfo.environment["ATLAS_C27_STAGE"] else {return}
+    let root=URL(fileURLWithPath:path),v=try vector("atlasvault_epoch_catch_up_history_v2")
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+    let c=try device(root,2,v,initialize:true)
+    func point(_ name:String) throws {if name==stage {try Data(name.utf8).write(to:root.appendingPathComponent("ready"));while true {Thread.sleep(forTimeInterval:60)}}}
+    _ = try c.catchUpForTesting((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32),historyUpdates:v["history_updates"] as! [[String:Any]],checkpoint:point)
+    if ["cleanup_pending","deleted_epoch"].contains(stage) {
+      try c.cleanupEpochsForTesting(retainEpochs:[5],deleteEpoch:{epoch in try Data("deleted".utf8).write(to:root.appendingPathComponent("deleted-\(epoch)"))},containsEpoch:{epoch in !FileManager.default.fileExists(atPath:root.appendingPathComponent("deleted-\(epoch)").path)},checkpoint:point)
+    }
+  }
+  func testRealCatchUpKillAndRestart() throws {
+    let v=try vector("atlasvault_epoch_catch_up_history_v2")
+    for stage in ["catch_up_pending","verified_epoch","before_local_commit","after_local_commit","cleanup_pending","deleted_epoch"] {
+      let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),p=Process()
+      p.executableURL=URL(fileURLWithPath:"/usr/bin/xcrun")
+      p.arguments=["xctest","-XCTest","AtlasUITests.AtlasVaultEpochCatchUpTests/testCatchUpCrashChild",Bundle(for:Self.self).bundleURL.path]
+      p.environment=ProcessInfo.processInfo.environment.merging(["ATLAS_C27_CHILD":root.path,"ATLAS_C27_STAGE":stage]){_,new in new}
+      p.standardOutput=FileHandle.nullDevice;p.standardError=FileHandle.nullDevice
+      try p.run()
+      defer {if p.isRunning {Darwin.kill(p.processIdentifier,SIGKILL);p.waitUntilExit()};try? FileManager.default.removeItem(at:root)}
+      let ready=root.appendingPathComponent("ready"),deadline=Date().addingTimeInterval(30)
+      while !FileManager.default.fileExists(atPath:ready.path)&&Date()<deadline&&p.isRunning {Thread.sleep(forTimeInterval:0.05)}
+      XCTAssertTrue(FileManager.default.fileExists(atPath:ready.path),stage)
+      guard p.isRunning else {XCTFail("C27 worker exited before barrier");return}
+      XCTAssertEqual(Darwin.kill(p.processIdentifier,SIGKILL),0);p.waitUntilExit()
+      let c=try device(root,2,v),o=try c.observation()
+      XCTAssertEqual(o["key_epoch"] as? Int,["after_local_commit","cleanup_pending","deleted_epoch"].contains(stage) ? 5 : 3)
+      if stage != "after_local_commit" {
+        XCTAssertThrowsError(try c.seal("patch",plaintext:Data([7]),objectID:"probe",revision:"r1",signingKey:Curve25519.Signing.PrivateKey(rawRepresentation:Data(repeating:10,count:32))))
+      }
+      if ["cleanup_pending","deleted_epoch"].contains(stage) {
+        try c.cleanupEpochs(retainEpochs:[5],deleteEpoch:{epoch in try Data("deleted".utf8).write(to:root.appendingPathComponent("deleted-\(epoch)"))},containsEpoch:{epoch in !FileManager.default.fileExists(atPath:root.appendingPathComponent("deleted-\(epoch)").path)})
+        XCTAssertEqual(try c.availableEpochs(),[5])
+      } else {
+        _ = try c.catchUp((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32),historyUpdates:v["history_updates"] as! [[String:Any]])
+      }
+      XCTAssertEqual(try c.observation()["status"] as? String,"ACTIVE")
+      print("C27 Swift SIGKILL stage=\(stage) pid=\(p.processIdentifier) resumed_epoch=5")
+    }
+  }
   func vector(_ name: String = "atlasvault_epoch_catch_up_v2") throws -> [String: Any] {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

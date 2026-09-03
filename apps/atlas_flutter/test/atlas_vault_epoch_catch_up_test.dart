@@ -9,6 +9,7 @@ import 'package:atlas/src/atlas_vault/android_storage.dart';
 import 'package:atlas/src/atlas_vault/windows_storage.dart';
 import 'package:atlas/src/atlas_vault/plaintext_migration.dart';
 import 'package:atlas/src/atlas_vault/epoch_secure_cleanup.dart';
+import 'support/atlas_vault_dart_helper_process.dart';
 
 Map<String, Object?> m(Object? v) => Map<String, Object?>.from(v as Map);
 List<Map<String, Object?>> rows(Object? v) => (v as List).map(m).toList();
@@ -191,5 +192,30 @@ void main() {
         await root.delete(recursive: true);
       }
     });
+  }
+  for(final stage in ['catch_up_pending','verified_epoch','before_local_commit','after_local_commit','cleanup_pending','deleted_epoch']) {
+    test('C27 SIGKILL and fresh-process recovery $stage',() async {
+      final dir=await Directory.systemTemp.createTemp('atlas-c27-kill-');
+      const helper='test/support/atlas_vault_epoch_catch_up_process.dart';
+      final p=await startAtlasVaultDartHelper(helper,[dir.path,stage]);
+      p.stdout.drain<void>();p.stderr.drain<void>();
+      try {
+        final deadline=DateTime.now().add(const Duration(seconds:30));
+        while(!await File('${dir.path}/ready').exists()&&DateTime.now().isBefore(deadline)){await Future<void>.delayed(const Duration(milliseconds:50));}
+        final ready=await File('${dir.path}/ready').exists();
+        expect(p.kill(ProcessSignal.sigkill),isTrue);await p.exitCode;expect(ready,isTrue);
+        Future<Map<String,Object?>> run(String action) async {
+          final child=await startAtlasVaultDartHelper(helper,[dir.path,action]);
+          final output=child.stdout.transform(utf8.decoder).join();child.stderr.drain<void>();
+          expect(await child.exitCode,0);return m(jsonDecode(await output));
+        }
+        final observed=await run('observe');
+        expect(observed['writes_fenced'],stage!='after_local_commit');
+        expect(observed['key_epoch'],['after_local_commit','cleanup_pending','deleted_epoch'].contains(stage)?5:3);
+        final resumed=await run(stage.contains('cleanup')||stage=='deleted_epoch'?'cleanup_resume':'resume');
+        expect(resumed['status'],'ACTIVE');expect(resumed['key_epoch'],5);
+        stdout.writeln('C27 Dart SIGKILL stage=$stage pid=${p.pid} fenced=${observed['writes_fenced']} resumed_epoch=5');
+      } finally {p.kill(ProcessSignal.sigkill);await p.exitCode;await dir.delete(recursive:true);}
+    },timeout:const Timeout(Duration(minutes:2)));
   }
 }

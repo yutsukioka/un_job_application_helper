@@ -42,13 +42,13 @@ c._catch_up_for_testing(
     agreement_private_key=bytes([22]) * 32,
     checkpoint=checkpoint,
 )
-if stage == "cleanup_pending":
+if stage in ("cleanup_pending", "deleted_epoch"):
 
     class Deletion:
         def delete_epoch(self, epoch):
-            pass
+            (root / f"deleted-{epoch}").write_text("deleted")
 
         def contains_epoch(self, epoch):
-            return False
+            return not (root / f"deleted-{epoch}").exists()
 
     c._cleanup_epochs_for_testing(retain_epochs={5}, storage=Deletion(), checkpoint=checkpoint)

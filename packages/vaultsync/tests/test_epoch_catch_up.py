@@ -161,6 +161,7 @@ def test_cleanup_intent_is_durable_and_pending_view_is_visible(tmp_path):
         "before_local_commit",
         "after_local_commit",
         "cleanup_pending",
+        "deleted_epoch",
     ],
 )
 def test_real_kill_restart(tmp_path, stage):
@@ -197,13 +198,20 @@ def test_real_kill_restart(tmp_path, stage):
             assert observation["key_epoch"] == 5
         else:
             assert observation["status"] in ("CATCH_UP_PENDING", "CLEANUP_PENDING")
-        if stage != "cleanup_pending":
+        if stage not in ("cleanup_pending", "deleted_epoch"):
             c.catch_up(
                 [a[1][2], b[1][2]],
                 current_activation_id=b[2]["transition_id"],
                 agreement_private_key=bytes([22]) * 32,
             )
             assert c.observation()["key_epoch"] == 5
+        else:
+            class Deletion:
+                def delete_epoch(self,epoch): (tmp_path / f"deleted-{epoch}").write_text("deleted")
+                def contains_epoch(self,epoch): return not (tmp_path / f"deleted-{epoch}").exists()
+            c.cleanup_epochs(retain_epochs={5},storage=Deletion())
+            assert c.available_epochs()==[5]
+        assert c.observation()['status']=='ACTIVE'
     finally:
         if p.poll() is None:
             p.kill()
