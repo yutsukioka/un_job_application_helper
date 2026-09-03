@@ -134,10 +134,18 @@ def initialize(root):
 
 
 def backend_accept(env):
-    _, http, _, headers, proof, _ = env
+    backend, http, _, headers, proof, _ = env
     response = http.post("/v1/vaults/vault-c26/activations", json=proof, headers=headers[0])
     assert response.status_code == 200
-    return response.json()
+    record = backend.commitments.activation(proof["plan"]["account_id"], "vault-c26")
+    assert response.json() == {
+        "format": "atlasvault-activation-receipt",
+        "version": 2,
+        "status": "ACTIVATION_ACCEPTED",
+        "transition_id": record["transition_id"],
+        "key_epoch": record["key_epoch"],
+    }
+    return record
 
 
 def accept(client, index, proof, record):
