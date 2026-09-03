@@ -314,7 +314,8 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       epoch = verified['new_epoch'] as int;
       await checkpoint?.call('verified_epoch');
     }
-    if (_object(packets.last['proof'])['activation_id'] != currentActivationID) {
+    if (_object(packets.last['proof'])['activation_id'] !=
+        currentActivationID) {
       _epochFail('ATLAS_EPOCH_CONFLICT');
     }
     if (updateIndex != historyUpdates.length) {
