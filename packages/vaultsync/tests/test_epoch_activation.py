@@ -11,15 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from test_atlasvault_activation_c26 import (
+from vaultsync.epoch_rotation import EpochVault, RotationError
+from vaultsync.sync_queue import EncryptedPatchOperation
+from vaultsync.sync_recovery import GuardedSyncState
+
+REPOSITORY_TESTS = Path(__file__).resolve().parents[3] / "tests"
+sys.path.insert(0, str(REPOSITORY_TESTS))
+
+from test_atlasvault_activation_c26 import (  # noqa: E402
     environment,
     history_registry,
     initial_body,
     initial_collection,
 )
-from vaultsync.epoch_rotation import EpochVault, RotationError
-from vaultsync.sync_queue import EncryptedPatchOperation
-from vaultsync.sync_recovery import GuardedSyncState
 
 
 def test_shared_backend_record_schema_and_recipient_binding():

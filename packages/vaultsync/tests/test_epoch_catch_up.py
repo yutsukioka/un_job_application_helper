@@ -1,5 +1,6 @@
 """C27 integration RED: separate owners, backend delivery and durable fencing."""
 
+import base64
 import copy
 import json
 import os
@@ -8,12 +9,17 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
 import pytest
-from atlasvault_c27_fixture import setup, rotate, client, advance_history
+
+from vaultsync.authenticated_state_view import _message, _root
 from vaultsync.epoch_rotation import RotationError
-from vaultsync.authenticated_state_view import _root, _message
-import base64
 from vaultsync.sync_queue import DurableEncryptedInbox, EncryptedPatchOperation
+
+REPOSITORY_TESTS = Path(__file__).resolve().parents[3] / "tests"
+sys.path.insert(0, str(REPOSITORY_TESTS))
+
+from atlasvault_c27_fixture import advance_history, client, rotate, setup  # noqa: E402
 
 
 def test_cleanup_preserves_keys_required_by_pending_inbox(tmp_path):
