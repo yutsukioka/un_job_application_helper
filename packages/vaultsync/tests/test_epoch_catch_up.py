@@ -20,6 +20,16 @@ def scenario(tmp_path):
     return e, first, second
 
 
+def test_existing_c26_publication_accepts_its_own_v2_attestation(tmp_path):
+    e=setup(tmp_path)
+    a=rotate(e,e['registry'],3,3)
+    c=e['clients'][1]
+    c.accept_rotation(a[2]['proof'],accepted_record=a[2],agreement_private_key=bytes([21])*32)
+    assert c.catch_up([a[1][1]],current_activation_id=a[2]['transition_id'],agreement_private_key=bytes([21])*32)
+    assert c.delivery(e['devices'][1].device_id)==a[1][1]['wrapper']
+    with pytest.raises(RotationError): c.delivery(e['devices'][0].device_id)
+
+
 def test_intervening_authenticated_history_is_required_and_preserved(tmp_path):
     e = setup(tmp_path)
     first = rotate(e, e["registry"], 3, 3)

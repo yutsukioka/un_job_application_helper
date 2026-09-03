@@ -151,6 +151,20 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     XCTAssertNotNil(try store.loadVaultKey(for:ids[5]!))
     XCTAssertEqual(try reopened.availableEpochs(),[5])
   }
+  func testExistingC26PublicationAcceptsItsOwnV2Attestation() throws {
+    let old=try vector("atlasvault_activation_v1"),p=try vector("atlasvault_device_delivery_v2")["packet"] as! [String:Any]
+    let record=old["record"] as! [String:Any],proof=(old["record"] as! [String:Any])["proof"] as! [String:Any]
+    var fixture=old;fixture["initial_registry"]=proof["registry"];fixture["initial_history_registry"]=old["initial_registry"]
+    let ids=old["device_ids"] as! [String],i=ids.firstIndex(of:(p["proof"] as! [String:Any])["recipient_device_id"] as! String)!
+    let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+    defer {try? FileManager.default.removeItem(at:root)}
+    let c=try device(root,i,fixture,initialize:true),key=Data(repeating:UInt8(20+i),count:32)
+    _ = try c.acceptRotation(proof,acceptedRecord:record,agreementPrivateKey:key)
+    XCTAssertTrue(try c.catchUp([p],currentActivationID:record["transition_id"] as! String,agreementPrivateKey:key))
+    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(c.delivery(ids[i])),AtlasVaultEpochRotation.canonical(p["wrapper"] as! [String:Any]))
+    XCTAssertThrowsError(try c.delivery(ids[1-i]))
+  }
   func testMalformedChainsDoNotPartiallyActivate() throws {
     let v = try vector()
     for attack in ["missing", "reordered", "recipient", "state-root"] {

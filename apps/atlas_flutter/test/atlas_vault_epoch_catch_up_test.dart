@@ -80,6 +80,22 @@ void main() {
       expect((await c.observation())['state_root'],m(rows(fixture['history_updates'])[0]['view'])['root']);
     } finally {await root.delete(recursive:true);}
   });
+  test('C27 existing C26 publication accepts its own v2 attestation',() async {
+    final old=m(jsonDecode(File('../../contracts/sync/test_vectors/atlasvault_activation_v1.json').readAsStringSync()));
+    final packet=m(m(jsonDecode(File('../../contracts/sync/test_vectors/atlasvault_device_delivery_v2.json').readAsStringSync()))['packet']);
+    final record=m(old['record']),proof=m(m(old['record'])['proof']);
+    final fixture={...old,'initial_registry':proof['registry'],'initial_history_registry':old['initial_registry']};
+    final i=(old['device_ids'] as List).indexOf(m(packet['proof'])['recipient_device_id']);
+    final root=await Directory.systemTemp.createTemp('atlas-c27-legacy-');
+    try {
+      final c=await device(root,i,initialize:true,vector:fixture);
+      final key=Uint8List.fromList(List.filled(32,20+i));
+      await c.acceptRotation(proof,acceptedRecord:record,agreementPrivateKey:key);
+      expect(await c.catchUp([packet],currentActivationID:record['transition_id'] as String,agreementPrivateKey:key),isTrue);
+      expect(await c.delivery((old['device_ids'] as List)[i] as String),packet['wrapper']);
+      await expectLater(c.delivery((old['device_ids'] as List)[1-i] as String),throwsA(anything));
+    } finally {await root.delete(recursive:true);}
+  });
   test('C27 cleanup persists its intent and calls platform deletion boundaries',() async {
     for(final platform in ['android','windows']) {
       final root=await Directory.systemTemp.createTemp('atlas-c27-delete-');
