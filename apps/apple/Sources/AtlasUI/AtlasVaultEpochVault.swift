@@ -373,7 +373,14 @@ public final class AtlasVaultEpochVault {
     try run { try history(load()).compareEvidence(peer) }
   }
   public func recovery() throws -> [String: Any] {
-    try run { try history(load()).recovery() }
+    try run {
+      let s=try load()
+      var result=try history(s).recovery()
+      if result["status"] as? String == "ACTIVE",s["status"] as? String != "ACTIVE" {
+        result["status"]=s["status"];result["reason"]="ATLAS_\(s["status"] as! String)"
+      }
+      return result
+    }
   }
   public func pendingActivation() throws -> [String: Any]? {
     try run {

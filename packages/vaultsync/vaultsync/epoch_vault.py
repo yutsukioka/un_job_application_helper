@@ -465,7 +465,11 @@ class EpochVault:
     @_checked
     def recovery(self):
         with self._lock:
-            return self._history(self._load()).recovery()
+            s=self._load()
+            result=self._history(s).recovery()
+            if result['status']=='ACTIVE' and s['status']!='ACTIVE':
+                result.update(status=s['status'],reason='ATLAS_'+s['status'])
+            return result
 
     @_checked
     def pending_activation(self):

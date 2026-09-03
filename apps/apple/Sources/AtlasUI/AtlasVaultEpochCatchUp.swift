@@ -257,6 +257,13 @@ extension AtlasVaultEpochVault {
       else { throw AtlasVaultRotationError.rejected }
       guard try pendingOperations().allSatisfy({ retainEpochs.contains(Int($0.envelope.keyEpoch)) })
       else { throw AtlasVaultRotationError.cleanupPending }
+      var journal=try map(s["journal"])
+      let intent:[String:Any] = ["retain_epochs":retainEpochs.sorted()]
+      if s["status"] as? String == "CLEANUP_PENDING",
+        try R.canonical(map(journal["cleanup"])) != R.canonical(intent) {
+          throw AtlasVaultRotationError.cleanupPending
+      }
+      journal["cleanup"]=intent;s["journal"]=journal
       try file.enable()
       s["status"] = "CLEANUP_PENDING"
       try file.write(s)
@@ -265,10 +272,23 @@ extension AtlasVaultEpochVault {
         try deleteEpoch(epoch)
         guard try !containsEpoch(epoch) else { throw AtlasVaultRotationError.cleanupPending }
         keys.removeValue(forKey: String(epoch))
+        try checkpoint?("deleted_epoch")
       }
       s["keys"] = keys
       s["status"] = "ACTIVE"
       try file.write(s)
     }
+  }
+  public func cleanupSecureStorage<S:AtlasVaultKeyStore>(retainEpochs:Set<Int>,epochStorageIDs:[Int:String],store:S) throws {
+    let available=try availableEpochs()
+    guard epochStorageIDs.count<=32,Set(epochStorageIDs.values).count==epochStorageIDs.count,
+      available.allSatisfy({epochStorageIDs[$0] != nil}) else {throw AtlasVaultRotationError.cleanupPending}
+    try cleanupEpochs(retainEpochs:retainEpochs,
+      deleteEpoch:{try store.deleteVaultKey(for:epochStorageIDs[$0]!)},
+      containsEpoch:{epoch in
+        guard var value=try store.loadVaultKey(for:epochStorageIDs[epoch]!) else {return false}
+        value.resetBytes(in:0..<value.count)
+        return true
+      })
   }
 }

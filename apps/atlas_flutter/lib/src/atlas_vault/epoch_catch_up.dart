@@ -309,6 +309,9 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       (op) => !retainEpochs.contains(op.envelope.keyEpoch),
     ))
       _epochFail('ATLAS_CLEANUP_PENDING');
+    final journal=_object(s['journal']),intent={'retain_epochs':retainEpochs.toList()..sort()};
+    if(s['status']=='CLEANUP_PENDING' && jsonEncode(_canonicalValue(journal['cleanup']))!=jsonEncode(_canonicalValue(intent))) _epochFail('ATLAS_CLEANUP_PENDING');
+    journal['cleanup']=intent;s['journal']=journal;
     await _file.enable();
     s['status'] = 'CLEANUP_PENDING';
     await _file.write(s);
@@ -318,6 +321,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       await deleteEpoch(epoch);
       if (await containsEpoch(epoch)) _epochFail('ATLAS_CLEANUP_PENDING');
       keys.remove('$epoch');
+      await checkpoint?.call('deleted_epoch');
     }
     s['keys'] = keys;
     s['status'] = 'ACTIVE';

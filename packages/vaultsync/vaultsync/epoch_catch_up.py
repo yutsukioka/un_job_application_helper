@@ -257,6 +257,13 @@ def cleanup(owner, retain_epochs, storage, checkpoint):
     needed = {op.envelope.key_epoch for op in owner.pending_operations()}
     if not needed.issubset(retain_epochs):
         _reject("ATLAS_CLEANUP_PENDING")
+    journal=s.get('journal')
+    if not isinstance(journal,dict):
+        _reject()
+    intent=dict(retain_epochs=sorted(retain_epochs))
+    if s['status']=='CLEANUP_PENDING' and journal.get('cleanup')!=intent:
+        _reject('ATLAS_CLEANUP_PENDING')
+    journal['cleanup']=intent
     owner._file.enable()
     s["status"] = "CLEANUP_PENDING"
     owner._file.write(s)
@@ -266,5 +273,6 @@ def cleanup(owner, retain_epochs, storage, checkpoint):
         if storage.contains_epoch(epoch) is not False:
             _reject("ATLAS_CLEANUP_PENDING")
         del s["keys"][str(epoch)]
+        checkpoint('deleted_epoch')
     s["status"] = "ACTIVE"
     owner._file.write(s)

@@ -458,7 +458,11 @@ final class AtlasVaultEpochVault {
   Future<int> compareEvidence(List<Map<String, Object?>> peer) =>
       _run(() async => _history(await _load()).compareEvidence(peer));
   Future<Map<String, Object?>> recovery() =>
-      _run(() async => _history(await _load()).recovery());
+      _run(() async {
+        final s=await _load(),result=await _history(await _load()).recovery();
+        if(result['status']=='ACTIVE' && s['status']!='ACTIVE') result.addAll({'status':s['status'],'reason':'ATLAS_${s['status']}'});
+        return result;
+      });
   Future<Map<String, Object?>?> pendingActivation() => _run(() async {
     final s = await _load();
     if (['REVOKED', 'RECOVERY_PENDING'].contains(s['status']) ||
