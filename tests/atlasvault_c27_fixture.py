@@ -190,8 +190,29 @@ def rotate(env, registry, epoch, target):
             .status_code
             == 200
         )
-        packets[i] = packet
+        delivered = env["http"].get(
+            f"{route}/{epoch + 1}/delivery", headers=env["headers"][i]
+        )
+        assert delivered.status_code == 200
+        assert delivered.json() == packet
+        packets[i] = delivered.json()
     return after, packets, record
+
+
+def advance_history(env, first):
+    """An actual authorized writer commits state between two rotations."""
+    env["clients"][0].catch_up(
+        [first[1][0]], current_activation_id=first[2]["transition_id"],
+        agreement_private_key=bytes([20]) * 32,
+    )
+    body = initial_body()
+    update = env["clients"][0].create_commitment(body, signing_key=env["devices"][0])
+    response = env["http"].post(
+        f"/v1/vaults/{VAULT}/commitments", json=update["view"], headers=env["headers"][0]
+    )
+    assert response.status_code == 200
+    env["view"] = update["view"]
+    return dict(update, registry=first[0], opaque_state_b64=base64.b64encode(body).decode())
 
 
 def shared_vector(env, rounds):

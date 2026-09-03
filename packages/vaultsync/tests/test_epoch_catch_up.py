@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 import pytest
-from atlasvault_c27_fixture import setup, rotate, client
+from atlasvault_c27_fixture import setup, rotate, client, advance_history
 from vaultsync.epoch_rotation import RotationError
 
 
@@ -18,6 +18,25 @@ def scenario(tmp_path):
     first = rotate(e, e["registry"], 3, 3)
     second = rotate(e, first[0], 4, 4)
     return e, first, second
+
+
+def test_intervening_authenticated_history_is_required_and_preserved(tmp_path):
+    e = setup(tmp_path)
+    first = rotate(e, e["registry"], 3, 3)
+    update = advance_history(e, first)
+    second = rotate(e, first[0], 4, 4)
+    c = e["clients"][2]
+    packets = [first[1][2], second[1][2]]
+    with pytest.raises(RotationError):
+        c.catch_up(packets, current_activation_id=second[2]["transition_id"],
+                   agreement_private_key=bytes([22]) * 32)
+    assert c.observation()["sequence"] == 1
+    assert c.catch_up(packets, history_updates=[update],
+                     current_activation_id=second[2]["transition_id"],
+                     agreement_private_key=bytes([22]) * 32)
+    assert c.observation()["sequence"] == 2
+    assert c.observation()["state_root"] == update["view"]["root"]
+    assert c.observation()["key_epoch"] == 5
 
 
 def test_multiple_epochs_only_own_packets_and_durable_convergence(tmp_path):

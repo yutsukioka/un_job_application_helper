@@ -20,23 +20,25 @@ void main() {
     Directory root,
     int i, {
     bool initialize = false,
+    Map<String, Object?>? vector,
   }) async {
+    final fixture = vector ?? v;
     final c = AtlasVaultEpochVault(
       Directory('${root.path}/$i'),
       storageKey: Uint8List.fromList(List.filled(32, 50 + i)),
-      deviceID: (v['device_ids'] as List)[i] as String,
-      registry: rows(v['initial_registry']),
-      accountID: m(v['initial_view'])['account_id'] as String,
+      deviceID: (fixture['device_ids'] as List)[i] as String,
+      registry: rows(fixture['initial_registry']),
+      accountID: m(fixture['initial_view'])['account_id'] as String,
       vaultID: 'vault-c26',
       keyEpoch: 3,
-      stateRoot: m(v['initial_view'])['root'] as String,
+      stateRoot: m(fixture['initial_view'])['root'] as String,
     );
     if (initialize) {
       final signer = await Ed25519().newKeyPairFromSeed(List.filled(32, 10));
       final h = AtlasVaultGuardedSyncState(
         file: File('${root.path}/history-$i'),
         encryptionKey: Uint8List.fromList(List.filled(32, 60 + i)),
-        accountId: m(v['initial_view'])['account_id'] as String,
+        accountId: m(fixture['initial_view'])['account_id'] as String,
         vaultId: 'vault-c26',
         collectionId: 'collection-c26',
         keyEpoch: 3,
@@ -46,10 +48,10 @@ void main() {
       );
       await h.initialize();
       await h.ingest(
-        m(v['initial_view']),
-        rows(v['initial_history_registry']),
-        m(v['initial_collection']),
-        base64Decode(v['opaque_state_b64'] as String),
+        m(fixture['initial_view']),
+        rows(fixture['initial_history_registry']),
+        m(fixture['initial_collection']),
+        base64Decode(fixture['opaque_state_b64'] as String),
       );
       await c.initialize({
         3: Uint8List.fromList(List.filled(32, 30)),
@@ -57,6 +59,20 @@ void main() {
     }
     return c;
   }
+
+  test('C27 intervening authenticated history is required and preserved', () async {
+    final fixture=m(jsonDecode(File('../../contracts/sync/test_vectors/atlasvault_epoch_catch_up_history_v2.json').readAsStringSync()));
+    final root=await Directory.systemTemp.createTemp('atlas-c27-history-');
+    try {
+      final c=await device(root,2,initialize:true,vector:fixture);
+      final packets=rows((fixture['packets'] as List)[2]);
+      await expectLater(c.catchUp(packets,currentActivationID:fixture['target_activation_id'] as String,agreementPrivateKey:Uint8List.fromList(List.filled(32,22))),throwsA(anything));
+      expect((await c.observation())['sequence'],1);
+      expect(await c.catchUp(packets,historyUpdates:rows(fixture['history_updates']),currentActivationID:fixture['target_activation_id'] as String,agreementPrivateKey:Uint8List.fromList(List.filled(32,22))),isTrue);
+      expect((await c.observation())['sequence'],2);
+      expect((await c.observation())['state_root'],m(rows(fixture['history_updates'])[0]['view'])['root']);
+    } finally {await root.delete(recursive:true);}
+  });
 
   test(
     'C27 independent multi-epoch catch-up and recovery publication',
