@@ -100,7 +100,10 @@ class EpochPublication(_EncryptedQueueFile):
             super().write(state, before_replace=before_replace)
 
     def recover(self):
-        super().write(self._record())
+        s=self._record()
+        if s['status']=='ACTIVE':
+            s['status']='CATCH_UP_PENDING'
+        self.write(s)
 
 
 def catch_up(owner, packets, current_activation_id, agreement_private_key, checkpoint):
@@ -115,6 +118,10 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
         if journal["target_id"] == current_activation_id:
             if _canonical(journal["packets"]) != _canonical(packets):
                 _reject("ATLAS_EPOCH_CONFLICT")
+            if s['status']=='CATCH_UP_PENDING':
+                s['status']='ACTIVE'
+                owner._file.write(s)
+                return True
             return False
     owner._file.enable()
     s["status"] = "CATCH_UP_PENDING"

@@ -104,7 +104,11 @@ final class _EpochPublication extends _EncryptedQueueFile {
     }
   }
 
-  Future<void> recover() async => super.write(await record());
+  Future<void> recover() async {
+    final s=await record();
+    if(s['status']=='ACTIVE') s['status']='CATCH_UP_PENDING';
+    await write(s);
+  }
 }
 
 extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
@@ -140,6 +144,9 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       if (jsonEncode(_canonicalValue(j['packets'])) !=
           jsonEncode(_canonicalValue(packets)))
         _epochFail('ATLAS_EPOCH_CONFLICT');
+      if(s['status']=='CATCH_UP_PENDING') {
+        s['status']='ACTIVE';await _file.write(s);return true;
+      }
       return false;
     }
     await _file.enable();

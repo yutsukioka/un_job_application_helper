@@ -93,7 +93,11 @@ final class EpochPublication {
       try base.write(s, beforeReplace: beforeReplace)
     }
   }
-  func recover() throws { try base.write(record()) }
+  func recover() throws {
+    var s=try record()
+    if s["status"] as? String == "ACTIVE" {s["status"]="CATCH_UP_PENDING"}
+    try write(s)
+  }
 }
 
 extension AtlasVaultEpochVault {
@@ -119,6 +123,9 @@ extension AtlasVaultEpochVault {
       {
         guard try R.canonical(["packets": j["packets"]!]) == R.canonical(["packets": packets])
         else { throw AtlasVaultRotationError.rejected }
+        if s["status"] as? String == "CATCH_UP_PENDING" {
+          s["status"]="ACTIVE";try file.write(s);return true
+        }
         return false
       }
       try file.enable()
