@@ -358,6 +358,18 @@ struct EncryptedQueueFile {
     let fileURL: URL
     private let key: SymmetricKey
     private let aad: Data
+    private var readComponent: (([String: Any]) throws -> [String: Any])?
+    private var writeComponent: (([String: Any], (() throws -> Void)?) throws -> Void)?
+
+    init(
+        fileURL: URL, key: Data,
+        read: @escaping ([String: Any]) throws -> [String: Any],
+        write: @escaping ([String: Any], (() throws -> Void)?) throws -> Void
+    ) throws {
+        try self.init(fileURL: fileURL, encryptionKey: key, kind: "epoch-component")
+        readComponent = read
+        writeComponent = write
+    }
 
     init(fileURL: URL, encryptionKey: Data, kind: String) throws {
         guard fileURL.isFileURL, encryptionKey.count == 32 else { throw invalid() }
@@ -368,6 +380,7 @@ struct EncryptedQueueFile {
     }
 
     func read(default fallback: [String: Any]) throws -> [String: Any] {
+        if let readComponent { return try readComponent(fallback) }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return fallback }
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -411,6 +424,10 @@ struct EncryptedQueueFile {
         _ state: [String: Any],
         beforeReplace: (() throws -> Void)? = nil
     ) throws {
+        if let writeComponent {
+            try writeComponent(state, beforeReplace)
+            return
+        }
         do {
             let stateData = try canonicalJSON(state)
             guard !stateData.isEmpty, stateData.count <= maximumQueueBytes else { throw invalid() }
@@ -1283,7 +1300,7 @@ public final class AtlasVaultDurableEncryptedConvergentReplica {
     }
 }
 
-private func outboxDefault() -> [String: Any] {
+func outboxDefault() -> [String: Any] {
     [
         "format": "atlasvault-encrypted-outbox-state",
         "version": 1,
@@ -1310,7 +1327,7 @@ private func loadOutbox(_ store: EncryptedQueueFile) throws -> [AtlasVaultEncryp
 }
 
 public final class AtlasVaultDurableEncryptedOutbox {
-    private let store: EncryptedQueueFile
+    var store: EncryptedQueueFile
 
     public init(fileURL: URL, encryptionKey: Data) throws {
         self.store = try EncryptedQueueFile(
@@ -1383,7 +1400,7 @@ private struct InboxState {
     }
 }
 
-private func inboxDefault() -> [String: Any] {
+func inboxDefault() -> [String: Any] {
     InboxState(
         cursor: nil,
         pendingPage: false,
@@ -1490,7 +1507,7 @@ private func advanceMetadata(
 }
 
 public final class AtlasVaultDurableEncryptedInbox {
-    private let store: EncryptedQueueFile
+    var store: EncryptedQueueFile
 
     public init(fileURL: URL, encryptionKey: Data) throws {
         self.store = try EncryptedQueueFile(

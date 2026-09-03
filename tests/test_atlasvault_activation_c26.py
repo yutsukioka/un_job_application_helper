@@ -226,10 +226,47 @@ def test_activation_is_durable_idempotent_and_fences_old_writes(tmp_path):
 
 
 def test_ephemeral_backend_cannot_claim_durable_activation(tmp_path):
-    backend,http,_,headers,proof,_=environment(tmp_path,AtlasVaultBackend())
-    response=http.post(f'/v1/vaults/{VAULT}/activations',json=proof,headers=headers[0])
-    assert response.status_code==503
-    assert backend.commitments.activation(ACCOUNT_A,VAULT) is None
+    backend, http, _, headers, proof, _ = environment(tmp_path, AtlasVaultBackend())
+    response = http.post(
+        f"/v1/vaults/{VAULT}/activations", json=proof, headers=headers[0]
+    )
+    assert response.status_code == 503
+    assert backend.commitments.activation(ACCOUNT_A, VAULT) is None
+
+
+def test_activation_errors_and_telemetry_are_secret_free(tmp_path, caplog):
+    import logging
+
+    backend, http, _, headers, proof, _ = environment(tmp_path)
+    caplog.set_level(logging.INFO, logger="atlasvault_api.security")
+    bad = copy.deepcopy(proof)
+    bad["passphrase"] = "SYNTHETIC_FORBIDDEN_FIELD"
+    response = http.post(
+        f"/v1/vaults/{VAULT}/activations", json=bad, headers=headers[0]
+    )
+    assert response.status_code == 422
+    rejected = response.text
+    assert (
+        http.post(
+            f"/v1/vaults/{VAULT}/activations", json=proof, headers=headers[0]
+        ).status_code
+        == 200
+    )
+    response = http.get(f"/v1/vaults/{VAULT}/activations", headers=headers[2])
+    assert response.json() == {"detail": "ATLAS_DEVICE_REVOKED"}
+    observed = (
+        caplog.text
+        + rejected
+        + response.text
+        + json.dumps(backend.telemetry.snapshot())
+    )
+    for value in (
+        "SYNTHETIC_FORBIDDEN_FIELD",
+        headers[0]["Authorization"].split()[1],
+        proof["root"],
+        proof["deliveries"][0]["ciphertext_b64"],
+    ):
+        assert value not in observed
 
 
 def test_concurrent_conflicting_activations_have_exactly_one_winner(tmp_path):

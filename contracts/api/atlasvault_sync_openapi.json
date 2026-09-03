@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AtlasVault Zero-Knowledge Sync API",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "description": "Account/device-authorized ciphertext-only storage with conditional revisions, safe retries, bounded requests, throttling, and secret-free observability."
   },
   "x-atlasvault-c15-controls": {
@@ -906,6 +906,226 @@
         },
         "x-atlasvault-implementation-chunk": "C23"
       }
+    },
+    "/v1/vaults/{vault_id}/activations": {
+      "post": {
+        "summary": "Accept Epoch Activation",
+        "operationId": "acceptEpochActivation",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EpochRotationProof"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Account or device authorization failed",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the fixed ciphertext request ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authenticated account or device request window is exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Opaque storage request is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Opaque revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Durable activation storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-atlasvault-implementation-chunk": "C26"
+      },
+      "get": {
+        "summary": "Get Epoch Activation",
+        "operationId": "getEpochActivation",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Account or device authorization failed",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the fixed ciphertext request ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authenticated account or device request window is exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Opaque resource was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-atlasvault-implementation-chunk": "C26"
+      }
     }
   },
   "components": {
@@ -1660,6 +1880,385 @@
           "appended"
         ],
         "title": "CommitmentAppendResult"
+      },
+      "ActivationRecord": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-activation-record",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version"
+          },
+          "status": {
+            "type": "string",
+            "const": "ACTIVATION_ACCEPTED",
+            "title": "Status"
+          },
+          "transition_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Transition Id"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/EpochRotationProof"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "status",
+          "transition_id",
+          "proof"
+        ],
+        "title": "ActivationRecord"
+      },
+      "EpochRotationProof": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-epoch-rotation",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/RotationPlan"
+          },
+          "revocation": {
+            "$ref": "#/components/schemas/RevocationTransition"
+          },
+          "registry": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntry"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Registry"
+          },
+          "rotation_signer_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Rotation Signer Device Id"
+          },
+          "deliveries": {
+            "items": {
+              "$ref": "#/components/schemas/EpochDelivery"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Deliveries"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Root"
+          },
+          "signature_b64": {
+            "type": "string",
+            "maxLength": 88,
+            "minLength": 88,
+            "title": "Signature B64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "plan",
+          "revocation",
+          "registry",
+          "rotation_signer_device_id",
+          "deliveries",
+          "root",
+          "signature_b64"
+        ],
+        "title": "EpochRotationProof"
+      },
+      "EpochDelivery": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Device Id"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Key Epoch"
+          },
+          "encapsulated_key_b64": {
+            "type": "string",
+            "maxLength": 44,
+            "minLength": 44,
+            "title": "Encapsulated Key B64"
+          },
+          "ciphertext_b64": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Ciphertext B64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id",
+          "key_epoch",
+          "encapsulated_key_b64",
+          "ciphertext_b64"
+        ],
+        "title": "EpochDelivery"
+      },
+      "RegistryEntry": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Device Id"
+          },
+          "signing_public_b64": {
+            "type": "string",
+            "maxLength": 44,
+            "minLength": 44,
+            "title": "Signing Public B64"
+          },
+          "agreement_public_b64": {
+            "type": "string",
+            "maxLength": 44,
+            "minLength": 44,
+            "title": "Agreement Public B64"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "REVOKED"
+            ],
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id",
+          "signing_public_b64",
+          "agreement_public_b64",
+          "state"
+        ],
+        "title": "RegistryEntry"
+      },
+      "RevocationTransition": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-device-revocation",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version"
+          },
+          "account_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Account Id"
+          },
+          "vault_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Vault Id"
+          },
+          "target_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Target Device Id"
+          },
+          "initiator_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Initiator Device Id"
+          },
+          "prior_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Prior Registry Root"
+          },
+          "resulting_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Resulting Registry Root"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Key Epoch"
+          },
+          "sequence": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Sequence"
+          },
+          "authorization_category": {
+            "type": "string",
+            "const": "DEVICE_PRESENCE",
+            "title": "Authorization Category"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Root"
+          },
+          "signature_b64": {
+            "type": "string",
+            "maxLength": 88,
+            "minLength": 88,
+            "title": "Signature B64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "vault_id",
+          "target_device_id",
+          "initiator_device_id",
+          "prior_registry_root",
+          "resulting_registry_root",
+          "key_epoch",
+          "sequence",
+          "authorization_category",
+          "root",
+          "signature_b64"
+        ],
+        "title": "RevocationTransition"
+      },
+      "RotationPlan": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-rotation-plan",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version"
+          },
+          "account_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Account Id"
+          },
+          "vault_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Vault Id"
+          },
+          "previous_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Previous Epoch"
+          },
+          "new_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "New Epoch"
+          },
+          "prior_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Prior Registry Root"
+          },
+          "resulting_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Resulting Registry Root"
+          },
+          "state_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "State Root"
+          },
+          "initiator_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Initiator Device Id"
+          },
+          "revocation_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Revocation Root"
+          },
+          "recipients": {
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Recipients"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "vault_id",
+          "previous_epoch",
+          "new_epoch",
+          "prior_registry_root",
+          "resulting_registry_root",
+          "state_root",
+          "initiator_device_id",
+          "revocation_root",
+          "recipients"
+        ],
+        "title": "RotationPlan"
       }
     }
   }

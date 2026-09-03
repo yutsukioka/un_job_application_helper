@@ -1,0 +1,382 @@
+{
+  "$defs": {
+    "EpochDelivery": {
+      "additionalProperties": false,
+      "properties": {
+        "ciphertext_b64": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Ciphertext B64",
+          "type": "string"
+        },
+        "device_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Device Id",
+          "type": "string"
+        },
+        "encapsulated_key_b64": {
+          "maxLength": 44,
+          "minLength": 44,
+          "title": "Encapsulated Key B64",
+          "type": "string"
+        },
+        "key_epoch": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Key Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device_id",
+        "key_epoch",
+        "encapsulated_key_b64",
+        "ciphertext_b64"
+      ],
+      "title": "EpochDelivery",
+      "type": "object"
+    },
+    "EpochRotationProof": {
+      "additionalProperties": false,
+      "properties": {
+        "deliveries": {
+          "items": {
+            "$ref": "#/$defs/EpochDelivery"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Deliveries",
+          "type": "array"
+        },
+        "format": {
+          "const": "atlasvault-epoch-rotation",
+          "title": "Format",
+          "type": "string"
+        },
+        "plan": {
+          "$ref": "#/$defs/RotationPlan"
+        },
+        "registry": {
+          "items": {
+            "$ref": "#/$defs/RegistryEntry"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Registry",
+          "type": "array"
+        },
+        "revocation": {
+          "$ref": "#/$defs/RevocationTransition"
+        },
+        "root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Root",
+          "type": "string"
+        },
+        "rotation_signer_device_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Rotation Signer Device Id",
+          "type": "string"
+        },
+        "signature_b64": {
+          "maxLength": 88,
+          "minLength": 88,
+          "title": "Signature B64",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "version",
+        "plan",
+        "revocation",
+        "registry",
+        "rotation_signer_device_id",
+        "deliveries",
+        "root",
+        "signature_b64"
+      ],
+      "title": "EpochRotationProof",
+      "type": "object"
+    },
+    "RegistryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "agreement_public_b64": {
+          "maxLength": 44,
+          "minLength": 44,
+          "title": "Agreement Public B64",
+          "type": "string"
+        },
+        "device_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Device Id",
+          "type": "string"
+        },
+        "signing_public_b64": {
+          "maxLength": 44,
+          "minLength": 44,
+          "title": "Signing Public B64",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "ACTIVE",
+            "REVOKED"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "device_id",
+        "signing_public_b64",
+        "agreement_public_b64",
+        "state"
+      ],
+      "title": "RegistryEntry",
+      "type": "object"
+    },
+    "RevocationTransition": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "authorization_category": {
+          "const": "DEVICE_PRESENCE",
+          "title": "Authorization Category",
+          "type": "string"
+        },
+        "format": {
+          "const": "atlasvault-device-revocation",
+          "title": "Format",
+          "type": "string"
+        },
+        "initiator_device_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Initiator Device Id",
+          "type": "string"
+        },
+        "key_epoch": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Key Epoch",
+          "type": "integer"
+        },
+        "prior_registry_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prior Registry Root",
+          "type": "string"
+        },
+        "resulting_registry_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resulting Registry Root",
+          "type": "string"
+        },
+        "root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Root",
+          "type": "string"
+        },
+        "sequence": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "signature_b64": {
+          "maxLength": 88,
+          "minLength": 88,
+          "title": "Signature B64",
+          "type": "string"
+        },
+        "target_device_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Target Device Id",
+          "type": "string"
+        },
+        "vault_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Vault Id",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "version",
+        "account_id",
+        "vault_id",
+        "target_device_id",
+        "initiator_device_id",
+        "prior_registry_root",
+        "resulting_registry_root",
+        "key_epoch",
+        "sequence",
+        "authorization_category",
+        "root",
+        "signature_b64"
+      ],
+      "title": "RevocationTransition",
+      "type": "object"
+    },
+    "RotationPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "format": {
+          "const": "atlasvault-rotation-plan",
+          "title": "Format",
+          "type": "string"
+        },
+        "initiator_device_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Initiator Device Id",
+          "type": "string"
+        },
+        "new_epoch": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "New Epoch",
+          "type": "integer"
+        },
+        "previous_epoch": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Previous Epoch",
+          "type": "integer"
+        },
+        "prior_registry_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prior Registry Root",
+          "type": "string"
+        },
+        "recipients": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Recipients",
+          "type": "array"
+        },
+        "resulting_registry_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resulting Registry Root",
+          "type": "string"
+        },
+        "revocation_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Revocation Root",
+          "type": "string"
+        },
+        "state_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "State Root",
+          "type": "string"
+        },
+        "vault_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "title": "Vault Id",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "version",
+        "account_id",
+        "vault_id",
+        "previous_epoch",
+        "new_epoch",
+        "prior_registry_root",
+        "resulting_registry_root",
+        "state_root",
+        "initiator_device_id",
+        "revocation_root",
+        "recipients"
+      ],
+      "title": "RotationPlan",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "atlasvault-activation-record",
+      "title": "Format",
+      "type": "string"
+    },
+    "proof": {
+      "$ref": "#/$defs/EpochRotationProof"
+    },
+    "status": {
+      "const": "ACTIVATION_ACCEPTED",
+      "title": "Status",
+      "type": "string"
+    },
+    "transition_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Transition Id",
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "status",
+    "transition_id",
+    "proof"
+  ],
+  "title": "ActivationRecord",
+  "type": "object"
+}

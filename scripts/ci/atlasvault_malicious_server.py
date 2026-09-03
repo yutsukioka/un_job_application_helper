@@ -226,6 +226,11 @@ def compile_swift(directory):
             "AtlasVaultSyncQueue.swift",
             "AtlasVaultAuthenticatedStateView.swift",
             "AtlasVaultSyncRecovery.swift",
+            "AtlasVaultEpochRotation.swift",
+            "AtlasVaultRevocation.swift",
+            "AtlasVaultKeyEpochs.swift",
+            "AtlasVaultHPKEKeyDelivery.swift",
+            "AtlasVaultRecordCrypto.swift",
         )
     ]
     subprocess.run(

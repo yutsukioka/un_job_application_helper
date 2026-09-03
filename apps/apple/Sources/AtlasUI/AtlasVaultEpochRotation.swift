@@ -4,6 +4,11 @@ import Foundation
 
 public enum AtlasVaultRotationError: String, Error {
   case rejected = "ATLAS_EPOCH_ROTATION_REJECTED"
+  case pending = "ATLAS_ACTIVATION_PENDING"
+  case revoked = "ATLAS_DEVICE_REVOKED"
+  case recovery = "ATLAS_RECOVERY_PENDING"
+  case conflict = "ATLAS_EPOCH_CONFLICT"
+  case write = "ATLAS_EPOCH_WRITE_REJECTED"
 }
 
 public enum AtlasVaultEpochRotation {
@@ -32,6 +37,61 @@ public enum AtlasVaultEpochRotation {
   }
   public static func binding(_ plan: [String: Any]) throws -> String {
     digest(Data("atlasvault-rotation-binding-v1\n".utf8) + (try canonical(plan)))
+  }
+  public static func create(
+    _ transition: [String: Any], registry: [[String: Any]], stateRoot: String,
+    signingKey: Curve25519.Signing.PrivateKey
+  ) throws -> [String: Any] {
+    do {
+      let after = try AtlasVaultRevocation.verify(transition, registry: registry)
+      let recipients = after.filter { $0["state"] as? String == "ACTIVE" }.map {
+        $0["device_id"] as! String
+      }.sorted()
+      let previous = try integer(transition["key_epoch"])
+      guard previous < Int.max else { throw AtlasVaultRotationError.rejected }
+      let plan: [String: Any] = [
+        "format": "atlasvault-rotation-plan", "version": 1, "account_id": transition["account_id"]!,
+        "vault_id": transition["vault_id"]!,
+        "previous_epoch": previous, "new_epoch": previous + 1,
+        "prior_registry_root": transition["prior_registry_root"]!,
+        "resulting_registry_root": transition["resulting_registry_root"]!,
+        "state_root": stateRoot, "initiator_device_id": transition["initiator_device_id"]!,
+        "revocation_root": transition["root"]!, "recipients": recipients,
+      ]
+      try AtlasVaultRevocation.validateRotationPlan(
+        plan, transition: transition, registry: after, stateRoot: stateRoot)
+      let material = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+      let ring = try AtlasVaultKeyEpochRing.fromEntries(
+        currentKeyEpoch: Int64(previous + 1), keys: [Int64(previous + 1): material])
+      var deliveries = [[String: Any]]()
+      for device in recipients {
+        let entry = after.first { $0["device_id"] as? String == device }!
+        let sealed = try ring.sealCurrentHPKEV2(
+          recipientPublicKey: bytes(entry["agreement_public_b64"], 32),
+          context: Data("atlasvault-rotation-delivery-v1:\(try binding(plan)):\(device)".utf8))
+        deliveries.append([
+          "device_id": device, "key_epoch": sealed.keyEpoch,
+          "encapsulated_key_b64": sealed.encapsulatedKey.base64EncodedString(),
+          "ciphertext_b64": sealed.ciphertext.base64EncodedString(),
+        ])
+      }
+      var proof: [String: Any] = [
+        "format": "atlasvault-epoch-rotation", "version": 1, "plan": plan, "revocation": transition,
+        "registry": registry, "rotation_signer_device_id": transition["initiator_device_id"]!,
+        "deliveries": deliveries,
+      ]
+      let root = digest(Data("atlasvault-epoch-rotation-v1\n".utf8) + (try canonical(proof)))
+      let rootBytes = Data(
+        stride(from: 0, to: 64, by: 2).map { UInt8(root.dropFirst($0).prefix(2), radix: 16)! })
+      proof["root"] = root
+      proof["signature_b64"] = try signingKey.signature(
+        for: Data("atlasvault-epoch-rotation-signature-v1\0".utf8) + rootBytes
+      ).base64EncodedString()
+      _ = try verify(
+        proof, registry: registry, accountID: plan["account_id"] as! String,
+        vaultID: plan["vault_id"] as! String, previousEpoch: previous, stateRoot: stateRoot)
+      return proof
+    } catch { throw AtlasVaultRotationError.rejected }
   }
   public static func verify(
     _ proof: [String: Any], registry: [[String: Any]], accountID: String,

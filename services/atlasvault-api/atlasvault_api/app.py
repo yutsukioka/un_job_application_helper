@@ -48,6 +48,8 @@ from atlasvault_api.commitments import (
     CommitmentLog,
     StateViewModel,
 )
+from atlasvault_api.activations import ActivationRecord, EpochRotationProof
+from atlasvault_api.commitments import ActivationUnavailable
 from atlasvault_api.controls import (
     AbuseControlPolicy,
     AccountDeviceRateLimiter,
@@ -438,6 +440,7 @@ class AtlasVaultBackend:
         monotonic: Callable[[], float] = time.monotonic,
         abuse_policy: AbuseControlPolicy | None = None,
         telemetry: SecretFreeTelemetry | None = None,
+        commitments_path: str = ":memory:",
     ) -> None:
         self._entropy = entropy
         self._monotonic = monotonic
@@ -476,14 +479,88 @@ class AtlasVaultBackend:
             monotonic=monotonic,
         )
         self.telemetry = telemetry or SecretFreeTelemetry()
-        self.commitments = CommitmentLog()
+        self.commitments = CommitmentLog(commitments_path)
+
+    def _rotation_registry(self, account_id):
+        return [
+            dict(
+                device_id=device_id,
+                signing_public_b64=_encode_base64(
+                    signed.verified().descriptor.signing_public_key
+                ),
+                agreement_public_b64=_encode_base64(
+                    signed.verified().descriptor.agreement_public_key
+                ),
+                state="ACTIVE",
+            )
+            for device_id, signed in self._accounts[account_id].devices.items()
+        ]
+
+    def _vault_session(self, token, vault_id, epoch=None):
+        session = self._authorize_token(token)
+        record = self.commitments.activation(session.account_id, vault_id)
+        if record and session.device_id not in record["proof"]["plan"]["recipients"]:
+            raise HTTPException(status_code=403, detail="ATLAS_DEVICE_REVOKED")
+        self.commitments.require_active_epoch(
+            session.account_id, vault_id, epoch, session.device_id
+        )
+        return session
+
+    def write_storage(
+        self,
+        token,
+        vault_id,
+        kind,
+        request,
+        *,
+        expected_revision,
+        idempotency_key,
+        object_id=None,
+    ):
+        # Serialize epoch admission and the complete storage mutation with activation.
+        with self._lock:
+            session = self._vault_session(token, vault_id, request.key_epoch)
+            args = (session.account_id, vault_id)
+            if kind == "object":
+                args += (object_id,)
+            methods = {
+                "metadata": self.storage.put_metadata,
+                "object": self.storage.put_object,
+                "patch": self.storage.append_patch,
+                "snapshot": self.storage.put_snapshot,
+            }
+            return methods[kind](
+                *args,
+                request,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+
+    def accept_activation(self, token, vault_id, proof):
+        with self._lock:
+            session = self._vault_session(token, vault_id)
+            return self.commitments.accept_activation(
+                session.account_id,
+                vault_id,
+                proof,
+                self._rotation_registry(session.account_id),
+                session.device_id,
+            )
+
+    def read_activation(self, token, vault_id):
+        with self._lock:
+            session = self._vault_session(token, vault_id)
+            record = self.commitments.activation(session.account_id, vault_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="Activation unavailable.")
+            return record
 
     def append_commitment(
         self, token: str, vault_id: str, view: StateViewModel
     ) -> bool:
         # Registry admission and append share a lock with signed registry transitions.
         with self._lock:
-            session = self._authorize_token(token)
+            session = self._vault_session(token, vault_id, view.key_epoch)
             devices = self._accounts[session.account_id].devices
             entries = [
                 {
@@ -495,11 +572,17 @@ class AtlasVaultBackend:
                 for device_id, signed in devices.items()
             ]
             signer = devices[session.device_id].verified().descriptor
+            activation = self.commitments.activation(session.account_id, vault_id)
+            active_registry = (
+                activation["proof"]["plan"]["resulting_registry_root"]
+                if activation
+                else registry_root(entries)
+            )
             return self.commitments.append(
                 session.account_id,
                 vault_id,
                 view.model_dump(),
-                registry_root(entries),
+                active_registry,
                 signer.signing_public_key,
                 signer.key_epoch,
             )
@@ -985,7 +1068,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     service = backend or AtlasVaultBackend()
     app = FastAPI(
         title="AtlasVault Zero-Knowledge Sync API",
-        version="1.2.0",
+        version="1.3.0",
         description=(
             "Account authentication, signed public-device registry, opaque "
             "ciphertext storage, and C15 abuse and observability controls."
@@ -1161,11 +1244,12 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         idempotency_key: IdempotencyKeyHeader,
         authorization: BearerAuthorization = None,
     ) -> EncryptedVaultMetadataEnvelopeModel:
-        account_id = _authorized_storage_account(service, authorization)
+        _authorized_storage_account(service, authorization)
         try:
-            return service.storage.put_metadata(
-                account_id,
+            return service.write_storage(
+                _credential_token(authorization),
                 vault_id,
+                "metadata",
                 request,
                 expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
@@ -1203,13 +1287,14 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         idempotency_key: IdempotencyKeyHeader,
         authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
-        account_id = _authorized_storage_account(service, authorization)
+        _authorized_storage_account(service, authorization)
         try:
-            return service.storage.put_object(
-                account_id,
+            return service.write_storage(
+                _credential_token(authorization),
                 vault_id,
-                object_id,
+                "object",
                 request,
+                object_id=object_id,
                 expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
             )
@@ -1286,11 +1371,12 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         idempotency_key: IdempotencyKeyHeader,
         authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
-        account_id = _authorized_storage_account(service, authorization)
+        _authorized_storage_account(service, authorization)
         try:
-            return service.storage.append_patch(
-                account_id,
+            return service.write_storage(
+                _credential_token(authorization),
                 vault_id,
+                "patch",
                 request,
                 expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
@@ -1334,11 +1420,12 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         idempotency_key: IdempotencyKeyHeader,
         authorization: BearerAuthorization = None,
     ) -> OpaqueCiphertextEnvelopeModel:
-        account_id = _authorized_storage_account(service, authorization)
+        _authorized_storage_account(service, authorization)
         try:
-            return service.storage.put_snapshot(
-                account_id,
+            return service.write_storage(
+                _credential_token(authorization),
                 vault_id,
+                "snapshot",
                 request,
                 expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
@@ -1361,6 +1448,58 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             return service.storage.get_snapshot(account_id, vault_id)
         except _STORAGE_ERRORS as exc:
             _raise_storage_http_error(exc)
+
+    @app.post(
+        "/v1/vaults/{vault_id}/activations",
+        response_model=ActivationRecord,
+        operation_id="acceptEpochActivation",
+        responses={
+            **_STORAGE_WRITE_OPENAPI_RESPONSES,
+            503: {
+                "model": FixedErrorResponse,
+                "description": "Durable activation storage unavailable",
+            },
+        },
+    )
+    def accept_epoch_activation(
+        vault_id: VaultPath,
+        request: EpochRotationProof,
+        authorization: BearerAuthorization = None,
+    ) -> ActivationRecord:
+        _authorized_storage_account(service, authorization)
+        try:
+            return ActivationRecord(
+                **service.accept_activation(
+                    _credential_token(authorization), vault_id, request.model_dump()
+                )
+            )
+        except AuthorizationFailed:
+            raise _bearer_authorization_error() from None
+        except ActivationUnavailable:
+            raise HTTPException(
+                status_code=503, detail="ATLAS_ACTIVATION_STORAGE_UNAVAILABLE"
+            ) from None
+        except CommitmentConflict:
+            raise HTTPException(
+                status_code=409, detail="Activation conflict."
+            ) from None
+
+    @app.get(
+        "/v1/vaults/{vault_id}/activations",
+        response_model=ActivationRecord,
+        operation_id="getEpochActivation",
+        responses=_STORAGE_READ_OPENAPI_RESPONSES,
+    )
+    def get_epoch_activation(
+        vault_id: VaultPath, authorization: BearerAuthorization = None
+    ) -> ActivationRecord:
+        _authorized_storage_account(service, authorization)
+        try:
+            return ActivationRecord(
+                **service.read_activation(_credential_token(authorization), vault_id)
+            )
+        except AuthorizationFailed:
+            raise _bearer_authorization_error() from None
 
     served_schema = app.openapi()
     policy = service.abuse_policy
@@ -1401,6 +1540,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
 
 
 _STORAGE_ERRORS = (
+    CommitmentConflict,
     InvalidOpaqueStorageRequest,
     OpaqueStorageCapacityExceeded,
     OpaqueStorageConflict,
@@ -1487,6 +1627,10 @@ async def _send_fixed_error(
 
 
 def _raise_storage_http_error(error: ValueError) -> NoReturn:
+    if isinstance(error, CommitmentConflict):
+        raise HTTPException(
+            status_code=409, detail="Epoch admission conflict."
+        ) from None
     if isinstance(error, OpaqueStorageNotFound):
         raise HTTPException(status_code=404, detail="Opaque resource not found.")
     if isinstance(error, OpaqueStorageConflict):

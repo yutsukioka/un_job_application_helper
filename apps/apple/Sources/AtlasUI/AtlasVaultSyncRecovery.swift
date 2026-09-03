@@ -24,14 +24,16 @@ private func recoveryChecked<T>(_ operation: () throws -> T) throws -> T {
 
 /// Single-owner atomic admission state. Manual selection never rewrites accepted roots.
 public final class AtlasVaultGuardedSyncState {
-  private let store: EncryptedQueueFile
+  var store: EncryptedQueueFile
+  private let rotationRegistry: [[String: Any]]?
   private let publicKey: Data
   private let context: [String: Any]
   private let lock = NSRecursiveLock()
 
   public init(
     fileURL: URL, encryptionKey: Data, accountID: String, vaultID: String,
-    collectionID: String, keyEpoch: Int64, trustedSigner: Data
+    collectionID: String, keyEpoch: Int64, trustedSigner: Data,
+    rotationRegistry: [[String: Any]]? = nil
   ) throws {
     let config = try recoveryChecked { () -> ([String: Any], EncryptedQueueFile) in
       guard trustedSigner.count == 32 else { throw AtlasVaultSyncRecoveryError.rejected }
@@ -48,6 +50,7 @@ public final class AtlasVaultGuardedSyncState {
     context = config.0
     store = config.1
     publicKey = trustedSigner
+    self.rotationRegistry = rotationRegistry
   }
 
   private func run<T>(_ operation: () throws -> T) throws -> T {
@@ -56,21 +59,34 @@ public final class AtlasVaultGuardedSyncState {
     return try recoveryChecked(operation)
   }
 
-  private func checkContext(_ view: [String: Any]) throws {
+  private func checkContext(_ view: [String: Any], epoch: Int64? = nil) throws {
     guard view["account_id"] as? String == context["account_id"] as? String,
       view["vault_id"] as? String == context["vault_id"] as? String,
-      try viewInteger(view["key_epoch"]) == viewInteger(context["key_epoch"])
+      try viewInteger(view["key_epoch"]) == (epoch ?? viewInteger(context["key_epoch"]))
     else { throw AtlasVaultSyncRecoveryError.rejected }
   }
 
-  private func chain(_ raw: [[String: Any]]) throws -> [[String: Any]] {
+  private func chain(_ raw: [[String: Any]], proof: [String: Any]? = nil) throws -> [[String: Any]]
+  {
     guard raw.count <= 256 else { throw AtlasVaultSyncRecoveryError.limit }
     var views = [[String: Any]]()
     var previous = recoveryZero
     var registry = recoveryRegistry
+    var epoch = try viewInteger(context["key_epoch"])
+    var signer = publicKey
+    let plan = proof?["plan"] as? [String: Any]
     for (i, item) in raw.enumerated() {
-      let v = try verifiedView(item, publicKey: publicKey)
-      try checkContext(v)
+      if let proof, previous == plan?["state_root"] as? String {
+        epoch = try viewInteger(plan?["new_epoch"])
+        signer = try bridgePublic(proof)
+      }
+      let v = try verifiedView(item, publicKey: signer)
+      try checkContext(v, epoch: epoch)
+      if let plan, epoch == (try viewInteger(plan["new_epoch"])) {
+        guard v["registry_root"] as? String == plan["resulting_registry_root"] as? String else {
+          throw AtlasVaultSyncRecoveryError.registry
+        }
+      }
       guard try viewInteger(v["sequence"]) == Int64(i + 1),
         v["previous_root"] as? String == previous,
         v["previous_registry_root"] as? String == registry
@@ -82,9 +98,48 @@ public final class AtlasVaultGuardedSyncState {
     return views
   }
 
-  private func load() throws -> [String: Any] {
+  private func bridgePublic(_ proof: [String: Any]) throws -> Data {
+    guard let registry = proof["registry"] as? [[String: Any]],
+      let signer = registry.first(where: {
+        $0["device_id"] as? String == proof["rotation_signer_device_id"] as? String
+      })
+    else { throw AtlasVaultSyncRecoveryError.rejected }
+    return try AtlasVaultEpochRotation.bytes(signer["signing_public_b64"], 32)
+  }
+
+  private func bridge(_ state: [String: Any]) throws -> [String: Any]? {
+    guard let proof = state["epoch_bridge"] as? [String: Any] else { return nil }
+    guard let registry = rotationRegistry, let plan = proof["plan"] as? [String: Any],
+      let root = plan["state_root"] as? String,
+      let views = state["views"] as? [[String: Any]],
+      views.contains(where: { $0["root"] as? String == root })
+    else { throw AtlasVaultSyncRecoveryError.rejected }
+    _ = try AtlasVaultEpochRotation.verify(
+      proof, registry: registry, accountID: context["account_id"] as! String,
+      vaultID: context["vault_id"] as! String,
+      previousEpoch: Int(viewInteger(context["key_epoch"])), stateRoot: root)
+    return proof
+  }
+
+  func stageEpoch(_ proof: [String: Any]) throws -> [String: Any] {
+    var s = try load()
+    try active(s)
+    guard s["epoch_bridge"] == nil, let views = s["views"] as? [[String: Any]],
+      views.last?["root"] as? String == (proof["plan"] as? [String: Any])?["state_root"] as? String
+    else { throw AtlasVaultSyncRecoveryError.pending }
+    s["epoch_bridge"] = proof
+    _ = try bridge(s)
+    _ = try chain(views, proof: proof)
+    return s
+  }
+
+  func load() throws -> [String: Any] {
     var s = try store.read(default: [:])
-    guard Set(s.keys) == ["context", "views", "records", "cases", "status"],
+    guard
+      Set(s.keys)
+        == Set(
+          ["context", "views", "records", "cases", "status"]
+            + (s["epoch_bridge"] == nil ? [] : ["epoch_bridge"])),
       let stored = s["context"] as? [String: Any],
       NSDictionary(dictionary: stored).isEqual(to: context),
       let views = s["views"] as? [[String: Any]], let records = s["records"] as? [String: Any],
@@ -92,7 +147,7 @@ public final class AtlasVaultGuardedSyncState {
       let cases = s["cases"] as? [[String: Any]], cases.count <= 8,
       ["ACTIVE", "MANUAL_REQUIRED", "RECOVERY_PENDING"].contains(s["status"] as? String ?? "")
     else { throw AtlasVaultSyncRecoveryError.rejected }
-    s["views"] = try chain(views)
+    s["views"] = try chain(views, proof: bridge(s))
     return s
   }
 
@@ -228,8 +283,14 @@ public final class AtlasVaultGuardedSyncState {
       do {
         return try recoveryChecked {
           guard peer.count <= 256 else { throw AtlasVaultSyncRecoveryError.limit }
-          for v in peer { signed.append(try verifiedView(v, publicKey: publicKey)) }
-          let checked = try chain(signed)
+          let proof = try bridge(s)
+          for v in peer {
+            let signer =
+              try proof != nil && viewInteger(v["key_epoch"]) != viewInteger(context["key_epoch"])
+              ? bridgePublic(proof!) : publicKey
+            signed.append(try verifiedView(v, publicKey: signer))
+          }
+          let checked = try chain(signed, proof: proof)
           let local = s["views"] as! [[String: Any]]
           guard !checked.isEmpty, !local.isEmpty else {
             throw AtlasVaultSyncRecoveryError.checkpoint
@@ -254,10 +315,19 @@ public final class AtlasVaultGuardedSyncState {
       var registryDigest: String?
       do {
         let duplicate = try recoveryChecked { () -> Bool in
-          let v = try verifiedView(raw, publicKey: publicKey)
+          let proof = try bridge(s)
+          let epoch =
+            try proof == nil
+            ? viewInteger(context["key_epoch"])
+            : viewInteger((proof!["plan"] as! [String: Any])["new_epoch"])
+          let signer = try proof == nil ? publicKey : bridgePublic(proof!)
+          let v = try verifiedView(raw, publicKey: signer)
           peer = [v]
-          try checkContext(v)
-          registryDigest = try AtlasVaultAuthenticatedStateView.registryRoot(registry)
+          try checkContext(v, epoch: epoch)
+          registryDigest =
+            try proof == nil
+            ? AtlasVaultAuthenticatedStateView.registryRoot(registry)
+            : AtlasVaultRevocation.registryRoot(registry)
           guard registryDigest == v["registry_root"] as? String else {
             throw AtlasVaultSyncRecoveryError.registry
           }
@@ -267,7 +337,7 @@ public final class AtlasVaultGuardedSyncState {
           guard opaqueState.count >= 16, c.collectionID == context["collection_id"] as? String,
             c.sequence == n,
             c.root == v["collection_root"] as? String, c.stateSHA256 == viewDigest(opaqueState),
-            try c.verify(publicKey: publicKey)
+            try c.verify(publicKey: signer)
           else { throw AtlasVaultSyncRecoveryError.rejected }
           let views = s["views"] as! [[String: Any]]
           if n <= views.count, v["root"] as? String != views[Int(n) - 1]["root"] as? String {
@@ -294,14 +364,18 @@ public final class AtlasVaultGuardedSyncState {
           var records = [String: Any]()
           for raw in rawRecords {
             let r = try AtlasVaultOpaqueCiphertextEnvelope(jsonObject: raw)
-            guard r.version == 1, records[r.objectID] == nil,
-              r.keyEpoch == (try viewInteger(v["key_epoch"]))
+            guard r.version == 1, records[r.objectID] == nil
             else {
               throw AtlasVaultSyncRecoveryError.rejected
             }
             let fingerprint = viewDigest(
               try JSONSerialization.data(
                 withJSONObject: r.jsonObject, options: [.sortedKeys, .withoutEscapingSlashes]))
+            if r.keyEpoch != epoch {
+              guard let prior = (s["records"] as? [String: Any])?[r.objectID] as? [String: Any],
+                prior["envelope_sha256"] as? String == fingerprint
+              else { throw AtlasVaultSyncRecoveryError.rejected }
+            }
             records[r.objectID] = [
               "object_id": r.objectID, "revision": r.revision, "content_sha256": r.contentSHA256,
               "envelope_sha256": fingerprint, "tombstone": r.tombstone,
