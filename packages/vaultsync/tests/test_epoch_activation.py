@@ -143,7 +143,7 @@ def backend_accept(env):
         "version": 2,
         "status": "ACTIVATION_ACCEPTED",
         "transition_id": record["transition_id"],
-        "key_epoch": record["key_epoch"],
+        "key_epoch": record["proof"]["plan"]["new_epoch"],
     }
     return record
 
