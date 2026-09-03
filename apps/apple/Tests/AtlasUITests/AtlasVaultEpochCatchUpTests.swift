@@ -122,7 +122,10 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
         contentsOf: root.appendingPathComponent(
           "contracts/sync/test_vectors/\(name).json"))) as! [String: Any]
   }
-  func device(_ root: URL, _ i: Int, _ v: [String: Any], initialize: Bool = false, inbox: AtlasVaultDurableEncryptedInbox? = nil) throws
+  func device(
+    _ root: URL, _ i: Int, _ v: [String: Any], initialize: Bool = false,
+    inbox: AtlasVaultDurableEncryptedInbox? = nil
+  ) throws
     -> AtlasVaultEpochVault
   {
     let view = v["initial_view"] as! [String: Any]
@@ -159,13 +162,22 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     var envelope = raw["envelope"] as! [String: Any]
     envelope["key_epoch"] = 3
     raw["envelope"] = envelope
-    let inbox = try AtlasVaultDurableEncryptedInbox(fileURL: root.appendingPathComponent("incoming"), encryptionKey: Data(repeating: 81, count: 32))
-    try inbox.stagePage(expectedCursor: nil, nextCursor: "next", operations: [AtlasVaultEncryptedPatchOperation(jsonObject: raw)])
+    let inbox = try AtlasVaultDurableEncryptedInbox(
+      fileURL: root.appendingPathComponent("incoming"),
+      encryptionKey: Data(repeating: 81, count: 32))
+    try inbox.stagePage(
+      expectedCursor: nil, nextCursor: "next",
+      operations: [AtlasVaultEncryptedPatchOperation(jsonObject: raw)])
     let v = try vector()
     let c = try device(root, 2, v, initialize: true, inbox: inbox)
-    _ = try c.catchUp((v["packets"] as! [[[String: Any]]])[2], currentActivationID: v["target_activation_id"] as! String, agreementPrivateKey: Data(repeating: 22, count: 32))
+    _ = try c.catchUp(
+      (v["packets"] as! [[[String: Any]]])[2],
+      currentActivationID: v["target_activation_id"] as! String,
+      agreementPrivateKey: Data(repeating: 22, count: 32))
     var deleted = false
-    XCTAssertThrowsError(try c.cleanupEpochs(retainEpochs: [5], deleteEpoch: { _ in deleted = true }, containsEpoch: { _ in false }))
+    XCTAssertThrowsError(
+      try c.cleanupEpochs(
+        retainEpochs: [5], deleteEpoch: { _ in deleted = true }, containsEpoch: { _ in false }))
     XCTAssertFalse(deleted)
     XCTAssertEqual(try c.availableEpochs(), [3, 4, 5])
   }

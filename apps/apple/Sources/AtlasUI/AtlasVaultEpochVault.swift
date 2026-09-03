@@ -166,7 +166,7 @@ public final class AtlasVaultEpochVault {
     h.store = try componentFile("history")
     return h
   }
-  private func componentFile(_ name: String) throws -> EncryptedQueueFile {
+  func componentFile(_ name: String) throws -> EncryptedQueueFile {
     try EncryptedQueueFile(
       fileURL: file.fileURL, key: key, read: { try self.component(name, fallback: $0) },
       write: { try self.writeComponent(name, value: $0, beforeReplace: $1) })

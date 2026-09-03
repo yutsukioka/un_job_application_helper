@@ -368,9 +368,11 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       _file.file,
       encryptionKey: _key,
     ).._store = _EpochComponentFile(this, 'outbox');
-    if ((await outbox.pendingOperations()).any(
-      (op) => !retainEpochs.contains(op.envelope.keyEpoch),
-    ))
+    final inbox = await _loadInbox(_EpochComponentFile(this, 'inbox'));
+    if ([
+      ...await outbox.pendingOperations(),
+      ...inbox.pending,
+    ].any((op) => !retainEpochs.contains(op.envelope.keyEpoch)))
       _epochFail('ATLAS_CLEANUP_PENDING');
     final journal = _object(s['journal']),
         intent = {'retain_epochs': retainEpochs.toList()..sort()};

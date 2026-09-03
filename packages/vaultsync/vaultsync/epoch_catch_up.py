@@ -8,7 +8,7 @@ from .device_delivery import verify_device_delivery
 from .epoch_rotation import _canonical, _reject, delivery_context, verify_epoch_rotation
 from .key_epochs import EpochHPKESealedVaultKeyV2, open_epoch_hpke_v2
 from .revocation import _decode
-from .sync_queue import _EncryptedQueueFile
+from .sync_queue import _EncryptedQueueFile, DurableEncryptedInbox
 
 
 def bridge_records(state):
@@ -278,6 +278,8 @@ def catch_up(
 
 
 def cleanup(owner, retain_epochs, storage, checkpoint):
+    from .epoch_vault import _EpochComponent
+
     s = owner._load()
     if (
         s["status"] not in ("ACTIVE", "CLEANUP_PENDING")
@@ -293,6 +295,9 @@ def cleanup(owner, retain_epochs, storage, checkpoint):
     if not retain_epochs.issubset({int(e) for e in s["keys"]}):
         _reject()
     needed = {op.envelope.key_epoch for op in owner.pending_operations()}
+    inbox = DurableEncryptedInbox(owner._file.path, encryption_key=owner._key)
+    inbox._store = _EpochComponent(owner, "inbox")
+    needed.update(op.envelope.key_epoch for op in inbox.pending_operations())
     if not needed.issubset(retain_epochs):
         _reject("ATLAS_CLEANUP_PENDING")
     journal = s.get("journal")
