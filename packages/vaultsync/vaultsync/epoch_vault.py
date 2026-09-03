@@ -538,6 +538,9 @@ class EpochVault:
                 or recipient not in s["recipients"]
             ):
                 _reject("ATLAS_DEVICE_REVOKED")
+            if s['journal'].get('kind')=='CATCH_UP':
+                if recipient!=self._context['device_id']: _reject('ATLAS_DEVICE_DELIVERY_REJECTED')
+                return copy.deepcopy(s['journal']['packets'][-1]['wrapper'])
             return copy.deepcopy(
                 next(d for d in s["journal"]["proof"]["deliveries"] if d["device_id"] == recipient)
             )

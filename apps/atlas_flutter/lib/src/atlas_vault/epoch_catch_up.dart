@@ -192,7 +192,18 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       final p = _object(packet['proof']),
           w = _object(packet['wrapper']),
           plan = _object(p['plan']);
-      while(_epochRows(stage.state['views']).last['root']!=plan['state_root']) {
+      final sameEpoch=plan['new_epoch']==epoch;
+      var verifyRegistry=registry,previousEpoch=epoch;
+      if(sameEpoch) {
+        if(bridges.isEmpty) _epochFail();
+        final old=bridges.last.containsKey('wrapper')?_object(bridges.last['proof']):bridges.last;
+        if(p['activation_id']!=(old['activation_id']??old['root']) || ['plan','registry','revocation','rotation_signer_device_id'].any((k)=>jsonEncode(_canonicalValue(p[k]))!=jsonEncode(_canonicalValue(old[k])))) _epochFail('ATLAS_EPOCH_CONFLICT');
+        final oldWrapper=bridges.last['wrapper']??_epochRows(old['deliveries']).firstWhere((w)=>w['device_id']==_context['device_id']);
+        if(jsonEncode(_canonicalValue(oldWrapper))!=jsonEncode(_canonicalValue(w))) _epochFail();
+        verifyRegistry=_epochRows(old['registry']);previousEpoch=_object(old['plan'])['previous_epoch'] as int;
+        bridges.removeLast();
+      }
+      while(!sameEpoch && _epochRows(stage.state['views']).last['root']!=plan['state_root']) {
         if(updateIndex==historyUpdates.length) _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
         final u=historyUpdates[updateIndex];
         _exact(u,{'view','registry','collection','opaque_state_b64'});
@@ -210,11 +221,11 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       }
       verified = await delivery.AtlasVaultDeviceDelivery.verify(
         packet,
-        registry: registry,
+        registry: verifyRegistry,
         accountID: _context['account_id'] as String,
         vaultID: _context['vault_id'] as String,
-        previousEpoch: epoch,
-        stateRoot: _epochRows(stage.state['views']).last['root'] as String,
+        previousEpoch: previousEpoch,
+        stateRoot: (sameEpoch?plan['state_root']:_epochRows(stage.state['views']).last['root']) as String,
         activationID: p['activation_id'] as String,
         recipientDeviceID: _context['device_id'] as String,
       );
@@ -232,6 +243,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         ),
         minimumKeyEpoch: verified['new_epoch'] as int,
       );
+      if(sameEpoch && base64Encode(opened.vaultKey)!=_object(staged['keys'])['$epoch']) _epochFail();
       (staged['keys'] as Map)['${opened.keyEpoch}'] = base64Encode(
         opened.vaultKey,
       );

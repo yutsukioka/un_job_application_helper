@@ -449,6 +449,10 @@ final class AtlasVaultEpochVault {
         !(s['recipients']! as List).contains(recipient)) {
       _epochFail('ATLAS_DEVICE_REVOKED');
     }
+    if(_object(s['journal'])['kind']=='CATCH_UP') {
+      if(recipient!=_context['device_id']) _epochFail('ATLAS_DEVICE_DELIVERY_REJECTED');
+      return _epochCopy(_object(_epochRows(_object(s['journal'])['packets']).last['wrapper']));
+    }
     return _epochCopy(
       _epochRows(
         _object(_object(s['journal'])['proof'])['deliveries'],

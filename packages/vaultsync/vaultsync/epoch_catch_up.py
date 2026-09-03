@@ -167,7 +167,19 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
         if packet.get("format") == "atlasvault-activation-record":
             _reject("ATLAS_PER_DEVICE_PROOF_REQUIRED")
         p = packet["proof"]
-        while stage.state["views"][-1]["root"] != p["plan"]["state_root"]:
+        same_epoch=p['plan']['new_epoch']==epoch
+        verify_registry,previous_epoch=registry,epoch
+        if same_epoch:
+            if not bridges: _reject()
+            old=bridges[-1].get('proof',bridges[-1])
+            old_id=old.get('activation_id',old['root'])
+            if p['activation_id']!=old_id or any(_canonical(p[k])!=_canonical(old[k]) for k in ('plan','registry','revocation','rotation_signer_device_id')):
+                _reject('ATLAS_EPOCH_CONFLICT')
+            old_wrapper=bridges[-1].get('wrapper') or next(w for w in old['deliveries'] if w['device_id']==owner._context['device_id'])
+            if _canonical(old_wrapper)!=_canonical(packet['wrapper']): _reject()
+            verify_registry,previous_epoch=old['registry'],old['plan']['previous_epoch']
+            bridges.pop()
+        while not same_epoch and stage.state["views"][-1]["root"] != p["plan"]["state_root"]:
             if update_index == len(history_updates):
                 _reject("ATLAS_HISTORY_CHAIN_REQUIRED")
             update = history_updates[update_index]
@@ -187,11 +199,11 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
             update_index += 1
         verified = verify_device_delivery(
             packet,
-            registry=registry,
+            registry=verify_registry,
             account_id=owner._context["account_id"],
             vault_id=owner._context["vault_id"],
-            previous_epoch=epoch,
-            state_root=stage.state["views"][-1]["root"],
+            previous_epoch=previous_epoch,
+            state_root=p['plan']['state_root'] if same_epoch else stage.state["views"][-1]["root"],
             activation_id=p["activation_id"],
             recipient_device_id=owner._context["device_id"],
         )
@@ -206,6 +218,8 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
             context=delivery_context(p["plan"], owner._context["device_id"]),
             minimum_key_epoch=verified["new_epoch"],
         )
+        if same_epoch and _decode(staged['keys'][str(epoch)],32)!=opened.vault_key:
+            _reject()
         staged["keys"][str(opened.key_epoch)] = base64.b64encode(opened.vault_key).decode()
         bridges.append(copy.deepcopy(packet))
         stage.state.pop("epoch_bridge", None)

@@ -164,7 +164,21 @@ extension AtlasVaultEpochVault {
         let p = try map(packet["proof"])
         let w = try map(packet["wrapper"])
         let plan = try map(p["plan"])
-        while try rows(h["views"]).last?["root"] as? String != plan["state_root"] as? String {
+        let sameEpoch=try R.integer(plan["new_epoch"])==epoch
+        var verifyRegistry=currentRegistry,previousEpoch=epoch
+        if sameEpoch {
+          guard let last=bridges.last else {throw AtlasVaultRotationError.rejected}
+          let old=try last["wrapper"] != nil ? map(last["proof"]) : last
+          guard p["activation_id"] as? String == (old["activation_id"] ?? old["root"]) as? String else {throw AtlasVaultRotationError.conflict}
+          for k in ["plan","registry","revocation","rotation_signer_device_id"] {
+            guard try R.canonical([k:p[k]!])==R.canonical([k:old[k]!]) else {throw AtlasVaultRotationError.conflict}
+          }
+          let oldWrapper=try last["wrapper"] != nil ? map(last["wrapper"]) : rows(old["deliveries"]).first{$0["device_id"] as? String==context["device_id"] as? String} ?? [:]
+          guard try R.canonical(oldWrapper)==R.canonical(w) else {throw AtlasVaultRotationError.rejected}
+          verifyRegistry=try rows(old["registry"]);previousEpoch=try R.integer(map(old["plan"])["previous_epoch"])
+          bridges.removeLast()
+        }
+        while !sameEpoch,try rows(h["views"]).last?["root"] as? String != plan["state_root"] as? String {
           guard updateIndex<historyUpdates.count else {throw AtlasVaultRotationError.rejected}
           let u=historyUpdates[updateIndex]
           try R.exact(u,["view","registry","collection","opaque_state_b64"])
@@ -183,9 +197,9 @@ extension AtlasVaultEpochVault {
           updateIndex+=1
         }
         verified = try AtlasVaultDeviceDelivery.verify(
-          packet, registry: currentRegistry, accountID: context["account_id"] as! String,
+          packet, registry: verifyRegistry, accountID: context["account_id"] as! String,
           vaultID: context["vault_id"] as! String,
-          previousEpoch: epoch, stateRoot: AtlasVaultDeviceDelivery.text(rows(h["views"]).last?["root"]),
+          previousEpoch: previousEpoch, stateRoot: AtlasVaultDeviceDelivery.text(sameEpoch ? plan["state_root"] : rows(h["views"]).last?["root"]),
           activationID: AtlasVaultDeviceDelivery.text(p["activation_id"]),
           recipientDeviceID: context["device_id"] as! String)
         let opened = try AtlasVaultKeyEpochHPKE.open(
@@ -197,6 +211,7 @@ extension AtlasVaultEpochVault {
           context: Data(
             "atlasvault-rotation-delivery-v1:\(try R.binding(plan)):\(context["device_id"] as! String)"
               .utf8), minimumKeyEpoch: Int64(R.integer(verified["new_epoch"])))
+        if sameEpoch,opened.vaultKey.base64EncodedString() != keys[String(epoch)] as? String {throw AtlasVaultRotationError.rejected}
         keys[String(opened.keyEpoch)] = opened.vaultKey.base64EncodedString()
         bridges.append(packet)
         h.removeValue(forKey:"epoch_bridge");h["epoch_bridges"]=bridges

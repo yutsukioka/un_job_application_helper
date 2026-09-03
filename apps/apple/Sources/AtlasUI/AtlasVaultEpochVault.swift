@@ -360,6 +360,10 @@ public final class AtlasVaultEpochVault {
     try run {
       let s = try load()
       try active(s)
+      if let j=s["journal"] as? [String:Any],j["kind"] as? String == "CATCH_UP" {
+        guard recipient==context["device_id"] as? String else {throw AtlasVaultRotationError.rejected}
+        return try map(rows(j["packets"]).last?["wrapper"])
+      }
       guard let j = s["journal"] as? [String: Any], j["phase"] as? String == "ACTIVE",
         (s["recipients"] as! [String]).contains(recipient),
         let d = try rows(map(j["proof"])["deliveries"]).first(where: {

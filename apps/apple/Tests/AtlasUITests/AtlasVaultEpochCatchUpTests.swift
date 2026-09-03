@@ -162,7 +162,7 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     let c=try device(root,i,fixture,initialize:true),key=Data(repeating:UInt8(20+i),count:32)
     _ = try c.acceptRotation(proof,acceptedRecord:record,agreementPrivateKey:key)
     XCTAssertTrue(try c.catchUp([p],currentActivationID:record["transition_id"] as! String,agreementPrivateKey:key))
-    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(c.delivery(ids[i])),AtlasVaultEpochRotation.canonical(p["wrapper"] as! [String:Any]))
+    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(c.delivery(ids[i])),try AtlasVaultEpochRotation.canonical(p["wrapper"] as! [String:Any]))
     XCTAssertThrowsError(try c.delivery(ids[1-i]))
   }
   func testMalformedChainsDoNotPartiallyActivate() throws {
