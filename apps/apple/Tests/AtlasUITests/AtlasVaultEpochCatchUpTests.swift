@@ -90,6 +90,25 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     XCTAssertEqual(try c.observation()["sequence"] as? Int,2)
     XCTAssertEqual(try c.observation()["state_root"] as? String,((v["history_updates"] as! [[String:Any]])[0]["view"] as! [String:Any])["root"] as? String)
   }
+  func testCleanupIntentAndKeychainDeletionBoundary() throws {
+    let v=try vector(),root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+    defer {try? FileManager.default.removeItem(at:root)}
+    let c=try device(root,2,v,initialize:true)
+    _ = try c.catchUp((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32))
+    XCTAssertThrowsError(try c.cleanupEpochsForTesting(retainEpochs:[5],deleteEpoch:{_ in},containsEpoch:{_ in false},checkpoint:{stage in if stage=="cleanup_pending" {throw AtlasVaultRotationError.rejected}}))
+    let reopened=try device(root,2,v)
+    XCTAssertEqual(try reopened.recovery()["status"] as? String,"CLEANUP_PENDING")
+    XCTAssertThrowsError(try reopened.cleanupEpochs(retainEpochs:[4,5],deleteEpoch:{_ in},containsEpoch:{_ in false}))
+    let store=AtlasKeychainVaultKeyStore(client:SecItemAtlasKeychainClient(),service:"atlasvault.c27.synthetic.\(UUID().uuidString)")
+    let ids=[3:UUID().uuidString,4:UUID().uuidString,5:UUID().uuidString]
+    defer {for id in ids.values {try? store.deleteVaultKey(for:id)}}
+    for id in ids.values {try store.createVaultKey(Data(repeating:7,count:32),for:id)}
+    try reopened.cleanupSecureStorage(retainEpochs:[5],epochStorageIDs:ids,store:store)
+    XCTAssertNil(try store.loadVaultKey(for:ids[3]!));XCTAssertNil(try store.loadVaultKey(for:ids[4]!))
+    XCTAssertNotNil(try store.loadVaultKey(for:ids[5]!))
+    XCTAssertEqual(try reopened.availableEpochs(),[5])
+  }
   func testMalformedChainsDoNotPartiallyActivate() throws {
     let v = try vector()
     for attack in ["missing", "reordered", "recipient", "state-root"] {

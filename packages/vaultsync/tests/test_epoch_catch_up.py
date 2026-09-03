@@ -127,6 +127,27 @@ def test_corrupted_publication_recovery_and_cleanup(tmp_path):
 
     reopened.cleanup_epochs(retain_epochs={5}, storage=Deletion())
     assert sorted(removed) == [3, 4]
+
+
+def test_cleanup_intent_is_durable_and_pending_view_is_visible(tmp_path):
+    e,a,b=scenario(tmp_path)
+    c=e['clients'][2]
+    c.catch_up([a[1][2],b[1][2]],current_activation_id=b[2]['transition_id'],agreement_private_key=bytes([22])*32)
+    removed=set()
+    class Deletion:
+        def delete_epoch(self,epoch): removed.add(epoch)
+        def contains_epoch(self,epoch): return epoch not in removed
+    def stop(stage):
+        if stage=='cleanup_pending': raise RuntimeError('synthetic interruption')
+    with pytest.raises(RotationError):
+        c._cleanup_epochs_for_testing(retain_epochs={5},storage=Deletion(),checkpoint=stop)
+    reopened=client(tmp_path,2,e['registry'],e['view'])
+    assert reopened.recovery()['status']=='CLEANUP_PENDING'
+    with pytest.raises(RotationError):
+        reopened.cleanup_epochs(retain_epochs={4,5},storage=Deletion())
+    reopened.cleanup_epochs(retain_epochs={5},storage=Deletion())
+    assert removed=={3,4}
+    assert reopened.recovery()['status']=='ACTIVE'
     assert reopened.available_epochs() == [5]
     reopened.cleanup_epochs(retain_epochs={5}, storage=Deletion())
     assert sorted(removed) == [3, 4]

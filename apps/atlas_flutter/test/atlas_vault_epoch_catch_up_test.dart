@@ -4,11 +4,17 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:atlas/src/atlas_vault/sync_queue.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/services.dart';
+import 'package:atlas/src/atlas_vault/android_storage.dart';
+import 'package:atlas/src/atlas_vault/windows_storage.dart';
+import 'package:atlas/src/atlas_vault/plaintext_migration.dart';
+import 'package:atlas/src/atlas_vault/epoch_secure_cleanup.dart';
 
 Map<String, Object?> m(Object? v) => Map<String, Object?>.from(v as Map);
 List<Map<String, Object?>> rows(Object? v) => (v as List).map(m).toList();
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   final v = m(
     jsonDecode(
       File(
@@ -72,6 +78,38 @@ void main() {
       expect((await c.observation())['sequence'],2);
       expect((await c.observation())['state_root'],m(rows(fixture['history_updates'])[0]['view'])['root']);
     } finally {await root.delete(recursive:true);}
+  });
+  test('C27 cleanup persists its intent and calls platform deletion boundaries',() async {
+    for(final platform in ['android','windows']) {
+      final root=await Directory.systemTemp.createTemp('atlas-c27-delete-');
+      final channel=MethodChannel('atlas-c27-$platform');
+      final ids={3:'10000000-0000-4000-8000-000000000003',4:'10000000-0000-4000-8000-000000000004',5:'10000000-0000-4000-8000-000000000005'};
+      final present=ids.values.toSet(),deleted=<String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call) async {
+        final id=(call.arguments as Map)['vault_id'] as String;
+        if(call.method=='deleteVaultKey'){deleted.add(id);present.remove(id);return null;}
+        if(call.method=='loadVaultKey') return present.contains(id)?Uint8List.fromList(List.filled(32,7)):null;
+        if(call.method=='containsVaultKey') return present.contains(id);
+        throw StateError('unexpected method');
+      });
+      try {
+        final c=await device(root,2,initialize:true);
+        await c.catchUp(rows((v['packets'] as List)[2]),currentActivationID:v['target_activation_id'] as String,agreementPrivateKey:Uint8List.fromList(List.filled(32,22)));
+        await expectLater(c.cleanupEpochsForTesting(retainEpochs:{5},deleteEpoch:(_) async {},containsEpoch:(_) async=>false,checkpoint:(stage){if(stage=='cleanup_pending') throw StateError('synthetic interruption');}),throwsA(anything));
+        final reopened=await device(root,2);
+        expect((await reopened.recovery())['status'],'CLEANUP_PENDING');
+        await expectLater(reopened.cleanupEpochs(retainEpochs:{4,5},deleteEpoch:(_) async {},containsEpoch:(_) async=>false),throwsA(anything));
+        final AtlasVaultMigrationSecureKeyStore store=platform=='android'?AtlasAndroidVaultSecureKeyStore(channel:channel):AtlasWindowsVaultSecureKeyStore(channel:channel);
+        await reopened.cleanupSecureStorage(retainEpochs:{5},epochStorageIDs:ids,store:store);
+        expect(deleted, [ids[3],ids[4]]);
+        expect(await store.loadVaultKey(ids[3]!),isNull);
+        expect(await store.loadVaultKey(ids[4]!),isNull);
+        expect(await reopened.availableEpochs(),[5]);
+      } finally {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,null);
+        await root.delete(recursive:true);
+      }
+    }
   });
 
   test(
