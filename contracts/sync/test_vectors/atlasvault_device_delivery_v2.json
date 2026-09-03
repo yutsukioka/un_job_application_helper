@@ -1,5 +1,5 @@
 {
-  "canonical_sha256": "7553d45c97e94deb4832ca926086b1b647f7a7704d40cbf1182c24daece7386e",
+  "canonical_sha256": "60d0727dcaafcc9c3af3af75c54ee35fee3cf7cbbf80c64b8ff0a9778d8a3da4",
   "packet": {
     "proof": {
       "activation_id": "698bd39dab8772b2869e5edaa2d9298437cadaca7aefff5a8ed26cf8c0b59dbe",
@@ -62,9 +62,10 @@
         "vault_id": "vault-c26",
         "version": 1
       },
-      "root": "f0d9d91a3a668cf7e8ae965b5f2cce0952ebd7fb5556790179d0ba386a598776",
+      "root": "e6e88239496836d12bb46d375bb1476472bc9b4c94e53d528b5debf685defd94",
+      "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
       "signature_algorithm": "Ed25519",
-      "signature_b64": "kRbhuDJrg9KsPFNoqddAFJvaLE7nHLW5i/B3mwpWiN8DOMykOLQCbqCxd0cy0YjgKxX244Vm0qY6GwmKTWEYAQ==",
+      "signature_b64": "T0pthTCIRoWMr0o6sbw24LVC0FIPeaL9cV+ODDrySl8qLwsa/UIUtF8baI0etM5Ap6tuSOT4Cm7tUVm1Tg1nCQ==",
       "signature_version": 1,
       "version": 2,
       "wrapper_sha256": "9873ba312d031ec8de571aada5b87d9c6a2bda43c862fcd2f6dac20209768480"

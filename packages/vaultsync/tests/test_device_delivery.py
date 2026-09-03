@@ -1,6 +1,5 @@
 """C27/D089 recipient proofs: unchanged synthetic v1/HPKE bytes, new signatures."""
 
-import base64
 import copy
 import hashlib
 import json
@@ -45,6 +44,7 @@ def test_v2_shared_signature_preserves_wrapper_and_v1_bytes():
         issuer_device_id=p["rotation_signer_device_id"], signing_key=Ed25519PrivateKey.from_private_bytes(bytes([10])*32),
         current_registry=verify_transition(p["revocation"], p["registry"]), recovery_pending=False)
     assert created == expected["packet"]
+    assert created["proof"]["rotation_signer_device_id"] == p["rotation_signer_device_id"]
     assert created["wrapper"] == next(d for d in p["deliveries"] if d["device_id"] == expected["recipient_device_id"])
     assert len(created["proof"]["plan"]["recipients"]) == 2
     assert "deliveries" not in created["proof"]
@@ -60,7 +60,7 @@ def test_v2_shared_signature_preserves_wrapper_and_v1_bytes():
 
 
 @pytest.mark.parametrize("field", ["activation_id","recipient_device_id","recipient_agreement_sha256",
-    "wrapper_sha256","issuer_device_id","registry_generation","hpke_suite","hpke_version",
+    "wrapper_sha256","issuer_device_id","rotation_signer_device_id","registry_generation","hpke_suite","hpke_version",
     "signature_algorithm","signature_version","version","root","signature_b64"])
 def test_authenticated_field_substitution_fails_closed(field):
     packet=copy.deepcopy(vector()["packet"])
