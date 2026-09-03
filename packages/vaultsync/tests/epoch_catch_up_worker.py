@@ -21,7 +21,7 @@ sys.path[:0] = [
 sys.path.extend(
     str(p) for p in (repo / "packages/vaultsync/.venv/lib").glob("python*/site-packages")
 )
-from atlasvault_c27_fixture import client
+client = __import__("atlasvault_c27_fixture", fromlist=["client"]).client
 
 root = Path(sys.argv[1])
 stage = sys.argv[2]

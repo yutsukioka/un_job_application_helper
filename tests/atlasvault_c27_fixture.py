@@ -1,7 +1,6 @@
 """Five independently keyed synthetic devices; real C26 backend admission."""
 
 import base64
-import json
 from fastapi.testclient import TestClient
 from atlasvault_api.app import AtlasVaultBackend, create_app
 from test_atlasvault_backend_c13 import (
@@ -202,17 +201,22 @@ def rotate(env, registry, epoch, target):
 def advance_history(env, first):
     """An actual authorized writer commits state between two rotations."""
     env["clients"][0].catch_up(
-        [first[1][0]], current_activation_id=first[2]["transition_id"],
+        [first[1][0]],
+        current_activation_id=first[2]["transition_id"],
         agreement_private_key=bytes([20]) * 32,
     )
     body = initial_body()
     update = env["clients"][0].create_commitment(body, signing_key=env["devices"][0])
     response = env["http"].post(
-        f"/v1/vaults/{VAULT}/commitments", json=update["view"], headers=env["headers"][0]
+        f"/v1/vaults/{VAULT}/commitments",
+        json=update["view"],
+        headers=env["headers"][0],
     )
     assert response.status_code == 200
     env["view"] = update["view"]
-    return dict(update, registry=first[0], opaque_state_b64=base64.b64encode(body).decode())
+    return dict(
+        update, registry=first[0], opaque_state_b64=base64.b64encode(body).decode()
+    )
 
 
 def shared_vector(env, rounds):

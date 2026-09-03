@@ -360,8 +360,10 @@ public final class AtlasVaultEpochVault {
     try run {
       let s = try load()
       try active(s)
-      if let j=s["journal"] as? [String:Any],j["kind"] as? String == "CATCH_UP" {
-        guard recipient==context["device_id"] as? String else {throw AtlasVaultRotationError.rejected}
+      if let j = s["journal"] as? [String: Any], j["kind"] as? String == "CATCH_UP" {
+        guard recipient == context["device_id"] as? String else {
+          throw AtlasVaultRotationError.rejected
+        }
         return try map(rows(j["packets"]).last?["wrapper"])
       }
       guard let j = s["journal"] as? [String: Any], j["phase"] as? String == "ACTIVE",
@@ -378,10 +380,11 @@ public final class AtlasVaultEpochVault {
   }
   public func recovery() throws -> [String: Any] {
     try run {
-      let s=try load()
-      var result=try history(s).recovery()
-      if result["status"] as? String == "ACTIVE",s["status"] as? String != "ACTIVE" {
-        result["status"]=s["status"];result["reason"]="ATLAS_\(s["status"] as! String)"
+      let s = try load()
+      var result = try history(s).recovery()
+      if result["status"] as? String == "ACTIVE", s["status"] as? String != "ACTIVE" {
+        result["status"] = s["status"]
+        result["reason"] = "ATLAS_\(s["status"] as! String)"
       }
       return result
     }

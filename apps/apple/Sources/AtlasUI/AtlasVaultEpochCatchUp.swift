@@ -85,17 +85,21 @@ final class EpochPublication {
     }
     return s
   }
-  func write(_ s: [String: Any], beforeReplace: (() throws -> Void)? = nil) throws {
+  func write(
+    _ s: [String: Any], beforeReplace: (() throws -> Void)? = nil,
+    afterRecord: (() throws -> Void)? = nil
+  ) throws {
     if FileManager.default.fileExists(atPath: anchor.fileURL.path) {
       try anchor.write(["state": s, "sha256": digest(s)], beforeReplace: beforeReplace)
+      try afterRecord?()
       try base.write(s)
     } else {
       try base.write(s, beforeReplace: beforeReplace)
     }
   }
   func recover() throws {
-    var s=try record()
-    if s["status"] as? String == "ACTIVE" {s["status"]="CATCH_UP_PENDING"}
+    var s = try record()
+    if s["status"] as? String == "ACTIVE" { s["status"] = "CATCH_UP_PENDING" }
     try write(s)
   }
 }
@@ -103,14 +107,15 @@ final class EpochPublication {
 extension AtlasVaultEpochVault {
   public func catchUp(
     _ packets: [[String: Any]], currentActivationID: String, agreementPrivateKey: Data,
-    historyUpdates: [[String:Any]] = []
+    historyUpdates: [[String: Any]] = []
   ) throws -> Bool {
     try catchUpForTesting(
-      packets, currentActivationID: currentActivationID, agreementPrivateKey: agreementPrivateKey,historyUpdates:historyUpdates)
+      packets, currentActivationID: currentActivationID, agreementPrivateKey: agreementPrivateKey,
+      historyUpdates: historyUpdates)
   }
   func catchUpForTesting(
     _ packets: [[String: Any]], currentActivationID: String, agreementPrivateKey: Data,
-    historyUpdates: [[String:Any]] = [],
+    historyUpdates: [[String: Any]] = [],
     checkpoint: ((String) throws -> Void)? = nil
   ) throws -> Bool {
     try run {
@@ -124,10 +129,13 @@ extension AtlasVaultEpochVault {
         j["target_id"] as? String == currentActivationID
       {
         guard try R.canonical(["packets": j["packets"]!]) == R.canonical(["packets": packets]),
-        try R.canonical(["updates":j["history_updates"] ?? []]) == R.canonical(["updates":historyUpdates])
+          try R.canonical(["updates": j["history_updates"] ?? []])
+            == R.canonical(["updates": historyUpdates])
         else { throw AtlasVaultRotationError.rejected }
         if s["status"] as? String == "CATCH_UP_PENDING" {
-          s["status"]="ACTIVE";try file.write(s);return true
+          s["status"] = "ACTIVE"
+          try file.write(s)
+          return true
         }
         return false
       }
@@ -143,19 +151,22 @@ extension AtlasVaultEpochVault {
       try file.write(s)
       try checkpoint?("catch_up_pending")
       guard !packets.isEmpty, packets.count <= 32 else { throw AtlasVaultRotationError.rejected }
-      guard historyUpdates.count<=256,try R.canonical(["updates":historyUpdates]).count<=4*1024*1024 else {throw AtlasVaultRotationError.rejected}
+      guard historyUpdates.count <= 256,
+        try R.canonical(["updates": historyUpdates]).count <= 4 * 1024 * 1024
+      else { throw AtlasVaultRotationError.rejected }
       var staged = s
       var components = try map(s["components"])
       var h = try map(components["history"])
       var keys = try map(s["keys"])
-      guard h["status"] as? String == "ACTIVE",try !rows(h["views"]).isEmpty
+      guard h["status"] as? String == "ACTIVE", try !rows(h["views"]).isEmpty
       else { throw AtlasVaultRotationError.recovery }
       var currentRegistry = try rows(s["registry"])
       var epoch = try R.integer(s["epoch"])
       var bridges = try EpochCatchUp.records(h)
-      let validator=try history(staged)
-      validator.store=try EncryptedQueueFile(fileURL:file.fileURL,key:key,read:{_ in h},write:{value,_ in h=value})
-      var updateIndex=0
+      let validator = try history(staged)
+      validator.store = try EncryptedQueueFile(
+        fileURL: file.fileURL, key: key, read: { _ in h }, write: { value, _ in h = value })
+      var updateIndex = 0
       var verified = [String: Any]()
       for packet in packets {
         if packet["format"] as? String == "atlasvault-activation-record" {
@@ -164,42 +175,66 @@ extension AtlasVaultEpochVault {
         let p = try map(packet["proof"])
         let w = try map(packet["wrapper"])
         let plan = try map(p["plan"])
-        let sameEpoch=try R.integer(plan["new_epoch"])==epoch
-        var verifyRegistry=currentRegistry,previousEpoch=epoch
+        let sameEpoch = try R.integer(plan["new_epoch"]) == epoch
+        var verifyRegistry = currentRegistry
+        var previousEpoch = epoch
         if sameEpoch {
-          guard let last=bridges.last else {throw AtlasVaultRotationError.rejected}
-          let old=try last["wrapper"] != nil ? map(last["proof"]) : last
-          guard p["activation_id"] as? String == (old["activation_id"] ?? old["root"]) as? String else {throw AtlasVaultRotationError.conflict}
-          for k in ["plan","registry","revocation","rotation_signer_device_id"] {
-            guard try R.canonical([k:p[k]!])==R.canonical([k:old[k]!]) else {throw AtlasVaultRotationError.conflict}
+          guard let last = bridges.last else { throw AtlasVaultRotationError.rejected }
+          let old = try last["wrapper"] != nil ? map(last["proof"]) : last
+          guard p["activation_id"] as? String == (old["activation_id"] ?? old["root"]) as? String
+          else { throw AtlasVaultRotationError.conflict }
+          for k in ["plan", "registry", "revocation", "rotation_signer_device_id"] {
+            guard try R.canonical([k: p[k]!]) == R.canonical([k: old[k]!]) else {
+              throw AtlasVaultRotationError.conflict
+            }
           }
-          let oldWrapper=try last["wrapper"] != nil ? map(last["wrapper"]) : rows(old["deliveries"]).first{$0["device_id"] as? String==context["device_id"] as? String} ?? [:]
-          guard try R.canonical(oldWrapper)==R.canonical(w) else {throw AtlasVaultRotationError.rejected}
-          verifyRegistry=try rows(old["registry"]);previousEpoch=try R.integer(map(old["plan"])["previous_epoch"])
+          let oldWrapper =
+            try last["wrapper"] != nil
+            ? map(last["wrapper"])
+            : rows(old["deliveries"]).first {
+              $0["device_id"] as? String == context["device_id"] as? String
+            } ?? [:]
+          guard try R.canonical(oldWrapper) == R.canonical(w) else {
+            throw AtlasVaultRotationError.rejected
+          }
+          verifyRegistry = try rows(old["registry"])
+          previousEpoch = try R.integer(map(old["plan"])["previous_epoch"])
           bridges.removeLast()
         }
-        while !sameEpoch,try rows(h["views"]).last?["root"] as? String != plan["state_root"] as? String {
-          guard updateIndex<historyUpdates.count else {throw AtlasVaultRotationError.rejected}
-          let u=historyUpdates[updateIndex]
-          try R.exact(u,["view","registry","collection","opaque_state_b64"])
-          guard let body=Data(base64Encoded:try AtlasVaultDeviceDelivery.text(u["opaque_state_b64"])) else {throw AtlasVaultRotationError.rejected}
+        while !sameEpoch,
+          try rows(h["views"]).last?["root"] as? String != plan["state_root"] as? String
+        {
+          guard updateIndex < historyUpdates.count else { throw AtlasVaultRotationError.rejected }
+          let u = historyUpdates[updateIndex]
+          try R.exact(u, ["view", "registry", "collection", "opaque_state_b64"])
+          guard
+            let body = Data(base64Encoded: try AtlasVaultDeviceDelivery.text(u["opaque_state_b64"]))
+          else { throw AtlasVaultRotationError.rejected }
           do {
-            _ = try validator.ingest(view:map(u["view"]),registry:rows(u["registry"]),collection:map(u["collection"]),opaqueState:body)
+            _ = try validator.ingest(
+              view: map(u["view"]), registry: rows(u["registry"]), collection: map(u["collection"]),
+              opaqueState: body)
           } catch {
             if h["status"] as? String != "ACTIVE" {
-              var original=try map(map(s["components"])["history"])
-              original["cases"]=h["cases"];original["status"]="RECOVERY_PENDING"
-              var oldComponents=try map(s["components"]);oldComponents["history"]=original
-              s["components"]=oldComponents;s["status"]="RECOVERY_PENDING";try file.write(s)
+              var original = try map(map(s["components"])["history"])
+              original["cases"] = h["cases"]
+              original["status"] = "RECOVERY_PENDING"
+              var oldComponents = try map(s["components"])
+              oldComponents["history"] = original
+              s["components"] = oldComponents
+              s["status"] = "RECOVERY_PENDING"
+              try file.write(s)
             }
             throw error
           }
-          updateIndex+=1
+          updateIndex += 1
         }
         verified = try AtlasVaultDeviceDelivery.verify(
           packet, registry: verifyRegistry, accountID: context["account_id"] as! String,
           vaultID: context["vault_id"] as! String,
-          previousEpoch: previousEpoch, stateRoot: AtlasVaultDeviceDelivery.text(sameEpoch ? plan["state_root"] : rows(h["views"]).last?["root"]),
+          previousEpoch: previousEpoch,
+          stateRoot: AtlasVaultDeviceDelivery.text(
+            sameEpoch ? plan["state_root"] : rows(h["views"]).last?["root"]),
           activationID: AtlasVaultDeviceDelivery.text(p["activation_id"]),
           recipientDeviceID: context["device_id"] as! String)
         let opened = try AtlasVaultKeyEpochHPKE.open(
@@ -211,17 +246,20 @@ extension AtlasVaultEpochVault {
           context: Data(
             "atlasvault-rotation-delivery-v1:\(try R.binding(plan)):\(context["device_id"] as! String)"
               .utf8), minimumKeyEpoch: Int64(R.integer(verified["new_epoch"])))
-        if sameEpoch,opened.vaultKey.base64EncodedString() != keys[String(epoch)] as? String {throw AtlasVaultRotationError.rejected}
+        if sameEpoch, opened.vaultKey.base64EncodedString() != keys[String(epoch)] as? String {
+          throw AtlasVaultRotationError.rejected
+        }
         keys[String(opened.keyEpoch)] = opened.vaultKey.base64EncodedString()
         bridges.append(packet)
-        h.removeValue(forKey:"epoch_bridge");h["epoch_bridges"]=bridges
+        h.removeValue(forKey: "epoch_bridge")
+        h["epoch_bridges"] = bridges
         currentRegistry = try rows(verified["registry"])
         epoch = try R.integer(verified["new_epoch"])
         try checkpoint?("verified_epoch")
       }
       guard try map(packets.last?["proof"])["activation_id"] as? String == currentActivationID
       else { throw AtlasVaultRotationError.rejected }
-      guard updateIndex==historyUpdates.count else {throw AtlasVaultRotationError.rejected}
+      guard updateIndex == historyUpdates.count else { throw AtlasVaultRotationError.rejected }
       h.removeValue(forKey: "epoch_bridge")
       h["epoch_bridges"] = bridges
       components["history"] = h
@@ -233,11 +271,13 @@ extension AtlasVaultEpochVault {
         "journal": [
           "kind": "CATCH_UP", "phase": "ACTIVE", "target_id": currentActivationID,
           "packets": packets, "prior_journal": NSNull(),
-          "history_updates":historyUpdates,
+          "history_updates": historyUpdates,
         ],
       ]) { _, new in new }
       _ = try ring(staged)
-      try file.write(staged, beforeReplace: { try checkpoint?("before_local_commit") })
+      try file.write(
+        staged, beforeReplace: { try checkpoint?("before_local_commit") },
+        afterRecord: { try checkpoint?("after_recovery_record") })
       try checkpoint?("after_local_commit")
       return true
     }
@@ -272,13 +312,15 @@ extension AtlasVaultEpochVault {
       else { throw AtlasVaultRotationError.rejected }
       guard try pendingOperations().allSatisfy({ retainEpochs.contains(Int($0.envelope.keyEpoch)) })
       else { throw AtlasVaultRotationError.cleanupPending }
-      var journal=try map(s["journal"])
-      let intent:[String:Any] = ["retain_epochs":retainEpochs.sorted()]
+      var journal = try map(s["journal"])
+      let intent: [String: Any] = ["retain_epochs": retainEpochs.sorted()]
       if s["status"] as? String == "CLEANUP_PENDING",
-        try R.canonical(map(journal["cleanup"])) != R.canonical(intent) {
-          throw AtlasVaultRotationError.cleanupPending
+        try R.canonical(map(journal["cleanup"])) != R.canonical(intent)
+      {
+        throw AtlasVaultRotationError.cleanupPending
       }
-      journal["cleanup"]=intent;s["journal"]=journal
+      journal["cleanup"] = intent
+      s["journal"] = journal
       try file.enable()
       s["status"] = "CLEANUP_PENDING"
       try file.write(s)
@@ -294,15 +336,19 @@ extension AtlasVaultEpochVault {
       try file.write(s)
     }
   }
-  public func cleanupSecureStorage<S:AtlasVaultKeyStore>(retainEpochs:Set<Int>,epochStorageIDs:[Int:String],store:S) throws {
-    let available=try availableEpochs()
-    guard epochStorageIDs.count<=32,Set(epochStorageIDs.values).count==epochStorageIDs.count,
-      available.allSatisfy({epochStorageIDs[$0] != nil}) else {throw AtlasVaultRotationError.cleanupPending}
-    try cleanupEpochs(retainEpochs:retainEpochs,
-      deleteEpoch:{try store.deleteVaultKey(for:epochStorageIDs[$0]!)},
-      containsEpoch:{epoch in
-        guard var value=try store.loadVaultKey(for:epochStorageIDs[epoch]!) else {return false}
-        value.resetBytes(in:0..<value.count)
+  public func cleanupSecureStorage<S: AtlasVaultKeyStore>(
+    retainEpochs: Set<Int>, epochStorageIDs: [Int: String], store: S
+  ) throws {
+    let available = try availableEpochs()
+    guard epochStorageIDs.count <= 32, Set(epochStorageIDs.values).count == epochStorageIDs.count,
+      available.allSatisfy({ epochStorageIDs[$0] != nil })
+    else { throw AtlasVaultRotationError.cleanupPending }
+    try cleanupEpochs(
+      retainEpochs: retainEpochs,
+      deleteEpoch: { try store.deleteVaultKey(for: epochStorageIDs[$0]!) },
+      containsEpoch: { epoch in
+        guard var value = try store.loadVaultKey(for: epochStorageIDs[epoch]!) else { return false }
+        value.resetBytes(in: 0..<value.count)
         return true
       })
   }

@@ -449,9 +449,12 @@ final class AtlasVaultEpochVault {
         !(s['recipients']! as List).contains(recipient)) {
       _epochFail('ATLAS_DEVICE_REVOKED');
     }
-    if(_object(s['journal'])['kind']=='CATCH_UP') {
-      if(recipient!=_context['device_id']) _epochFail('ATLAS_DEVICE_DELIVERY_REJECTED');
-      return _epochCopy(_object(_epochRows(_object(s['journal'])['packets']).last['wrapper']));
+    if (_object(s['journal'])['kind'] == 'CATCH_UP') {
+      if (recipient != _context['device_id'])
+        _epochFail('ATLAS_DEVICE_DELIVERY_REJECTED');
+      return _epochCopy(
+        _object(_epochRows(_object(s['journal'])['packets']).last['wrapper']),
+      );
     }
     return _epochCopy(
       _epochRows(
@@ -461,12 +464,12 @@ final class AtlasVaultEpochVault {
   });
   Future<int> compareEvidence(List<Map<String, Object?>> peer) =>
       _run(() async => _history(await _load()).compareEvidence(peer));
-  Future<Map<String, Object?>> recovery() =>
-      _run(() async {
-        final s=await _load(),result=await _history(await _load()).recovery();
-        if(result['status']=='ACTIVE' && s['status']!='ACTIVE') result.addAll({'status':s['status'],'reason':'ATLAS_${s['status']}'});
-        return result;
-      });
+  Future<Map<String, Object?>> recovery() => _run(() async {
+    final s = await _load(), result = await _history(await _load()).recovery();
+    if (result['status'] == 'ACTIVE' && s['status'] != 'ACTIVE')
+      result.addAll({'status': s['status'], 'reason': 'ATLAS_${s['status']}'});
+    return result;
+  });
   Future<Map<String, Object?>?> pendingActivation() => _run(() async {
     final s = await _load();
     if (['REVOKED', 'RECOVERY_PENDING'].contains(s['status']) ||

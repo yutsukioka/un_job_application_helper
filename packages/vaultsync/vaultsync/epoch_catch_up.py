@@ -89,20 +89,22 @@ class EpochPublication(_EncryptedQueueFile):
             _reject("ATLAS_PUBLICATION_RECOVERY_REQUIRED")
         return s
 
-    def write(self, state, *, before_replace=None):
+    def write(self, state, *, before_replace=None, after_record=None):
         if self.anchor.path.exists():
             self.anchor.write(
                 dict(state=state, sha256=hashlib.sha256(_canonical(state)).hexdigest()),
                 before_replace=before_replace,
             )
+            if after_record is not None:
+                after_record()
             super().write(state)
         else:
             super().write(state, before_replace=before_replace)
 
     def recover(self):
-        s=self._record()
-        if s['status']=='ACTIVE':
-            s['status']='CATCH_UP_PENDING'
+        s = self._record()
+        if s["status"] == "ACTIVE":
+            s["status"] = "CATCH_UP_PENDING"
         self.write(s)
 
 
@@ -117,7 +119,9 @@ class _StagedHistory:
         self.state = copy.deepcopy(state)
 
 
-def catch_up(owner, packets, current_activation_id, agreement_private_key, checkpoint, history_updates=()):
+def catch_up(
+    owner, packets, current_activation_id, agreement_private_key, checkpoint, history_updates=()
+):
     s = owner._load()
     if (
         s["status"] in ("REVOKED", "RECOVERY_PENDING", "CLEANUP_PENDING")
@@ -127,11 +131,12 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
     journal = s.get("journal") or {}
     if journal.get("kind") == "CATCH_UP" and journal["phase"] == "ACTIVE":
         if journal["target_id"] == current_activation_id:
-            if (_canonical(journal["packets"]) != _canonical(packets)
-                or _canonical(journal.get("history_updates", [])) != _canonical(list(history_updates))):
+            if _canonical(journal["packets"]) != _canonical(packets) or _canonical(
+                journal.get("history_updates", [])
+            ) != _canonical(list(history_updates)):
                 _reject("ATLAS_EPOCH_CONFLICT")
-            if s['status']=='CATCH_UP_PENDING':
-                s['status']='ACTIVE'
+            if s["status"] == "CATCH_UP_PENDING":
+                s["status"] = "ACTIVE"
                 owner._file.write(s)
                 return True
             return False
@@ -151,7 +156,11 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
     checkpoint("catch_up_pending")
     if not isinstance(packets, list) or not 1 <= len(packets) <= 32:
         _reject()
-    if not isinstance(history_updates, (list, tuple)) or len(history_updates) > 256 or len(_canonical(list(history_updates))) > 4 * 1024 * 1024:
+    if (
+        not isinstance(history_updates, (list, tuple))
+        or len(history_updates) > 256
+        or len(_canonical(list(history_updates))) > 4 * 1024 * 1024
+    ):
         _reject()
     staged = copy.deepcopy(s)
     history = staged["components"]["history"]
@@ -167,17 +176,24 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
         if packet.get("format") == "atlasvault-activation-record":
             _reject("ATLAS_PER_DEVICE_PROOF_REQUIRED")
         p = packet["proof"]
-        same_epoch=p['plan']['new_epoch']==epoch
-        verify_registry,previous_epoch=registry,epoch
+        same_epoch = p["plan"]["new_epoch"] == epoch
+        verify_registry, previous_epoch = registry, epoch
         if same_epoch:
-            if not bridges: _reject()
-            old=bridges[-1].get('proof',bridges[-1])
-            old_id=old.get('activation_id',old['root'])
-            if p['activation_id']!=old_id or any(_canonical(p[k])!=_canonical(old[k]) for k in ('plan','registry','revocation','rotation_signer_device_id')):
-                _reject('ATLAS_EPOCH_CONFLICT')
-            old_wrapper=bridges[-1].get('wrapper') or next(w for w in old['deliveries'] if w['device_id']==owner._context['device_id'])
-            if _canonical(old_wrapper)!=_canonical(packet['wrapper']): _reject()
-            verify_registry,previous_epoch=old['registry'],old['plan']['previous_epoch']
+            if not bridges:
+                _reject()
+            old = bridges[-1].get("proof", bridges[-1])
+            old_id = old.get("activation_id", old["root"])
+            if p["activation_id"] != old_id or any(
+                _canonical(p[k]) != _canonical(old[k])
+                for k in ("plan", "registry", "revocation", "rotation_signer_device_id")
+            ):
+                _reject("ATLAS_EPOCH_CONFLICT")
+            old_wrapper = bridges[-1].get("wrapper") or next(
+                w for w in old["deliveries"] if w["device_id"] == owner._context["device_id"]
+            )
+            if _canonical(old_wrapper) != _canonical(packet["wrapper"]):
+                _reject()
+            verify_registry, previous_epoch = old["registry"], old["plan"]["previous_epoch"]
             bridges.pop()
         while not same_epoch and stage.state["views"][-1]["root"] != p["plan"]["state_root"]:
             if update_index == len(history_updates):
@@ -186,8 +202,12 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
             if set(update) != {"view", "registry", "collection", "opaque_state_b64"}:
                 _reject()
             try:
-                validator.ingest(update["view"], update["registry"], update["collection"],
-                                 base64.b64decode(update["opaque_state_b64"], validate=True))
+                validator.ingest(
+                    update["view"],
+                    update["registry"],
+                    update["collection"],
+                    base64.b64decode(update["opaque_state_b64"], validate=True),
+                )
             except Exception:
                 if stage.state["status"] != "ACTIVE":
                     original = s["components"]["history"]
@@ -203,7 +223,7 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
             account_id=owner._context["account_id"],
             vault_id=owner._context["vault_id"],
             previous_epoch=previous_epoch,
-            state_root=p['plan']['state_root'] if same_epoch else stage.state["views"][-1]["root"],
+            state_root=p["plan"]["state_root"] if same_epoch else stage.state["views"][-1]["root"],
             activation_id=p["activation_id"],
             recipient_device_id=owner._context["device_id"],
         )
@@ -218,7 +238,7 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
             context=delivery_context(p["plan"], owner._context["device_id"]),
             minimum_key_epoch=verified["new_epoch"],
         )
-        if same_epoch and _decode(staged['keys'][str(epoch)],32)!=opened.vault_key:
+        if same_epoch and _decode(staged["keys"][str(epoch)], 32) != opened.vault_key:
             _reject()
         staged["keys"][str(opened.key_epoch)] = base64.b64encode(opened.vault_key).decode()
         bridges.append(copy.deepcopy(packet))
@@ -248,7 +268,11 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
         prior_journal=None,
     )
     owner._ring(staged)
-    owner._file.write(staged, before_replace=lambda: checkpoint("before_local_commit"))
+    owner._file.write(
+        staged,
+        before_replace=lambda: checkpoint("before_local_commit"),
+        after_record=lambda: checkpoint("after_recovery_record"),
+    )
     checkpoint("after_local_commit")
     return True
 
@@ -271,13 +295,13 @@ def cleanup(owner, retain_epochs, storage, checkpoint):
     needed = {op.envelope.key_epoch for op in owner.pending_operations()}
     if not needed.issubset(retain_epochs):
         _reject("ATLAS_CLEANUP_PENDING")
-    journal=s.get('journal')
-    if not isinstance(journal,dict):
+    journal = s.get("journal")
+    if not isinstance(journal, dict):
         _reject()
-    intent=dict(retain_epochs=sorted(retain_epochs))
-    if s['status']=='CLEANUP_PENDING' and journal.get('cleanup')!=intent:
-        _reject('ATLAS_CLEANUP_PENDING')
-    journal['cleanup']=intent
+    intent = dict(retain_epochs=sorted(retain_epochs))
+    if s["status"] == "CLEANUP_PENDING" and journal.get("cleanup") != intent:
+        _reject("ATLAS_CLEANUP_PENDING")
+    journal["cleanup"] = intent
     owner._file.enable()
     s["status"] = "CLEANUP_PENDING"
     owner._file.write(s)
@@ -287,6 +311,6 @@ def cleanup(owner, retain_epochs, storage, checkpoint):
         if storage.contains_epoch(epoch) is not False:
             _reject("ATLAS_CLEANUP_PENDING")
         del s["keys"][str(epoch)]
-        checkpoint('deleted_epoch')
+        checkpoint("deleted_epoch")
     s["status"] = "ACTIVE"
     owner._file.write(s)

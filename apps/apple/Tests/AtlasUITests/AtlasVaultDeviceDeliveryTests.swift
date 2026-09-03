@@ -1,6 +1,6 @@
+import CryptoKit
 import Foundation
 import XCTest
-import CryptoKit
 
 @testable import AtlasUI
 
@@ -32,15 +32,39 @@ final class AtlasVaultDeviceDeliveryTests: XCTestCase {
     XCTAssertEqual(
       try AtlasVaultDeviceDelivery.canonicalHash(proof), v["canonical_sha256"] as? String)
     XCTAssertNil(proof["deliveries"])
-    let current=try AtlasVaultRevocation.verify(original["revocation"] as! [String:Any],registry:original["registry"] as! [[String:Any]])
-    let key=try Curve25519.Signing.PrivateKey(rawRepresentation:Data(repeating:10,count:32))
-    func create(_ entries:[[String:Any]],_ pending:Bool) throws -> [String:Any] {
-      try AtlasVaultDeviceDelivery.create(record,recipientDeviceID:v["recipient_device_id"] as! String,issuerDeviceID:original["rotation_signer_device_id"] as! String,signingKey:key,currentRegistry:entries,recoveryPending:pending)
+    let current = try AtlasVaultRevocation.verify(
+      original["revocation"] as! [String: Any], registry: original["registry"] as! [[String: Any]])
+    let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 10, count: 32))
+    func create(_ entries: [[String: Any]], _ pending: Bool) throws -> [String: Any] {
+      try AtlasVaultDeviceDelivery.create(
+        record, recipientDeviceID: v["recipient_device_id"] as! String,
+        issuerDeviceID: original["rotation_signer_device_id"] as! String, signingKey: key,
+        currentRegistry: entries, recoveryPending: pending)
     }
-    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(create(current,false)),try AtlasVaultEpochRotation.canonical(packet))
-    XCTAssertThrowsError(try create(current,true))
-    let revoked=current.map{entry -> [String:Any] in var e=entry;if e["device_id"] as? String==original["rotation_signer_device_id"] as? String {e["state"]="REVOKED"};return e}
-    XCTAssertThrowsError(try create(revoked,false))
+    let created = try create(current, false)
+    let createdProof = try AtlasVaultDeviceDelivery.map(created["proof"])
+    // CryptoKit randomizes Ed25519 signatures; all signed fields remain byte-exact.
+    for k in proof.keys where k != "signature_b64" {
+      XCTAssertEqual(
+        try AtlasVaultEpochRotation.canonical([k: createdProof[k]!]),
+        try AtlasVaultEpochRotation.canonical([k: proof[k]!]), "proof field \(k)")
+    }
+    XCTAssertEqual(try verify(created)["new_epoch"] as? Int, 4)
+    XCTAssertEqual(
+      try AtlasVaultEpochRotation.canonical(created["wrapper"] as! [String: Any]),
+      try AtlasVaultEpochRotation.canonical(packet["wrapper"] as! [String: Any]))
+    if let path = ProcessInfo.processInfo.environment["C27_SWIFT_PROOF_OUTPUT"] {
+      try AtlasVaultEpochRotation.canonical(created).write(to: URL(fileURLWithPath: path))
+    }
+    XCTAssertThrowsError(try create(current, true))
+    let revoked = current.map { entry -> [String: Any] in
+      var e = entry
+      if e["device_id"] as? String == original["rotation_signer_device_id"] as? String {
+        e["state"] = "REVOKED"
+      }
+      return e
+    }
+    XCTAssertThrowsError(try create(revoked, false))
     for field in proof.keys {
       var bad = packet
       var changed = proof

@@ -1,51 +1,115 @@
 import CryptoKit
+import Darwin
 import Foundation
 import XCTest
-import Darwin
 
 @testable import AtlasUI
 
 final class AtlasVaultEpochCatchUpTests: XCTestCase {
   func testCatchUpCrashChild() throws {
-    guard let path=ProcessInfo.processInfo.environment["ATLAS_C27_CHILD"],let stage=ProcessInfo.processInfo.environment["ATLAS_C27_STAGE"] else {return}
-    let root=URL(fileURLWithPath:path),v=try vector("atlasvault_epoch_catch_up_history_v2")
-    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-    let c=try device(root,2,v,initialize:true)
-    func point(_ name:String) throws {if name==stage {try Data(name.utf8).write(to:root.appendingPathComponent("ready"));while true {Thread.sleep(forTimeInterval:60)}}}
-    _ = try c.catchUpForTesting((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32),historyUpdates:v["history_updates"] as! [[String:Any]],checkpoint:point)
-    if ["cleanup_pending","deleted_epoch"].contains(stage) {
-      try c.cleanupEpochsForTesting(retainEpochs:[5],deleteEpoch:{epoch in try Data("deleted".utf8).write(to:root.appendingPathComponent("deleted-\(epoch)"))},containsEpoch:{epoch in !FileManager.default.fileExists(atPath:root.appendingPathComponent("deleted-\(epoch)").path)},checkpoint:point)
+    guard let path = ProcessInfo.processInfo.environment["ATLAS_C27_CHILD"],
+      let stage = ProcessInfo.processInfo.environment["ATLAS_C27_STAGE"]
+    else { return }
+    let root = URL(fileURLWithPath: path)
+    let v = try vector("atlasvault_epoch_catch_up_history_v2")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let c = try device(root, 2, v, initialize: true)
+    func point(_ name: String) throws {
+      if name == stage {
+        try Data(name.utf8).write(to: root.appendingPathComponent("ready"))
+        while true { Thread.sleep(forTimeInterval: 60) }
+      }
+    }
+    _ = try c.catchUpForTesting(
+      (v["packets"] as! [[[String: Any]]])[2],
+      currentActivationID: v["target_activation_id"] as! String,
+      agreementPrivateKey: Data(repeating: 22, count: 32),
+      historyUpdates: v["history_updates"] as! [[String: Any]], checkpoint: point)
+    if ["cleanup_pending", "deleted_epoch"].contains(stage) {
+      try c.cleanupEpochsForTesting(
+        retainEpochs: [5],
+        deleteEpoch: { epoch in
+          try Data("deleted".utf8).write(to: root.appendingPathComponent("deleted-\(epoch)"))
+        },
+        containsEpoch: { epoch in
+          !FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("deleted-\(epoch)").path)
+        }, checkpoint: point)
     }
   }
   func testRealCatchUpKillAndRestart() throws {
-    let v=try vector("atlasvault_epoch_catch_up_history_v2")
-    for stage in ["catch_up_pending","verified_epoch","before_local_commit","after_recovery_record","after_local_commit","cleanup_pending","deleted_epoch"] {
-      let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),p=Process()
-      p.executableURL=URL(fileURLWithPath:"/usr/bin/xcrun")
-      p.arguments=["xctest","-XCTest","AtlasUITests.AtlasVaultEpochCatchUpTests/testCatchUpCrashChild",Bundle(for:Self.self).bundleURL.path]
-      p.environment=ProcessInfo.processInfo.environment.merging(["ATLAS_C27_CHILD":root.path,"ATLAS_C27_STAGE":stage]){_,new in new}
-      p.standardOutput=FileHandle.nullDevice;p.standardError=FileHandle.nullDevice
+    let v = try vector("atlasvault_epoch_catch_up_history_v2")
+    for stage in [
+      "catch_up_pending", "verified_epoch", "before_local_commit", "after_recovery_record",
+      "after_local_commit", "cleanup_pending", "deleted_epoch",
+    ] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      let p = Process()
+      p.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+      p.arguments = [
+        "xctest", "-XCTest", "AtlasUITests.AtlasVaultEpochCatchUpTests/testCatchUpCrashChild",
+        Bundle(for: Self.self).bundleURL.path,
+      ]
+      p.environment = ProcessInfo.processInfo.environment.merging([
+        "ATLAS_C27_CHILD": root.path, "ATLAS_C27_STAGE": stage,
+      ]) { _, new in new }
+      p.standardOutput = FileHandle.nullDevice
+      p.standardError = FileHandle.nullDevice
       try p.run()
-      defer {if p.isRunning {Darwin.kill(p.processIdentifier,SIGKILL);p.waitUntilExit()};try? FileManager.default.removeItem(at:root)}
-      let ready=root.appendingPathComponent("ready"),deadline=Date().addingTimeInterval(30)
-      while !FileManager.default.fileExists(atPath:ready.path)&&Date()<deadline&&p.isRunning {Thread.sleep(forTimeInterval:0.05)}
-      XCTAssertTrue(FileManager.default.fileExists(atPath:ready.path),stage)
-      guard p.isRunning else {XCTFail("C27 worker exited before barrier");return}
-      XCTAssertEqual(Darwin.kill(p.processIdentifier,SIGKILL),0);p.waitUntilExit()
-      let c=try device(root,2,v)
-      if stage=="after_recovery_record" {XCTAssertThrowsError(try c.observation());try c.recoverPublication()}
-      let o=try c.observation()
-      XCTAssertEqual(o["key_epoch"] as? Int,["after_recovery_record","after_local_commit","cleanup_pending","deleted_epoch"].contains(stage) ? 5 : 3)
+      defer {
+        if p.isRunning {
+          Darwin.kill(p.processIdentifier, SIGKILL)
+          p.waitUntilExit()
+        }
+        try? FileManager.default.removeItem(at: root)
+      }
+      let ready = root.appendingPathComponent("ready")
+      let deadline = Date().addingTimeInterval(30)
+      while !FileManager.default.fileExists(atPath: ready.path) && Date() < deadline && p.isRunning
+      { Thread.sleep(forTimeInterval: 0.05) }
+      XCTAssertTrue(FileManager.default.fileExists(atPath: ready.path), stage)
+      guard p.isRunning else {
+        XCTFail("C27 worker exited before barrier")
+        return
+      }
+      XCTAssertEqual(Darwin.kill(p.processIdentifier, SIGKILL), 0)
+      p.waitUntilExit()
+      let c = try device(root, 2, v)
+      if stage == "after_recovery_record" {
+        XCTAssertThrowsError(try c.observation())
+        try c.recoverPublication()
+      }
+      let o = try c.observation()
+      XCTAssertEqual(
+        o["key_epoch"] as? Int,
+        ["after_recovery_record", "after_local_commit", "cleanup_pending", "deleted_epoch"]
+          .contains(stage) ? 5 : 3)
       if stage != "after_local_commit" {
-        XCTAssertThrowsError(try c.seal("patch",plaintext:Data([7]),objectID:"probe",revision:"r1",signingKey:Curve25519.Signing.PrivateKey(rawRepresentation:Data(repeating:10,count:32))))
+        XCTAssertThrowsError(
+          try c.seal(
+            "patch", plaintext: Data([7]), objectID: "probe", revision: "r1",
+            signingKey: Curve25519.Signing.PrivateKey(
+              rawRepresentation: Data(repeating: 10, count: 32))))
       }
-      if ["cleanup_pending","deleted_epoch"].contains(stage) {
-        try c.cleanupEpochs(retainEpochs:[5],deleteEpoch:{epoch in try Data("deleted".utf8).write(to:root.appendingPathComponent("deleted-\(epoch)"))},containsEpoch:{epoch in !FileManager.default.fileExists(atPath:root.appendingPathComponent("deleted-\(epoch)").path)})
-        XCTAssertEqual(try c.availableEpochs(),[5])
+      if ["cleanup_pending", "deleted_epoch"].contains(stage) {
+        try c.cleanupEpochs(
+          retainEpochs: [5],
+          deleteEpoch: { epoch in
+            try Data("deleted".utf8).write(to: root.appendingPathComponent("deleted-\(epoch)"))
+          },
+          containsEpoch: { epoch in
+            !FileManager.default.fileExists(
+              atPath: root.appendingPathComponent("deleted-\(epoch)").path)
+          })
+        XCTAssertEqual(try c.availableEpochs(), [5])
       } else {
-        _ = try c.catchUp((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32),historyUpdates:v["history_updates"] as! [[String:Any]])
+        _ = try c.catchUp(
+          (v["packets"] as! [[[String: Any]]])[2],
+          currentActivationID: v["target_activation_id"] as! String,
+          agreementPrivateKey: Data(repeating: 22, count: 32),
+          historyUpdates: v["history_updates"] as! [[String: Any]])
       }
-      XCTAssertEqual(try c.observation()["status"] as? String,"ACTIVE")
+      XCTAssertEqual(try c.observation()["status"] as? String, "ACTIVE")
       print("C27 Swift SIGKILL stage=\(stage) pid=\(p.processIdentifier) resumed_epoch=5")
     }
   }
@@ -110,7 +174,9 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
         to: root.appendingPathComponent("\(i)/activation"))
       try reopened.recoverPublication()
       XCTAssertEqual(try reopened.observation()["status"] as? String, "CATCH_UP_PENDING")
-      _ = try reopened.catchUp(packets,currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:UInt8(20+i),count:32))
+      _ = try reopened.catchUp(
+        packets, currentActivationID: v["target_activation_id"] as! String,
+        agreementPrivateKey: Data(repeating: UInt8(20 + i), count: 32))
       XCTAssertEqual(try reopened.observation()["status"] as? String, "ACTIVE")
       var removed = Set<Int>()
       try reopened.cleanupEpochs(
@@ -122,68 +188,113 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     XCTAssertEqual(roots.count, 1)
   }
   func testInterveningAuthenticatedHistoryIsRequiredAndPreserved() throws {
-    let v=try vector("atlasvault_epoch_catch_up_history_v2")
-    let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-    defer {try? FileManager.default.removeItem(at:root)}
-    let c=try device(root,2,v,initialize:true)
-    let packets=(v["packets"] as! [[[String:Any]]])[2]
-    XCTAssertThrowsError(try c.catchUp(packets,currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32)))
-    XCTAssertEqual(try c.observation()["sequence"] as? Int,1)
-    XCTAssertTrue(try c.catchUp(packets,currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32),historyUpdates:v["history_updates"] as! [[String:Any]]))
-    XCTAssertEqual(try c.observation()["sequence"] as? Int,2)
-    XCTAssertEqual(try c.observation()["state_root"] as? String,((v["history_updates"] as! [[String:Any]])[0]["view"] as! [String:Any])["root"] as? String)
+    let v = try vector("atlasvault_epoch_catch_up_history_v2")
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let c = try device(root, 2, v, initialize: true)
+    let packets = (v["packets"] as! [[[String: Any]]])[2]
+    XCTAssertThrowsError(
+      try c.catchUp(
+        packets, currentActivationID: v["target_activation_id"] as! String,
+        agreementPrivateKey: Data(repeating: 22, count: 32)))
+    XCTAssertEqual(try c.observation()["sequence"] as? Int, 1)
+    XCTAssertTrue(
+      try c.catchUp(
+        packets, currentActivationID: v["target_activation_id"] as! String,
+        agreementPrivateKey: Data(repeating: 22, count: 32),
+        historyUpdates: v["history_updates"] as! [[String: Any]]))
+    XCTAssertEqual(try c.observation()["sequence"] as? Int, 2)
+    XCTAssertEqual(
+      try c.observation()["state_root"] as? String,
+      ((v["history_updates"] as! [[String: Any]])[0]["view"] as! [String: Any])["root"] as? String)
   }
   func testCleanupIntentAndKeychainDeletionBoundary() throws {
-    let v=try vector(),root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-    defer {try? FileManager.default.removeItem(at:root)}
-    let c=try device(root,2,v,initialize:true)
-    _ = try c.catchUp((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32))
-    XCTAssertThrowsError(try c.cleanupEpochsForTesting(retainEpochs:[5],deleteEpoch:{_ in},containsEpoch:{_ in false},checkpoint:{stage in if stage=="cleanup_pending" {throw AtlasVaultRotationError.rejected}}))
-    let reopened=try device(root,2,v)
-    XCTAssertEqual(try reopened.recovery()["status"] as? String,"CLEANUP_PENDING")
-    XCTAssertThrowsError(try reopened.cleanupEpochs(retainEpochs:[4,5],deleteEpoch:{_ in},containsEpoch:{_ in false}))
-    let store=AtlasKeychainVaultKeyStore(client:SecItemAtlasKeychainClient(),service:"atlasvault.c27.synthetic.\(UUID().uuidString)")
-    let ids=[3:UUID().uuidString,4:UUID().uuidString,5:UUID().uuidString]
-    defer {for id in ids.values {try? store.deleteVaultKey(for:id)}}
-    for id in ids.values {try store.createVaultKey(Data(repeating:7,count:32),for:id)}
-    try reopened.cleanupSecureStorage(retainEpochs:[5],epochStorageIDs:ids,store:store)
-    XCTAssertNil(try store.loadVaultKey(for:ids[3]!));XCTAssertNil(try store.loadVaultKey(for:ids[4]!))
-    XCTAssertNotNil(try store.loadVaultKey(for:ids[5]!))
-    XCTAssertEqual(try reopened.availableEpochs(),[5])
+    let v = try vector()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let c = try device(root, 2, v, initialize: true)
+    _ = try c.catchUp(
+      (v["packets"] as! [[[String: Any]]])[2],
+      currentActivationID: v["target_activation_id"] as! String,
+      agreementPrivateKey: Data(repeating: 22, count: 32))
+    XCTAssertThrowsError(
+      try c.cleanupEpochsForTesting(
+        retainEpochs: [5], deleteEpoch: { _ in }, containsEpoch: { _ in false },
+        checkpoint: { stage in
+          if stage == "cleanup_pending" { throw AtlasVaultRotationError.rejected }
+        }))
+    let reopened = try device(root, 2, v)
+    XCTAssertEqual(try reopened.recovery()["status"] as? String, "CLEANUP_PENDING")
+    XCTAssertThrowsError(
+      try reopened.cleanupEpochs(
+        retainEpochs: [4, 5], deleteEpoch: { _ in }, containsEpoch: { _ in false }))
+    let store = AtlasKeychainVaultKeyStore(
+      client: SecItemAtlasKeychainClient(), service: "atlasvault.c27.synthetic.\(UUID().uuidString)"
+    )
+    let ids = [3: UUID().uuidString, 4: UUID().uuidString, 5: UUID().uuidString]
+    defer { for id in ids.values { try? store.deleteVaultKey(for: id) } }
+    for id in ids.values { try store.createVaultKey(Data(repeating: 7, count: 32), for: id) }
+    try reopened.cleanupSecureStorage(retainEpochs: [5], epochStorageIDs: ids, store: store)
+    XCTAssertNil(try store.loadVaultKey(for: ids[3]!))
+    XCTAssertNil(try store.loadVaultKey(for: ids[4]!))
+    XCTAssertNotNil(try store.loadVaultKey(for: ids[5]!))
+    XCTAssertEqual(try reopened.availableEpochs(), [5])
   }
   func testExistingC26PublicationAcceptsItsOwnV2Attestation() throws {
-    let old=try vector("atlasvault_activation_v1"),p=try vector("atlasvault_device_delivery_v2")["packet"] as! [String:Any]
-    let record=old["record"] as! [String:Any],proof=(old["record"] as! [String:Any])["proof"] as! [String:Any]
-    var fixture=old;fixture["initial_registry"]=proof["registry"];fixture["initial_history_registry"]=old["initial_registry"]
-    let ids=old["device_ids"] as! [String],i=ids.firstIndex(of:(p["proof"] as! [String:Any])["recipient_device_id"] as! String)!
-    let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-    defer {try? FileManager.default.removeItem(at:root)}
-    let c=try device(root,i,fixture,initialize:true),key=Data(repeating:UInt8(20+i),count:32)
-    _ = try c.acceptRotation(proof,acceptedRecord:record,agreementPrivateKey:key)
-    XCTAssertTrue(try c.catchUp([p],currentActivationID:record["transition_id"] as! String,agreementPrivateKey:key))
-    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(c.delivery(ids[i])),try AtlasVaultEpochRotation.canonical(p["wrapper"] as! [String:Any]))
-    XCTAssertThrowsError(try c.delivery(ids[1-i]))
+    let old = try vector("atlasvault_activation_v1")
+    let p = try vector("atlasvault_device_delivery_v2")["packet"] as! [String: Any]
+    let record = old["record"] as! [String: Any]
+    let proof = (old["record"] as! [String: Any])["proof"] as! [String: Any]
+    var fixture = old
+    fixture["initial_registry"] = proof["registry"]
+    fixture["initial_history_registry"] = old["initial_registry"]
+    let ids = old["device_ids"] as! [String]
+    let i = ids.firstIndex(of: (p["proof"] as! [String: Any])["recipient_device_id"] as! String)!
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let c = try device(root, i, fixture, initialize: true)
+    let key = Data(repeating: UInt8(20 + i), count: 32)
+    _ = try c.acceptRotation(proof, acceptedRecord: record, agreementPrivateKey: key)
+    XCTAssertTrue(
+      try c.catchUp(
+        [p], currentActivationID: record["transition_id"] as! String, agreementPrivateKey: key))
+    XCTAssertEqual(
+      try AtlasVaultEpochRotation.canonical(c.delivery(ids[i])),
+      try AtlasVaultEpochRotation.canonical(p["wrapper"] as! [String: Any]))
+    XCTAssertThrowsError(try c.delivery(ids[1 - i]))
   }
   func testForkEvidenceSurvivesAndBlocksCatchUp() throws {
-    let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),v=try vector()
-    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-    defer {try? FileManager.default.removeItem(at:root)}
-    let c=try device(root,2,v,initialize:true)
-    var unsigned=v["initial_view"] as! [String:Any]
-    unsigned.removeValue(forKey:"root");unsigned.removeValue(forKey:"signature_b64");unsigned["collection_root"]=String(repeating:"ab",count:32)
-    let fork=try AtlasVaultAuthenticatedStateView.sign(unsigned,signingKey:Curve25519.Signing.PrivateKey(rawRepresentation:Data(repeating:10,count:32)))
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let v = try vector()
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let c = try device(root, 2, v, initialize: true)
+    var unsigned = v["initial_view"] as! [String: Any]
+    unsigned.removeValue(forKey: "root")
+    unsigned.removeValue(forKey: "signature_b64")
+    unsigned["collection_root"] = String(repeating: "ab", count: 32)
+    let fork = try AtlasVaultAuthenticatedStateView.sign(
+      unsigned,
+      signingKey: Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 10, count: 32)))
     XCTAssertThrowsError(try c.compareEvidence([fork]))
-    let before=try c.recovery()
-    XCTAssertThrowsError(try c.catchUp((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32)))
-    let bytes=try AtlasVaultEpochRotation.canonical(before)
-    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(device(root,2,v).recovery()),bytes)
-    XCTAssertNotEqual(before["status"] as? String,"ACTIVE")
-    XCTAssertFalse((before["local"] as! [[String:Any]]).isEmpty);XCTAssertFalse((before["peer"] as! [[String:Any]]).isEmpty)
-    XCTAssertLessThan(bytes.count,10000)
-    for forbidden in ["ciphertext_b64","vault_key","access_token","private_key"] {XCTAssertFalse(String(data:bytes,encoding:.utf8)!.contains(forbidden))}
+    let before = try c.recovery()
+    XCTAssertThrowsError(
+      try c.catchUp(
+        (v["packets"] as! [[[String: Any]]])[2],
+        currentActivationID: v["target_activation_id"] as! String,
+        agreementPrivateKey: Data(repeating: 22, count: 32)))
+    let bytes = try AtlasVaultEpochRotation.canonical(before)
+    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(device(root, 2, v).recovery()), bytes)
+    XCTAssertNotEqual(before["status"] as? String, "ACTIVE")
+    XCTAssertFalse((before["local"] as! [[String: Any]]).isEmpty)
+    XCTAssertFalse((before["peer"] as! [[String: Any]]).isEmpty)
+    XCTAssertLessThan(bytes.count, 10000)
+    for forbidden in ["ciphertext_b64", "vault_key", "access_token", "private_key"] {
+      XCTAssertFalse(String(data: bytes, encoding: .utf8)!.contains(forbidden))
+    }
   }
   func testMalformedChainsDoNotPartiallyActivate() throws {
     let v = try vector()

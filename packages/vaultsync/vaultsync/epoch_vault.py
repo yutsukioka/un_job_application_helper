@@ -26,7 +26,6 @@ from .sync_queue import (
     EncryptedPatchOperation,
     OpaqueCiphertextEnvelope,
     SignedStateCommitment,
-    _EncryptedQueueFile,
     _identifier,
     _inbox_default,
     _outbox_default,
@@ -280,7 +279,9 @@ class EpochVault:
                 )
             )
 
-    def catch_up(self, packets, *, current_activation_id, agreement_private_key, history_updates=()):
+    def catch_up(
+        self, packets, *, current_activation_id, agreement_private_key, history_updates=()
+    ):
         return self._catch_up_for_testing(
             packets,
             current_activation_id=current_activation_id,
@@ -301,7 +302,14 @@ class EpochVault:
         from .epoch_catch_up import catch_up
 
         with self._lock:
-            return catch_up(self, packets, current_activation_id, agreement_private_key, checkpoint, history_updates)
+            return catch_up(
+                self,
+                packets,
+                current_activation_id,
+                agreement_private_key,
+                checkpoint,
+                history_updates,
+            )
 
     @_checked
     def recover_publication(self):
@@ -465,10 +473,10 @@ class EpochVault:
     @_checked
     def recovery(self):
         with self._lock:
-            s=self._load()
-            result=self._history(s).recovery()
-            if result['status']=='ACTIVE' and s['status']!='ACTIVE':
-                result.update(status=s['status'],reason='ATLAS_'+s['status'])
+            s = self._load()
+            result = self._history(s).recovery()
+            if result["status"] == "ACTIVE" and s["status"] != "ACTIVE":
+                result.update(status=s["status"], reason="ATLAS_" + s["status"])
             return result
 
     @_checked
@@ -538,9 +546,10 @@ class EpochVault:
                 or recipient not in s["recipients"]
             ):
                 _reject("ATLAS_DEVICE_REVOKED")
-            if s['journal'].get('kind')=='CATCH_UP':
-                if recipient!=self._context['device_id']: _reject('ATLAS_DEVICE_DELIVERY_REJECTED')
-                return copy.deepcopy(s['journal']['packets'][-1]['wrapper'])
+            if s["journal"].get("kind") == "CATCH_UP":
+                if recipient != self._context["device_id"]:
+                    _reject("ATLAS_DEVICE_DELIVERY_REJECTED")
+                return copy.deepcopy(s["journal"]["packets"][-1]["wrapper"])
             return copy.deepcopy(
                 next(d for d in s["journal"]["proof"]["deliveries"] if d["device_id"] == recipient)
             )

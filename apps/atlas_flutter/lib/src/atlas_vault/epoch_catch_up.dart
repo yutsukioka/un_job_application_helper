@@ -92,12 +92,14 @@ final class _EpochPublication extends _EncryptedQueueFile {
   Future<void> write(
     Map<String, Object?> state, {
     FutureOr<void> Function()? beforeReplace,
+    FutureOr<void> Function()? afterRecord,
   }) async {
     if (await anchor.file.exists()) {
       await anchor.write({
         'state': state,
         'sha256': digest(state),
       }, beforeReplace: beforeReplace);
+      await afterRecord?.call();
       await super.write(state);
     } else {
       await super.write(state, beforeReplace: beforeReplace);
@@ -105,19 +107,26 @@ final class _EpochPublication extends _EncryptedQueueFile {
   }
 
   Future<void> recover() async {
-    final s=await record();
-    if(s['status']=='ACTIVE') s['status']='CATCH_UP_PENDING';
+    final s = await record();
+    if (s['status'] == 'ACTIVE') s['status'] = 'CATCH_UP_PENDING';
     await write(s);
   }
 }
 
 final class _CatchUpHistoryFile extends _EncryptedQueueFile {
-  _CatchUpHistoryFile(AtlasVaultEpochVault owner,this.state):super(owner._file.file,owner._key,kind:'guarded-sync-state-v1');
-  Map<String,Object?> state;
+  _CatchUpHistoryFile(AtlasVaultEpochVault owner, this.state)
+    : super(owner._file.file, owner._key, kind: 'guarded-sync-state-v1');
+  Map<String, Object?> state;
   @override
-  Future<Map<String,Object?>> read(Map<String,Object?> fallback) async => _epochCopy(state);
+  Future<Map<String, Object?>> read(Map<String, Object?> fallback) async =>
+      _epochCopy(state);
   @override
-  Future<void> write(Map<String,Object?> value,{FutureOr<void> Function()? beforeReplace}) async {state=_epochCopy(value);}
+  Future<void> write(
+    Map<String, Object?> value, {
+    FutureOr<void> Function()? beforeReplace,
+  }) async {
+    state = _epochCopy(value);
+  }
 }
 
 extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
@@ -125,18 +134,18 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     List<Map<String, Object?>> packets, {
     required String currentActivationID,
     required Uint8List agreementPrivateKey,
-    List<Map<String,Object?>> historyUpdates=const [],
+    List<Map<String, Object?>> historyUpdates = const [],
   }) => catchUpForTesting(
     packets,
     currentActivationID: currentActivationID,
     agreementPrivateKey: agreementPrivateKey,
-    historyUpdates:historyUpdates,
+    historyUpdates: historyUpdates,
   );
   Future<bool> catchUpForTesting(
     List<Map<String, Object?>> packets, {
     required String currentActivationID,
     required Uint8List agreementPrivateKey,
-    List<Map<String,Object?>> historyUpdates=const [],
+    List<Map<String, Object?>> historyUpdates = const [],
     FutureOr<void> Function(String)? checkpoint,
   }) => _run(() async {
     final s = await _load();
@@ -154,10 +163,14 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         j['phase'] == 'ACTIVE' &&
         j['target_id'] == currentActivationID) {
       if (jsonEncode(_canonicalValue(j['packets'])) !=
-          jsonEncode(_canonicalValue(packets)) || jsonEncode(_canonicalValue(j['history_updates']??[]))!=jsonEncode(_canonicalValue(historyUpdates)))
+              jsonEncode(_canonicalValue(packets)) ||
+          jsonEncode(_canonicalValue(j['history_updates'] ?? [])) !=
+              jsonEncode(_canonicalValue(historyUpdates)))
         _epochFail('ATLAS_EPOCH_CONFLICT');
-      if(s['status']=='CATCH_UP_PENDING') {
-        s['status']='ACTIVE';await _file.write(s);return true;
+      if (s['status'] == 'CATCH_UP_PENDING') {
+        s['status'] = 'ACTIVE';
+        await _file.write(s);
+        return true;
       }
       return false;
     }
@@ -176,15 +189,19 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     await _file.write(s);
     await checkpoint?.call('catch_up_pending');
     if (packets.isEmpty || packets.length > 32) _epochFail();
-    if(historyUpdates.length>256 || _canonicalJsonBytes({'updates':historyUpdates}).length>4*1024*1024) _epochFail();
+    if (historyUpdates.length > 256 ||
+        _canonicalJsonBytes({'updates': historyUpdates}).length >
+            4 * 1024 * 1024)
+      _epochFail();
     final staged = _epochCopy(s),
         h = _object(_object(staged['components'])['history']);
     if (h['status'] != 'ACTIVE' || _epochRows(h['views']).isEmpty)
       _epochFail('ATLAS_RECOVERY_PENDING');
     var registry = _epochRows(s['registry']), epoch = s['epoch'] as int;
-    final bridges = _epochBridgeRecords(h), stage=_CatchUpHistoryFile(this,h);
-    final validator=_history(staged).._store=stage;
-    var updateIndex=0;
+    final bridges = _epochBridgeRecords(h),
+        stage = _CatchUpHistoryFile(this, h);
+    final validator = _history(staged).._store = stage;
+    var updateIndex = 0;
     Map<String, Object?> verified = {};
     for (final packet in packets) {
       if (packet['format'] == 'atlasvault-activation-record')
@@ -192,28 +209,53 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       final p = _object(packet['proof']),
           w = _object(packet['wrapper']),
           plan = _object(p['plan']);
-      final sameEpoch=plan['new_epoch']==epoch;
-      var verifyRegistry=registry,previousEpoch=epoch;
-      if(sameEpoch) {
-        if(bridges.isEmpty) _epochFail();
-        final old=bridges.last.containsKey('wrapper')?_object(bridges.last['proof']):bridges.last;
-        if(p['activation_id']!=(old['activation_id']??old['root']) || ['plan','registry','revocation','rotation_signer_device_id'].any((k)=>jsonEncode(_canonicalValue(p[k]))!=jsonEncode(_canonicalValue(old[k])))) _epochFail('ATLAS_EPOCH_CONFLICT');
-        final oldWrapper=bridges.last['wrapper']??_epochRows(old['deliveries']).firstWhere((w)=>w['device_id']==_context['device_id']);
-        if(jsonEncode(_canonicalValue(oldWrapper))!=jsonEncode(_canonicalValue(w))) _epochFail();
-        verifyRegistry=_epochRows(old['registry']);previousEpoch=_object(old['plan'])['previous_epoch'] as int;
+      final sameEpoch = plan['new_epoch'] == epoch;
+      var verifyRegistry = registry, previousEpoch = epoch;
+      if (sameEpoch) {
+        if (bridges.isEmpty) _epochFail();
+        final old = bridges.last.containsKey('wrapper')
+            ? _object(bridges.last['proof'])
+            : bridges.last;
+        if (p['activation_id'] != (old['activation_id'] ?? old['root']) ||
+            ['plan', 'registry', 'revocation', 'rotation_signer_device_id'].any(
+              (k) =>
+                  jsonEncode(_canonicalValue(p[k])) !=
+                  jsonEncode(_canonicalValue(old[k])),
+            ))
+          _epochFail('ATLAS_EPOCH_CONFLICT');
+        final oldWrapper =
+            bridges.last['wrapper'] ??
+            _epochRows(
+              old['deliveries'],
+            ).firstWhere((w) => w['device_id'] == _context['device_id']);
+        if (jsonEncode(_canonicalValue(oldWrapper)) !=
+            jsonEncode(_canonicalValue(w)))
+          _epochFail();
+        verifyRegistry = _epochRows(old['registry']);
+        previousEpoch = _object(old['plan'])['previous_epoch'] as int;
         bridges.removeLast();
       }
-      while(!sameEpoch && _epochRows(stage.state['views']).last['root']!=plan['state_root']) {
-        if(updateIndex==historyUpdates.length) _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
-        final u=historyUpdates[updateIndex];
-        _exact(u,{'view','registry','collection','opaque_state_b64'});
+      while (!sameEpoch &&
+          _epochRows(stage.state['views']).last['root'] != plan['state_root']) {
+        if (updateIndex == historyUpdates.length)
+          _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
+        final u = historyUpdates[updateIndex];
+        _exact(u, {'view', 'registry', 'collection', 'opaque_state_b64'});
         try {
-          await validator.ingest(_object(u['view']),_epochRows(u['registry']),_object(u['collection']),base64Decode(u['opaque_state_b64'] as String));
+          await validator.ingest(
+            _object(u['view']),
+            _epochRows(u['registry']),
+            _object(u['collection']),
+            base64Decode(u['opaque_state_b64'] as String),
+          );
         } catch (_) {
-          if(stage.state['status']!='ACTIVE') {
-            final original=_object(_object(s['components'])['history']);
-            original['cases']=stage.state['cases'];original['status']='RECOVERY_PENDING';
-            (s['components'] as Map)['history']=original;s['status']='RECOVERY_PENDING';await _file.write(s);
+          if (stage.state['status'] != 'ACTIVE') {
+            final original = _object(_object(s['components'])['history']);
+            original['cases'] = stage.state['cases'];
+            original['status'] = 'RECOVERY_PENDING';
+            (s['components'] as Map)['history'] = original;
+            s['status'] = 'RECOVERY_PENDING';
+            await _file.write(s);
           }
           rethrow;
         }
@@ -225,7 +267,11 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         accountID: _context['account_id'] as String,
         vaultID: _context['vault_id'] as String,
         previousEpoch: previousEpoch,
-        stateRoot: (sameEpoch?plan['state_root']:_epochRows(stage.state['views']).last['root']) as String,
+        stateRoot:
+            (sameEpoch
+                    ? plan['state_root']
+                    : _epochRows(stage.state['views']).last['root'])
+                as String,
         activationID: p['activation_id'] as String,
         recipientDeviceID: _context['device_id'] as String,
       );
@@ -243,19 +289,23 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         ),
         minimumKeyEpoch: verified['new_epoch'] as int,
       );
-      if(sameEpoch && base64Encode(opened.vaultKey)!=_object(staged['keys'])['$epoch']) _epochFail();
+      if (sameEpoch &&
+          base64Encode(opened.vaultKey) != _object(staged['keys'])['$epoch'])
+        _epochFail();
       (staged['keys'] as Map)['${opened.keyEpoch}'] = base64Encode(
         opened.vaultKey,
       );
       bridges.add(_epochCopy(packet));
-      stage.state.remove('epoch_bridge');stage.state['epoch_bridges']=bridges;
+      stage.state.remove('epoch_bridge');
+      stage.state['epoch_bridges'] = bridges;
       registry = _epochRows(verified['registry']);
       epoch = verified['new_epoch'] as int;
       await checkpoint?.call('verified_epoch');
     }
     if (_object(packets.last['proof'])['activation_id'] != currentActivationID)
       _epochFail('ATLAS_EPOCH_CONFLICT');
-    if(updateIndex!=historyUpdates.length) _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
+    if (updateIndex != historyUpdates.length)
+      _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
     (staged['components'] as Map)['history'] = stage.state;
     await _verifyEpochBridges(bridges, _registry, _context);
     staged.addAll({
@@ -269,7 +319,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         'phase': 'ACTIVE',
         'target_id': currentActivationID,
         'packets': packets.map(_epochCopy).toList(),
-        'history_updates':historyUpdates.map(_epochCopy).toList(),
+        'history_updates': historyUpdates.map(_epochCopy).toList(),
         'prior_journal': null,
       },
     });
@@ -277,6 +327,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     await _file.write(
       staged,
       beforeReplace: () => checkpoint?.call('before_local_commit'),
+      afterRecord: () => checkpoint?.call('after_recovery_record'),
     );
     await checkpoint?.call('after_local_commit');
     return true;
@@ -321,9 +372,14 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       (op) => !retainEpochs.contains(op.envelope.keyEpoch),
     ))
       _epochFail('ATLAS_CLEANUP_PENDING');
-    final journal=_object(s['journal']),intent={'retain_epochs':retainEpochs.toList()..sort()};
-    if(s['status']=='CLEANUP_PENDING' && jsonEncode(_canonicalValue(journal['cleanup']))!=jsonEncode(_canonicalValue(intent))) _epochFail('ATLAS_CLEANUP_PENDING');
-    journal['cleanup']=intent;s['journal']=journal;
+    final journal = _object(s['journal']),
+        intent = {'retain_epochs': retainEpochs.toList()..sort()};
+    if (s['status'] == 'CLEANUP_PENDING' &&
+        jsonEncode(_canonicalValue(journal['cleanup'])) !=
+            jsonEncode(_canonicalValue(intent)))
+      _epochFail('ATLAS_CLEANUP_PENDING');
+    journal['cleanup'] = intent;
+    s['journal'] = journal;
     await _file.enable();
     s['status'] = 'CLEANUP_PENDING';
     await _file.write(s);

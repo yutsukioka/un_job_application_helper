@@ -1484,8 +1484,13 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     ) -> ActivationReceipt:
         _authorized_storage_account(service, authorization)
         try:
-            record=service.accept_activation(_credential_token(authorization),vault_id,request.model_dump())
-            return ActivationReceipt(transition_id=record['transition_id'],key_epoch=record['proof']['plan']['new_epoch'])
+            record = service.accept_activation(
+                _credential_token(authorization), vault_id, request.model_dump()
+            )
+            return ActivationReceipt(
+                transition_id=record["transition_id"],
+                key_epoch=record["proof"]["plan"]["new_epoch"],
+            )
         except AuthorizationFailed:
             raise _bearer_authorization_error() from None
         except ActivationUnavailable:
