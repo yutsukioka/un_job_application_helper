@@ -122,7 +122,7 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
         contentsOf: root.appendingPathComponent(
           "contracts/sync/test_vectors/\(name).json"))) as! [String: Any]
   }
-  func device(_ root: URL, _ i: Int, _ v: [String: Any], initialize: Bool = false) throws
+  func device(_ root: URL, _ i: Int, _ v: [String: Any], initialize: Bool = false, inbox: AtlasVaultDurableEncryptedInbox? = nil) throws
     -> AtlasVaultEpochVault
   {
     let view = v["initial_view"] as! [String: Any]
@@ -146,9 +146,28 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
         view: view, registry: v["initial_history_registry"] as! [[String: Any]],
         collection: v["initial_collection"] as! [String: Any],
         opaqueState: Data(base64Encoded: v["opaque_state_b64"] as! String)!)
-      try c.initialize(keys: [3: Data(repeating: 30, count: 32)], history: h)
+      try c.initialize(keys: [3: Data(repeating: 30, count: 32)], history: h, inbox: inbox)
     }
     return c
+  }
+  func testCleanupPreservesPendingInboxKeys() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let q = try vector("atlasvault_encrypted_patch_queue_vectors_v1")
+    var raw = (q["operations"] as! [[String: Any]])[0]
+    var envelope = raw["envelope"] as! [String: Any]
+    envelope["key_epoch"] = 3
+    raw["envelope"] = envelope
+    let inbox = try AtlasVaultDurableEncryptedInbox(fileURL: root.appendingPathComponent("incoming"), encryptionKey: Data(repeating: 81, count: 32))
+    try inbox.stagePage(expectedCursor: nil, nextCursor: "next", operations: [AtlasVaultEncryptedPatchOperation(jsonObject: raw)])
+    let v = try vector()
+    let c = try device(root, 2, v, initialize: true, inbox: inbox)
+    _ = try c.catchUp((v["packets"] as! [[[String: Any]]])[2], currentActivationID: v["target_activation_id"] as! String, agreementPrivateKey: Data(repeating: 22, count: 32))
+    var deleted = false
+    XCTAssertThrowsError(try c.cleanupEpochs(retainEpochs: [5], deleteEpoch: { _ in deleted = true }, containsEpoch: { _ in false }))
+    XCTAssertFalse(deleted)
+    XCTAssertEqual(try c.availableEpochs(), [3, 4, 5])
   }
   func testIndependentMultiEpochCatchUpRecoveryAndCleanup() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

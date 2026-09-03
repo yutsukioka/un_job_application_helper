@@ -28,6 +28,7 @@ void main() {
     int i, {
     bool initialize = false,
     Map<String, Object?>? vector,
+    AtlasVaultDurableEncryptedInbox? inbox,
   }) async {
     final fixture = vector ?? v;
     final c = AtlasVaultEpochVault(
@@ -62,10 +63,27 @@ void main() {
       );
       await c.initialize({
         3: Uint8List.fromList(List.filled(32, 30)),
-      }, history: h);
+      }, history: h, inbox: inbox);
     }
     return c;
   }
+
+  test('C27 cleanup preserves pending inbox keys', () async {
+    final root = await Directory.systemTemp.createTemp('atlas-c27-inbox-');
+    try {
+      final queue = m(jsonDecode(File('../../contracts/sync/test_vectors/atlasvault_encrypted_patch_queue_vectors_v1.json').readAsStringSync()));
+      final raw = rows(queue['operations']).first;
+      raw['envelope'] = {...m(raw['envelope']), 'key_epoch': 3};
+      final inbox = AtlasVaultDurableEncryptedInbox(File('${root.path}/incoming'), encryptionKey: Uint8List.fromList(List.filled(32, 81)));
+      await inbox.stagePage(expectedCursor: null, nextCursor: 'next', operations: [AtlasVaultEncryptedPatchOperation.fromJson(raw)]);
+      final c = await device(root, 2, initialize: true, inbox: inbox);
+      await c.catchUp(rows((v['packets'] as List)[2]), currentActivationID: v['target_activation_id'] as String, agreementPrivateKey: Uint8List.fromList(List.filled(32, 22)));
+      var deleted = false;
+      await expectLater(c.cleanupEpochs(retainEpochs: {5}, deleteEpoch: (_) async { deleted = true; }, containsEpoch: (_) async => false), throwsA(anything));
+      expect(deleted, isFalse);
+      expect(await c.availableEpochs(), [3, 4, 5]);
+    } finally { await root.delete(recursive: true); }
+  });
 
   test(
     'C27 intervening authenticated history is required and preserved',

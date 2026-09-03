@@ -33,7 +33,7 @@ from vaultsync.revocation import (
 from vaultsync.sync_recovery import GuardedSyncState
 
 
-def setup(root):
+def setup(root, *, inbox=None):
     devices = [
         device_identity_from_private_keys(
             signing_private_seed=bytes([10 + i]) * 32,
@@ -112,7 +112,7 @@ def setup(root):
             initial_body(),
         )
         c = client(root, i, registry, view)
-        c.initialize({3: bytes([30]) * 32}, history=h)
+        c.initialize({3: bytes([30]) * 32}, history=h, inbox=inbox)
         clients.append(c)
     return dict(
         backend=backend,
