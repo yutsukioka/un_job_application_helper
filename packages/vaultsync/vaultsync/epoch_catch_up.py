@@ -106,7 +106,18 @@ class EpochPublication(_EncryptedQueueFile):
         self.write(s)
 
 
-def catch_up(owner, packets, current_activation_id, agreement_private_key, checkpoint):
+class _StagedHistory:
+    def __init__(self, state):
+        self.state = state
+
+    def read(self, default):
+        return copy.deepcopy(self.state)
+
+    def write(self, state):
+        self.state = copy.deepcopy(state)
+
+
+def catch_up(owner, packets, current_activation_id, agreement_private_key, checkpoint, history_updates=()):
     s = owner._load()
     if (
         s["status"] in ("REVOKED", "RECOVERY_PENDING", "CLEANUP_PENDING")
@@ -116,7 +127,8 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
     journal = s.get("journal") or {}
     if journal.get("kind") == "CATCH_UP" and journal["phase"] == "ACTIVE":
         if journal["target_id"] == current_activation_id:
-            if _canonical(journal["packets"]) != _canonical(packets):
+            if (_canonical(journal["packets"]) != _canonical(packets)
+                or _canonical(journal.get("history_updates", [])) != _canonical(list(history_updates))):
                 _reject("ATLAS_EPOCH_CONFLICT")
             if s['status']=='CATCH_UP_PENDING':
                 s['status']='ACTIVE'
@@ -139,24 +151,47 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
     checkpoint("catch_up_pending")
     if not isinstance(packets, list) or not 1 <= len(packets) <= 32:
         _reject()
+    if not isinstance(history_updates, (list, tuple)) or len(history_updates) > 256 or len(_canonical(list(history_updates))) > 4 * 1024 * 1024:
+        _reject()
     staged = copy.deepcopy(s)
     history = staged["components"]["history"]
     if history["status"] != "ACTIVE" or not history["views"]:
         _reject("ATLAS_RECOVERY_PENDING")
     registry, epoch = s["registry"], s["epoch"]
-    state_root = history["views"][-1]["root"]
     bridges = bridge_records(history)
+    stage = _StagedHistory(history)
+    validator = owner._history(staged)
+    validator._store = stage
+    update_index = 0
     for packet in packets:
         if packet.get("format") == "atlasvault-activation-record":
             _reject("ATLAS_PER_DEVICE_PROOF_REQUIRED")
         p = packet["proof"]
+        while stage.state["views"][-1]["root"] != p["plan"]["state_root"]:
+            if update_index == len(history_updates):
+                _reject("ATLAS_HISTORY_CHAIN_REQUIRED")
+            update = history_updates[update_index]
+            if set(update) != {"view", "registry", "collection", "opaque_state_b64"}:
+                _reject()
+            try:
+                validator.ingest(update["view"], update["registry"], update["collection"],
+                                 base64.b64decode(update["opaque_state_b64"], validate=True))
+            except Exception:
+                if stage.state["status"] != "ACTIVE":
+                    original = s["components"]["history"]
+                    original["cases"] = stage.state["cases"]
+                    original["status"] = "RECOVERY_PENDING"
+                    s["status"] = "RECOVERY_PENDING"
+                    owner._file.write(s)
+                raise
+            update_index += 1
         verified = verify_device_delivery(
             packet,
             registry=registry,
             account_id=owner._context["account_id"],
             vault_id=owner._context["vault_id"],
             previous_epoch=epoch,
-            state_root=state_root,
+            state_root=stage.state["views"][-1]["root"],
             activation_id=p["activation_id"],
             recipient_device_id=owner._context["device_id"],
         )
@@ -173,12 +208,15 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
         )
         staged["keys"][str(opened.key_epoch)] = base64.b64encode(opened.vault_key).decode()
         bridges.append(copy.deepcopy(packet))
+        stage.state.pop("epoch_bridge", None)
+        stage.state["epoch_bridges"] = bridges
         registry, epoch = verified["registry"], verified["new_epoch"]
         checkpoint("verified_epoch")
     if packets[-1]["proof"]["activation_id"] != current_activation_id:
         _reject("ATLAS_EPOCH_CONFLICT")
-    history.pop("epoch_bridge", None)
-    history["epoch_bridges"] = bridges
+    if update_index != len(history_updates):
+        _reject("ATLAS_HISTORY_CHAIN_REQUIRED")
+    staged["components"]["history"] = stage.state
     verify_bridges(bridges, owner._registry, owner._context)
     staged.update(
         epoch=epoch,
@@ -192,6 +230,7 @@ def catch_up(owner, packets, current_activation_id, agreement_private_key, check
         phase="ACTIVE",
         target_id=current_activation_id,
         packets=copy.deepcopy(packets),
+        history_updates=copy.deepcopy(list(history_updates)),
         prior_journal=None,
     )
     owner._ring(staged)

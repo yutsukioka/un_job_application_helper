@@ -111,20 +111,32 @@ final class _EpochPublication extends _EncryptedQueueFile {
   }
 }
 
+final class _CatchUpHistoryFile extends _EncryptedQueueFile {
+  _CatchUpHistoryFile(AtlasVaultEpochVault owner,this.state):super(owner._file.file,owner._key,kind:'guarded-sync-state-v1');
+  Map<String,Object?> state;
+  @override
+  Future<Map<String,Object?>> read(Map<String,Object?> fallback) async => _epochCopy(state);
+  @override
+  Future<void> write(Map<String,Object?> value,{FutureOr<void> Function()? beforeReplace}) async {state=_epochCopy(value);}
+}
+
 extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
   Future<bool> catchUp(
     List<Map<String, Object?>> packets, {
     required String currentActivationID,
     required Uint8List agreementPrivateKey,
+    List<Map<String,Object?>> historyUpdates=const [],
   }) => catchUpForTesting(
     packets,
     currentActivationID: currentActivationID,
     agreementPrivateKey: agreementPrivateKey,
+    historyUpdates:historyUpdates,
   );
   Future<bool> catchUpForTesting(
     List<Map<String, Object?>> packets, {
     required String currentActivationID,
     required Uint8List agreementPrivateKey,
+    List<Map<String,Object?>> historyUpdates=const [],
     FutureOr<void> Function(String)? checkpoint,
   }) => _run(() async {
     final s = await _load();
@@ -142,7 +154,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         j['phase'] == 'ACTIVE' &&
         j['target_id'] == currentActivationID) {
       if (jsonEncode(_canonicalValue(j['packets'])) !=
-          jsonEncode(_canonicalValue(packets)))
+          jsonEncode(_canonicalValue(packets)) || jsonEncode(_canonicalValue(j['history_updates']??[]))!=jsonEncode(_canonicalValue(historyUpdates)))
         _epochFail('ATLAS_EPOCH_CONFLICT');
       if(s['status']=='CATCH_UP_PENDING') {
         s['status']='ACTIVE';await _file.write(s);return true;
@@ -164,13 +176,15 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     await _file.write(s);
     await checkpoint?.call('catch_up_pending');
     if (packets.isEmpty || packets.length > 32) _epochFail();
+    if(historyUpdates.length>256 || _canonicalJsonBytes({'updates':historyUpdates}).length>4*1024*1024) _epochFail();
     final staged = _epochCopy(s),
         h = _object(_object(staged['components'])['history']);
     if (h['status'] != 'ACTIVE' || _epochRows(h['views']).isEmpty)
       _epochFail('ATLAS_RECOVERY_PENDING');
     var registry = _epochRows(s['registry']), epoch = s['epoch'] as int;
-    final root = _epochRows(h['views']).last['root'] as String,
-        bridges = _epochBridgeRecords(h);
+    final bridges = _epochBridgeRecords(h), stage=_CatchUpHistoryFile(this,h);
+    final validator=_history(staged).._store=stage;
+    var updateIndex=0;
     Map<String, Object?> verified = {};
     for (final packet in packets) {
       if (packet['format'] == 'atlasvault-activation-record')
@@ -178,13 +192,29 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       final p = _object(packet['proof']),
           w = _object(packet['wrapper']),
           plan = _object(p['plan']);
+      while(_epochRows(stage.state['views']).last['root']!=plan['state_root']) {
+        if(updateIndex==historyUpdates.length) _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
+        final u=historyUpdates[updateIndex];
+        _exact(u,{'view','registry','collection','opaque_state_b64'});
+        try {
+          await validator.ingest(_object(u['view']),_epochRows(u['registry']),_object(u['collection']),base64Decode(u['opaque_state_b64'] as String));
+        } catch (_) {
+          if(stage.state['status']!='ACTIVE') {
+            final original=_object(_object(s['components'])['history']);
+            original['cases']=stage.state['cases'];original['status']='RECOVERY_PENDING';
+            (s['components'] as Map)['history']=original;s['status']='RECOVERY_PENDING';await _file.write(s);
+          }
+          rethrow;
+        }
+        updateIndex++;
+      }
       verified = await delivery.AtlasVaultDeviceDelivery.verify(
         packet,
         registry: registry,
         accountID: _context['account_id'] as String,
         vaultID: _context['vault_id'] as String,
         previousEpoch: epoch,
-        stateRoot: root,
+        stateRoot: _epochRows(stage.state['views']).last['root'] as String,
         activationID: p['activation_id'] as String,
         recipientDeviceID: _context['device_id'] as String,
       );
@@ -206,15 +236,15 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         opened.vaultKey,
       );
       bridges.add(_epochCopy(packet));
+      stage.state.remove('epoch_bridge');stage.state['epoch_bridges']=bridges;
       registry = _epochRows(verified['registry']);
       epoch = verified['new_epoch'] as int;
       await checkpoint?.call('verified_epoch');
     }
     if (_object(packets.last['proof'])['activation_id'] != currentActivationID)
       _epochFail('ATLAS_EPOCH_CONFLICT');
-    h.remove('epoch_bridge');
-    h['epoch_bridges'] = bridges;
-    (staged['components'] as Map)['history'] = h;
+    if(updateIndex!=historyUpdates.length) _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
+    (staged['components'] as Map)['history'] = stage.state;
     await _verifyEpochBridges(bridges, _registry, _context);
     staged.addAll({
       'epoch': epoch,
@@ -227,6 +257,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         'phase': 'ACTIVE',
         'target_id': currentActivationID,
         'packets': packets.map(_epochCopy).toList(),
+        'history_updates':historyUpdates.map(_epochCopy).toList(),
         'prior_journal': null,
       },
     });

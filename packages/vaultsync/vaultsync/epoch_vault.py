@@ -280,11 +280,12 @@ class EpochVault:
                 )
             )
 
-    def catch_up(self, packets, *, current_activation_id, agreement_private_key):
+    def catch_up(self, packets, *, current_activation_id, agreement_private_key, history_updates=()):
         return self._catch_up_for_testing(
             packets,
             current_activation_id=current_activation_id,
             agreement_private_key=agreement_private_key,
+            history_updates=history_updates,
         )
 
     @_checked
@@ -294,12 +295,13 @@ class EpochVault:
         *,
         current_activation_id,
         agreement_private_key,
+        history_updates=(),
         checkpoint=lambda stage: None,
     ):
         from .epoch_catch_up import catch_up
 
         with self._lock:
-            return catch_up(self, packets, current_activation_id, agreement_private_key, checkpoint)
+            return catch_up(self, packets, current_activation_id, agreement_private_key, checkpoint, history_updates)
 
     @_checked
     def recover_publication(self):
