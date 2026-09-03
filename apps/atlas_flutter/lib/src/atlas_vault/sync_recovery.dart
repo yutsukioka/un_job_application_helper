@@ -57,17 +57,22 @@ final class AtlasVaultGuardedSyncState {
 
   Future<List<Map<String, Object?>>> _chain(
     List<Map<String, Object?>> raw, [
-    Map<String, Object?>? proof,
+    List<Map<String, Object?>> proofs = const [],
   ]) async {
     if (raw.length > _viewLimit) _viewFail('ATLAS_HISTORY_LIMIT');
     final views = <Map<String, Object?>>[];
     var previous = _zeroRoot, registry = _emptyRegistryRoot;
     var epoch = _context['key_epoch']! as int, public = _public;
-    final plan = proof == null ? null : _object(proof['plan']);
+    Map<String, Object?>? plan;
     for (var i = 0; i < raw.length; i++) {
-      if (plan != null && previous == plan['state_root']) {
-        epoch = plan['new_epoch']! as int;
-        public = _bridgePublic(proof!);
+      for (final proof in proofs) {
+        final candidate = _object(proof['plan']);
+        if (previous == candidate['state_root'] &&
+            epoch == candidate['previous_epoch']) {
+          plan = candidate;
+          epoch = candidate['new_epoch'] as int;
+          public = _bridgePublic(proof);
+        }
       }
       final v = await AtlasVaultAuthenticatedStateView._verify(raw[i], public);
       if (['account_id', 'vault_id'].any((k) => v[k] != _context[k]) ||
@@ -99,23 +104,22 @@ final class AtlasVaultGuardedSyncState {
         )['signing_public_b64']!
         as String,
   );
-  Future<Map<String, Object?>?> _bridge(Map<String, Object?> state) async {
-    if (state['epoch_bridge'] == null) return null;
-    if (_rotationRegistry == null) _viewFail();
-    final proof = _object(state['epoch_bridge']),
-        plan = _object(_object(state['epoch_bridge'])['plan']);
-    await rotation.AtlasVaultEpochRotation.verify(
-      proof,
-      registry: _rotationRegistry,
-      accountID: _context['account_id']! as String,
-      vaultID: _context['vault_id']! as String,
-      previousEpoch: _context['key_epoch']! as int,
-      stateRoot: plan['state_root']! as String,
+  Future<List<Map<String, Object?>>> _bridge(Map<String, Object?> state) async {
+    final records = _epochBridgeRecords(state);
+    if (records.isNotEmpty && _rotationRegistry == null) _viewFail();
+    final proofs = await _verifyEpochBridges(
+      records,
+      _rotationRegistry ?? [],
+      _context,
     );
-    if (!_views(state['views']).any((v) => v['root'] == plan['state_root'])) {
-      _viewFail();
+    final roots = _views(state['views']).map((v) => v['root']).toList();
+    var position = -1;
+    for (final proof in proofs) {
+      final found = roots.indexOf(_object(proof['plan'])['state_root']);
+      if (found < 0 || found < position) _viewFail();
+      position = found;
     }
-    return proof;
+    return proofs;
   }
 
   Future<Map<String, Object?>> _stageEpoch(Map<String, Object?> proof) async {
@@ -129,7 +133,7 @@ final class AtlasVaultGuardedSyncState {
     }
     s['epoch_bridge'] = proof;
     await _bridge(s);
-    await _chain(_views(s['views']), proof);
+    await _chain(_views(s['views']), await _bridge(s));
     return s;
   }
 
@@ -142,6 +146,7 @@ final class AtlasVaultGuardedSyncState {
       'cases',
       'status',
       if (s.containsKey('epoch_bridge')) 'epoch_bridge',
+      if (s.containsKey('epoch_bridges')) 'epoch_bridges',
     });
     final context = _object(s['context']);
     _exact(context, _context.keys.toSet());
@@ -299,14 +304,16 @@ final class AtlasVaultGuardedSyncState {
         return await _checked(() async {
           if (copied.length > _viewLimit) _viewFail('ATLAS_HISTORY_LIMIT');
           final bridge = await _bridge(s);
+          final authorities = {
+            _context['key_epoch']: _public,
+            for (final p in bridge)
+              _object(p['plan'])['new_epoch']: _bridgePublic(p),
+          };
           for (final v in copied) {
             signed.add(
               await AtlasVaultAuthenticatedStateView._verify(
                 v,
-                bridge != null &&
-                        v['key_epoch'] == _object(bridge['plan'])['new_epoch']
-                    ? _bridgePublic(bridge)
-                    : _public,
+                authorities[v['key_epoch']] ?? _public,
               ),
             );
           }
@@ -351,7 +358,8 @@ final class AtlasVaultGuardedSyncState {
       String? registryDigest;
       try {
         final duplicate = await _checked(() async {
-          final bridge = await _bridge(s);
+          final bridges = await _bridge(s);
+          final bridge = bridges.isEmpty ? null : bridges.last;
           final epoch = bridge == null
               ? _context['key_epoch']
               : _object(bridge['plan'])['new_epoch'];

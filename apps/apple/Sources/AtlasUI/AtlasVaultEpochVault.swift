@@ -3,12 +3,12 @@ import Foundation
 
 /// D087 single-owner activation journal. One encrypted atomic commit publishes all components.
 public final class AtlasVaultEpochVault {
-  private let file: EncryptedQueueFile
-  private let key: Data
-  private let registry: [[String: Any]]
-  private let context: [String: Any]
+  let file: EpochPublication
+  let key: Data
+  let registry: [[String: Any]]
+  let context: [String: Any]
   private let lock = NSRecursiveLock()
-  private typealias R = AtlasVaultEpochRotation
+  typealias R = AtlasVaultEpochRotation
   public init(
     directory: URL, storageKey: Data, deviceID: String, registry: [[String: Any]],
     accountID: String, vaultID: String, keyEpoch: Int, stateRoot: String
@@ -25,22 +25,21 @@ public final class AtlasVaultEpochVault {
       "key_epoch": try viewInteger(keyEpoch), "state_root": stateRoot,
       "registry_root": try AtlasVaultRevocation.registryRoot(registry),
     ]
-    file = try EncryptedQueueFile(
-      fileURL: directory.appendingPathComponent("activation"), encryptionKey: storageKey,
-      kind: "epoch-activation-v1")
+    file = try EpochPublication(
+      fileURL: directory.appendingPathComponent("activation"), key: storageKey)
   }
-  private func run<T>(_ body: () throws -> T) throws -> T {
+  func run<T>(_ body: () throws -> T) throws -> T {
     lock.lock()
     defer { lock.unlock() }
     do { return try body() } catch let error as AtlasVaultRotationError { throw error } catch {
       throw AtlasVaultRotationError.rejected
     }
   }
-  private func map(_ value: Any?) throws -> [String: Any] {
+  func map(_ value: Any?) throws -> [String: Any] {
     guard let v = value as? [String: Any] else { throw AtlasVaultRotationError.rejected }
     return v
   }
-  private func rows(_ value: Any?) throws -> [[String: Any]] {
+  func rows(_ value: Any?) throws -> [[String: Any]] {
     guard let v = value as? [[String: Any]] else { throw AtlasVaultRotationError.rejected }
     return v
   }
@@ -60,7 +59,7 @@ public final class AtlasVaultEpochVault {
     else { throw AtlasVaultRotationError.rejected }
     return try verify(proof)
   }
-  private func ring(_ state: [String: Any]) throws -> AtlasVaultKeyEpochRing {
+  func ring(_ state: [String: Any]) throws -> AtlasVaultKeyEpochRing {
     let raw = try map(state["keys"])
     var keys = [Int64: Data]()
     guard !raw.isEmpty, raw.count <= 32 else { throw AtlasVaultRotationError.rejected }
@@ -73,7 +72,7 @@ public final class AtlasVaultEpochVault {
     return try AtlasVaultKeyEpochRing.fromEntries(
       currentKeyEpoch: viewInteger(state["epoch"]), keys: keys)
   }
-  private func load() throws -> [String: Any] {
+  func load() throws -> [String: Any] {
     let s = try file.read(default: [:])
     try R.exact(
       s,
@@ -82,12 +81,33 @@ public final class AtlasVaultEpochVault {
         "generation",
       ])
     guard try R.canonical(map(s["context"])) == R.canonical(context),
-      ["ACTIVE", "ACTIVATION_PENDING", "REVOKED", "RECOVERY_PENDING"].contains(
+      [
+        "ACTIVE", "ACTIVATION_PENDING", "REVOKED", "RECOVERY_PENDING", "CATCH_UP_PENDING",
+        "CLEANUP_PENDING",
+      ].contains(
         s["status"] as? String ?? "")
     else { throw AtlasVaultRotationError.rejected }
     _ = try AtlasVaultRevocation.registryRoot(rows(s["registry"]))
     _ = try ring(s)
     try R.exact(map(s["components"]), ["history", "outbox", "inbox"])
+    if let j = s["journal"] as? [String: Any], j["kind"] as? String == "CATCH_UP" {
+      guard ["ACTIVE", "CATCH_UP_PENDING"].contains(j["phase"] as? String ?? "") else {
+        throw AtlasVaultRotationError.rejected
+      }
+      let bridges = try EpochCatchUp.verify(
+        EpochCatchUp.records(map(map(s["components"])["history"])), registry: registry,
+        context: context)
+      if j["phase"] as? String == "ACTIVE" {
+        guard let last = bridges.last else { throw AtlasVaultRotationError.rejected }
+        let plan = try map(last["plan"])
+        guard try R.integer(s["epoch"]) == R.integer(plan["new_epoch"]),
+          try AtlasVaultRevocation.registryRoot(rows(s["registry"])) == plan[
+            "resulting_registry_root"] as? String,
+          s["recipients"] as? [String] == plan["recipients"] as? [String]
+        else { throw AtlasVaultRotationError.rejected }
+      }
+      return s
+    }
     if let j = s["journal"] as? [String: Any] {
       guard
         [
@@ -131,7 +151,7 @@ public final class AtlasVaultEpochVault {
       try file.write(s, beforeReplace: beforeReplace)
     }
   }
-  private func history(_ s: [String: Any]) throws -> AtlasVaultGuardedSyncState {
+  func history(_ s: [String: Any]) throws -> AtlasVaultGuardedSyncState {
     let c = try map(map(map(s["components"])["history"])["context"])
     guard
       ["account_id", "vault_id", "key_epoch"].allSatisfy({
@@ -152,6 +172,8 @@ public final class AtlasVaultEpochVault {
       write: { try self.writeComponent(name, value: $0, beforeReplace: $1) })
   }
   private func active(_ s: [String: Any]) throws {
+    if s["status"] as? String == "CATCH_UP_PENDING" { throw AtlasVaultRotationError.catchUpPending }
+    if s["status"] as? String == "CLEANUP_PENDING" { throw AtlasVaultRotationError.cleanupPending }
     if s["status"] as? String == "REVOKED" { throw AtlasVaultRotationError.revoked }
     if s["status"] as? String == "ACTIVATION_PENDING" { throw AtlasVaultRotationError.pending }
     guard s["status"] as? String == "ACTIVE",

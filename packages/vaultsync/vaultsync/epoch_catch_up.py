@@ -1,0 +1,224 @@
+"""C27 local epoch publication and recovery; no distributed transaction claim."""
+
+import base64
+import copy
+import hashlib
+
+from .device_delivery import verify_device_delivery
+from .epoch_rotation import _canonical, _reject, delivery_context, verify_epoch_rotation
+from .key_epochs import EpochHPKESealedVaultKeyV2, open_epoch_hpke_v2
+from .revocation import _decode
+from .sync_queue import _EncryptedQueueFile
+
+
+def bridge_records(state):
+    if "epoch_bridges" in state and "epoch_bridge" in state:
+        _reject()
+    result = state.get(
+        "epoch_bridges", [state["epoch_bridge"]] if state.get("epoch_bridge") else []
+    )
+    if not isinstance(result, list) or len(result) > 32:
+        _reject()
+    return result
+
+
+def verify_bridges(records, registry, context):
+    epoch = context["key_epoch"]
+    result = []
+    for raw in records:
+        packet = "wrapper" in raw
+        p = raw["proof"] if packet else raw
+        args = dict(
+            registry=registry,
+            account_id=context["account_id"],
+            vault_id=context["vault_id"],
+            previous_epoch=epoch,
+            state_root=p["plan"]["state_root"],
+        )
+        verified = (
+            verify_device_delivery(
+                raw,
+                **args,
+                activation_id=p["activation_id"],
+                recipient_device_id=p["recipient_device_id"],
+            )
+            if packet
+            else verify_epoch_rotation(raw, **args)
+        )
+        result.append(
+            dict(
+                plan=p["plan"],
+                registry=p["registry"],
+                rotation_signer_device_id=p["rotation_signer_device_id"],
+            )
+        )
+        registry, epoch = verified["registry"], verified["new_epoch"]
+    return result
+
+
+class EpochPublication(_EncryptedQueueFile):
+    """Encrypted write-ahead recovery record, then the complete owner publication.
+
+    Once enabled, disagreement is unavailable, never a fallback to an older file.
+    The record includes P6 alarms and P5 queues, not only the key-ring subset.
+    """
+
+    def __init__(self, path, key):
+        super().__init__(path, key, kind="epoch-activation-v1")
+        self.anchor = _EncryptedQueueFile(
+            self.path.with_name("activation-recovery"), key, kind="epoch-recovery-v1"
+        )
+
+    def _record(self):
+        record = self.anchor.read({})
+        if (
+            set(record) != {"state", "sha256"}
+            or hashlib.sha256(_canonical(record["state"])).hexdigest() != record["sha256"]
+        ):
+            _reject("ATLAS_PUBLICATION_RECOVERY_REQUIRED")
+        return record["state"]
+
+    def enable(self):
+        if not self.anchor.path.exists():
+            s = super().read({})
+            self.anchor.write(dict(state=s, sha256=hashlib.sha256(_canonical(s)).hexdigest()))
+
+    def read(self, default):
+        s = super().read(default)
+        if self.anchor.path.exists() and _canonical(s) != _canonical(self._record()):
+            _reject("ATLAS_PUBLICATION_RECOVERY_REQUIRED")
+        return s
+
+    def write(self, state, *, before_replace=None):
+        if self.anchor.path.exists():
+            self.anchor.write(
+                dict(state=state, sha256=hashlib.sha256(_canonical(state)).hexdigest()),
+                before_replace=before_replace,
+            )
+            super().write(state)
+        else:
+            super().write(state, before_replace=before_replace)
+
+    def recover(self):
+        super().write(self._record())
+
+
+def catch_up(owner, packets, current_activation_id, agreement_private_key, checkpoint):
+    s = owner._load()
+    if (
+        s["status"] in ("REVOKED", "RECOVERY_PENDING", "CLEANUP_PENDING")
+        or owner._history(s).recovery()["status"] != "ACTIVE"
+    ):
+        _reject("ATLAS_RECOVERY_PENDING")
+    journal = s.get("journal") or {}
+    if journal.get("kind") == "CATCH_UP" and journal["phase"] == "ACTIVE":
+        if journal["target_id"] == current_activation_id:
+            if _canonical(journal["packets"]) != _canonical(packets):
+                _reject("ATLAS_EPOCH_CONFLICT")
+            return False
+    owner._file.enable()
+    s["status"] = "CATCH_UP_PENDING"
+    prior = copy.deepcopy(s.get("journal"))
+    if journal.get("kind") == "CATCH_UP" and journal["phase"] != "ACTIVE":
+        prior = journal["prior_journal"]
+    s["journal"] = dict(
+        kind="CATCH_UP",
+        phase="CATCH_UP_PENDING",
+        target_id=current_activation_id,
+        packets=[],
+        prior_journal=prior,
+    )
+    owner._file.write(s)
+    checkpoint("catch_up_pending")
+    if not isinstance(packets, list) or not 1 <= len(packets) <= 32:
+        _reject()
+    staged = copy.deepcopy(s)
+    history = staged["components"]["history"]
+    if history["status"] != "ACTIVE" or not history["views"]:
+        _reject("ATLAS_RECOVERY_PENDING")
+    registry, epoch = s["registry"], s["epoch"]
+    state_root = history["views"][-1]["root"]
+    bridges = bridge_records(history)
+    for packet in packets:
+        if packet.get("format") == "atlasvault-activation-record":
+            _reject("ATLAS_PER_DEVICE_PROOF_REQUIRED")
+        p = packet["proof"]
+        verified = verify_device_delivery(
+            packet,
+            registry=registry,
+            account_id=owner._context["account_id"],
+            vault_id=owner._context["vault_id"],
+            previous_epoch=epoch,
+            state_root=state_root,
+            activation_id=p["activation_id"],
+            recipient_device_id=owner._context["device_id"],
+        )
+        w = packet["wrapper"]
+        opened = open_epoch_hpke_v2(
+            recipient_private_key=agreement_private_key,
+            sealed=EpochHPKESealedVaultKeyV2(
+                key_epoch=w["key_epoch"],
+                encapsulated_key=_decode(w["encapsulated_key_b64"], 32),
+                ciphertext=_decode(w["ciphertext_b64"], 48),
+            ),
+            context=delivery_context(p["plan"], owner._context["device_id"]),
+            minimum_key_epoch=verified["new_epoch"],
+        )
+        staged["keys"][str(opened.key_epoch)] = base64.b64encode(opened.vault_key).decode()
+        bridges.append(copy.deepcopy(packet))
+        registry, epoch = verified["registry"], verified["new_epoch"]
+        checkpoint("verified_epoch")
+    if packets[-1]["proof"]["activation_id"] != current_activation_id:
+        _reject("ATLAS_EPOCH_CONFLICT")
+    history.pop("epoch_bridge", None)
+    history["epoch_bridges"] = bridges
+    verify_bridges(bridges, owner._registry, owner._context)
+    staged.update(
+        epoch=epoch,
+        registry=registry,
+        recipients=verified["recipients"],
+        generation=s["generation"] + 1,
+        status="ACTIVE",
+    )
+    staged["journal"] = dict(
+        kind="CATCH_UP",
+        phase="ACTIVE",
+        target_id=current_activation_id,
+        packets=copy.deepcopy(packets),
+        prior_journal=None,
+    )
+    owner._ring(staged)
+    owner._file.write(staged, before_replace=lambda: checkpoint("before_local_commit"))
+    checkpoint("after_local_commit")
+    return True
+
+
+def cleanup(owner, retain_epochs, storage, checkpoint):
+    s = owner._load()
+    if (
+        s["status"] not in ("ACTIVE", "CLEANUP_PENDING")
+        or owner._history(s).recovery()["status"] != "ACTIVE"
+    ):
+        _reject("ATLAS_RECOVERY_PENDING")
+    if (
+        not isinstance(retain_epochs, set)
+        or any(type(e) is not int for e in retain_epochs)
+        or s["epoch"] not in retain_epochs
+    ):
+        _reject()
+    if not retain_epochs.issubset({int(e) for e in s["keys"]}):
+        _reject()
+    needed = {op.envelope.key_epoch for op in owner.pending_operations()}
+    if not needed.issubset(retain_epochs):
+        _reject("ATLAS_CLEANUP_PENDING")
+    owner._file.enable()
+    s["status"] = "CLEANUP_PENDING"
+    owner._file.write(s)
+    checkpoint("cleanup_pending")
+    for epoch in sorted({int(k) for k in s["keys"]} - retain_epochs):
+        storage.delete_epoch(epoch)
+        if storage.contains_epoch(epoch) is not False:
+            _reject("ATLAS_CLEANUP_PENDING")
+        del s["keys"][str(epoch)]
+    s["status"] = "ACTIVE"
+    owner._file.write(s)

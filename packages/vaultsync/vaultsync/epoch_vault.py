@@ -102,9 +102,9 @@ class EpochVault:
             or any(c not in "0123456789abcdef" for c in state_root)
         ):
             _reject()
-        self._file = _EncryptedQueueFile(
-            Path(directory) / "activation", self._key, kind="epoch-activation-v1"
-        )
+        from .epoch_catch_up import EpochPublication
+
+        self._file = EpochPublication(Path(directory) / "activation", self._key)
         self._lock = threading.RLock()
 
     def _verify(self, proof):
@@ -150,6 +150,8 @@ class EpochVault:
             "ACTIVATION_PENDING",
             "REVOKED",
             "RECOVERY_PENDING",
+            "CATCH_UP_PENDING",
+            "CLEANUP_PENDING",
         ):
             _reject()
         registry_root(s["registry"])
@@ -157,6 +159,24 @@ class EpochVault:
         if set(s["components"]) != {"history", "outbox", "inbox"}:
             _reject()
         journal = s["journal"]
+        if journal and journal.get("kind") == "CATCH_UP":
+            from .epoch_catch_up import bridge_records, verify_bridges
+
+            if journal["phase"] not in ("ACTIVE", "CATCH_UP_PENDING"):
+                _reject()
+            bridges = verify_bridges(
+                bridge_records(s["components"]["history"]), self._registry, self._context
+            )
+            if journal["phase"] == "ACTIVE":
+                if (
+                    not bridges
+                    or s["epoch"] != bridges[-1]["plan"]["new_epoch"]
+                    or registry_root(s["registry"])
+                    != bridges[-1]["plan"]["resulting_registry_root"]
+                    or s["recipients"] != bridges[-1]["plan"]["recipients"]
+                ):
+                    _reject()
+            return s
         if journal:
             if journal["phase"] not in (
                 "PREPARED",
@@ -208,6 +228,8 @@ class EpochVault:
         return h
 
     def _active(self, s):
+        if s["status"] in ("CATCH_UP_PENDING", "CLEANUP_PENDING"):
+            _reject("ATLAS_" + s["status"])
         if s["status"] == "REVOKED":
             _reject("ATLAS_DEVICE_REVOKED")
         if s["status"] == "ACTIVATION_PENDING":
@@ -257,6 +279,48 @@ class EpochVault:
                     generation=1,
                 )
             )
+
+    def catch_up(self, packets, *, current_activation_id, agreement_private_key):
+        return self._catch_up_for_testing(
+            packets,
+            current_activation_id=current_activation_id,
+            agreement_private_key=agreement_private_key,
+        )
+
+    @_checked
+    def _catch_up_for_testing(
+        self,
+        packets,
+        *,
+        current_activation_id,
+        agreement_private_key,
+        checkpoint=lambda stage: None,
+    ):
+        from .epoch_catch_up import catch_up
+
+        with self._lock:
+            return catch_up(self, packets, current_activation_id, agreement_private_key, checkpoint)
+
+    @_checked
+    def recover_publication(self):
+        with self._lock:
+            self._file.recover()
+            self._history(self._load()).recovery()
+
+    @_checked
+    def available_epochs(self):
+        with self._lock:
+            return sorted(int(k) for k in self._load()["keys"])
+
+    def cleanup_epochs(self, *, retain_epochs, storage):
+        return self._cleanup_epochs_for_testing(retain_epochs=retain_epochs, storage=storage)
+
+    @_checked
+    def _cleanup_epochs_for_testing(self, *, retain_epochs, storage, checkpoint=lambda stage: None):
+        from .epoch_catch_up import cleanup
+
+        with self._lock:
+            return cleanup(self, retain_epochs, storage, checkpoint)
 
     @_checked
     def observation(self):

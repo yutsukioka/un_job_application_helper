@@ -66,51 +66,44 @@ class GuardedSyncState:
             self._rotation_registry = rotation_registry
 
     def _bridge(self, state):
-        proof = state.get("epoch_bridge")
-        if proof is None:
-            return None
-        from .epoch_rotation import verify_epoch_rotation
+        from .epoch_catch_up import bridge_records, verify_bridges
 
-        if self._rotation_registry is None:
+        records = bridge_records(state)
+        if records and self._rotation_registry is None:
             _reject()
-        verify_epoch_rotation(
-            proof,
-            registry=self._rotation_registry,
-            account_id=self._context["account_id"],
-            vault_id=self._context["vault_id"],
-            previous_epoch=self._context["key_epoch"],
-            state_root=proof["plan"]["state_root"],
-        )
-        if not any(v["root"] == proof["plan"]["state_root"] for v in state["views"]):
-            _reject()
-        return proof
+        proofs = verify_bridges(records, self._rotation_registry, self._context)
+        roots = [v["root"] for v in state["views"]]
+        position = -1
+        for proof in proofs:
+            root = proof["plan"]["state_root"]
+            if root not in roots or roots.index(root) < position:
+                _reject()
+            position = roots.index(root)
+        return proofs
 
     def _chain(self, raw, proof=None):
         if not isinstance(raw, list) or len(raw) > LIMIT:
             _reject("ATLAS_HISTORY_LIMIT")
         views, previous, registry = [], ZERO, EMPTY_REGISTRY
         epoch, public = self._context["key_epoch"], self._public
+        proofs = proof or []
+        current = None
         for i, item in enumerate(raw):
-            if proof and previous == proof["plan"]["state_root"]:
-                epoch = proof["plan"]["new_epoch"]
-                public = base64.b64decode(
-                    next(
-                        e
-                        for e in proof["registry"]
-                        if e["device_id"] == proof["rotation_signer_device_id"]
-                    )["signing_public_b64"]
-                )
+            for candidate in proofs:
+                if (
+                    previous == candidate["plan"]["state_root"]
+                    and epoch == candidate["plan"]["previous_epoch"]
+                ):
+                    current = candidate
+                    epoch = candidate["plan"]["new_epoch"]
+                    public = self._bridge_public(candidate)
             v = _verified(item, public)
             if (
                 any(v[k] != self._context[k] for k in ("account_id", "vault_id"))
                 or v["key_epoch"] != epoch
             ):
                 _reject()
-            if (
-                proof
-                and epoch == proof["plan"]["new_epoch"]
-                and v["registry_root"] != proof["plan"]["resulting_registry_root"]
-            ):
+            if current and v["registry_root"] != current["plan"]["resulting_registry_root"]:
                 _reject()
             if (
                 v["sequence"] != i + 1
@@ -129,6 +122,7 @@ class GuardedSyncState:
             not in (
                 {"context", "views", "records", "cases", "status"},
                 {"context", "views", "records", "cases", "status", "epoch_bridge"},
+                {"context", "views", "records", "cases", "status", "epoch_bridges"},
             )
             or s["context"] != self._context
         ):
@@ -183,21 +177,23 @@ class GuardedSyncState:
             _reject(_PENDING)
         s["epoch_bridge"] = proof
         self._bridge(s)
-        self._chain(s["views"], proof)
+        self._chain(s["views"], self._bridge(s))
         return s
 
     def _current_policy(self, s):
-        proof = self._bridge(s)
-        if proof:
-            public = base64.b64decode(
-                next(
-                    e
-                    for e in proof["registry"]
-                    if e["device_id"] == proof["rotation_signer_device_id"]
-                )["signing_public_b64"]
-            )
-            return proof["plan"]["new_epoch"], public
+        proofs = self._bridge(s)
+        if proofs:
+            proof = proofs[-1]
+            return proof["plan"]["new_epoch"], self._bridge_public(proof)
         return self._context["key_epoch"], self._public
+
+    @staticmethod
+    def _bridge_public(proof):
+        return base64.b64decode(
+            next(
+                e for e in proof["registry"] if e["device_id"] == proof["rotation_signer_device_id"]
+            )["signing_public_b64"]
+        )
 
     def checkpoint(self):
         with self._lock, _boundary():
@@ -293,13 +289,14 @@ class GuardedSyncState:
                     if not isinstance(peer, list) or len(peer) > LIMIT:
                         _reject("ATLAS_HISTORY_LIMIT")
                     proof = self._bridge(s)
-                    public = self._current_policy(s)[1]
+                    authorities = {
+                        self._context["key_epoch"]: self._public,
+                        **{p["plan"]["new_epoch"]: self._bridge_public(p) for p in proof},
+                    }
                     signed = [
                         _verified(
                             v,
-                            public
-                            if proof and v.get("key_epoch") != self._context["key_epoch"]
-                            else self._public,
+                            authorities.get(v.get("key_epoch"), self._public),
                         )
                         for v in peer
                     ]
@@ -328,7 +325,7 @@ class GuardedSyncState:
                         or view["key_epoch"] != epoch
                     ):
                         _reject()
-                    if s.get("epoch_bridge"):
+                    if s.get("epoch_bridge") or s.get("epoch_bridges"):
                         from .revocation import registry_root as rotation_registry_root
 
                         registry_digest = rotation_registry_root(registry)

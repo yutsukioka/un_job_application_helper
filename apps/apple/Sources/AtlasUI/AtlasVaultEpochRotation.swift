@@ -9,6 +9,10 @@ public enum AtlasVaultRotationError: String, Error {
   case recovery = "ATLAS_RECOVERY_PENDING"
   case conflict = "ATLAS_EPOCH_CONFLICT"
   case write = "ATLAS_EPOCH_WRITE_REJECTED"
+  case catchUpPending = "ATLAS_CATCH_UP_PENDING"
+  case cleanupPending = "ATLAS_CLEANUP_PENDING"
+  case publicationRecovery = "ATLAS_PUBLICATION_RECOVERY_REQUIRED"
+  case perDeviceProofRequired = "ATLAS_PER_DEVICE_PROOF_REQUIRED"
 }
 
 public enum AtlasVaultEpochRotation {

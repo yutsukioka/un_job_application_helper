@@ -53,17 +53,16 @@ final class AtlasVaultEpochVault {
          'state_root': _commitmentHex(stateRoot),
          'registry_root': AtlasVaultRevocation.registryRoot(registry),
        },
-       _file = _EncryptedQueueFile(
+       _file = _EpochPublication(
          File('${directory.path}/activation'),
          storageKey,
-         kind: 'epoch-activation-v1',
        ) {
     if (!registry.any((e) => e['device_id'] == deviceID)) _epochFail();
   }
   final Uint8List _key;
   final List<Map<String, Object?>> _registry;
   final Map<String, Object?> _context;
-  final _EncryptedQueueFile _file;
+  final _EpochPublication _file;
   bool _busy = false;
   Future<T> _run<T>(Future<T> Function() action) async {
     if (_busy) _epochFail();
@@ -132,12 +131,33 @@ final class AtlasVaultEpochVault {
           'ACTIVATION_PENDING',
           'REVOKED',
           'RECOVERY_PENDING',
+          'CATCH_UP_PENDING',
+          'CLEANUP_PENDING',
         ].contains(s['status'])) {
       _epochFail();
     }
     AtlasVaultRevocation.registryRoot(_epochRows(s['registry']));
     _ring(s);
     _exact(_object(s['components']), {'history', 'outbox', 'inbox'});
+    if (s['journal'] != null && _object(s['journal'])['kind'] == 'CATCH_UP') {
+      final j = _object(s['journal']);
+      if (!['ACTIVE', 'CATCH_UP_PENDING'].contains(j['phase'])) _epochFail();
+      final bridges = await _verifyEpochBridges(
+        _epochBridgeRecords(_object(_object(s['components'])['history'])),
+        _registry,
+        _context,
+      );
+      if (j['phase'] == 'ACTIVE') {
+        if (bridges.isEmpty) _epochFail();
+        final plan = _object(bridges.last['plan']);
+        if (s['epoch'] != plan['new_epoch'] ||
+            AtlasVaultRevocation.registryRoot(_epochRows(s['registry'])) !=
+                plan['resulting_registry_root'] ||
+            jsonEncode(s['recipients']) != jsonEncode(plan['recipients']))
+          _epochFail();
+      }
+      return s;
+    }
     if (s['journal'] != null) {
       final j = _object(s['journal']),
           proof = _object(_object(s['journal'])['proof']);
@@ -200,6 +220,8 @@ final class AtlasVaultEpochVault {
   }
 
   Future<void> _active(Map<String, Object?> s) async {
+    if (['CATCH_UP_PENDING', 'CLEANUP_PENDING'].contains(s['status']))
+      _epochFail('ATLAS_${s['status']}');
     if (s['status'] == 'REVOKED') _epochFail('ATLAS_DEVICE_REVOKED');
     if (s['status'] == 'ACTIVATION_PENDING') {
       _epochFail('ATLAS_ACTIVATION_PENDING');
