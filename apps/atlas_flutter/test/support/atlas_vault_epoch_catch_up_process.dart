@@ -23,6 +23,7 @@ Future<void> main(List<String> args) async {
     if(name==stage){await File('${root.path}/ready').writeAsString(name,flush:true);while(true){await Future<void>.delayed(const Duration(seconds:60));}}
   }
   if(stage=='observe') {
+    try {await c.observation();}catch(_){await c.recoverPublication();}
     final o=await c.observation();var fenced=false;
     try {await c.seal('patch',Uint8List.fromList([7]),objectID:'probe',revision:'r1',signingKey:await Ed25519().newKeyPairFromSeed(List.filled(32,12)));}catch(_){fenced=true;}
     stdout.writeln(jsonEncode({...o,'writes_fenced':fenced}));return;

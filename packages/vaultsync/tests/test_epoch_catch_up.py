@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from atlasvault_c27_fixture import setup, rotate, client, advance_history
 from vaultsync.epoch_rotation import RotationError
+from vaultsync.authenticated_state_view import _root,_message
+import base64
 
 
 def scenario(tmp_path):
@@ -28,6 +30,25 @@ def test_existing_c26_publication_accepts_its_own_v2_attestation(tmp_path):
     assert c.catch_up([a[1][1]],current_activation_id=a[2]['transition_id'],agreement_private_key=bytes([21])*32)
     assert c.delivery(e['devices'][1].device_id)==a[1][1]['wrapper']
     with pytest.raises(RotationError): c.delivery(e['devices'][0].device_id)
+
+
+def test_fork_evidence_survives_and_blocks_catch_up_and_cleanup(tmp_path):
+    e,a,b=scenario(tmp_path)
+    c=e['clients'][2]
+    unsigned={k:v for k,v in e['view'].items() if k not in ('root','signature_b64')}
+    unsigned['collection_root']='ab'*32
+    root=_root(unsigned)
+    fork=dict(unsigned,root=root,signature_b64=base64.b64encode(e['devices'][0].sign(_message(root))).decode())
+    with pytest.raises(RotationError): c.compare_evidence([fork])
+    before=c.recovery()
+    with pytest.raises(RotationError): c.catch_up([a[1][2],b[1][2]],current_activation_id=b[2]['transition_id'],agreement_private_key=bytes([22])*32)
+    reopened=client(tmp_path,2,e['registry'],e['view'])
+    assert reopened.recovery()==before
+    assert before['status'] in ('MANUAL_REQUIRED','RECOVERY_PENDING')
+    assert before['local'] and before['peer']
+    assert reopened.observation()['sequence']==1
+    assert len(json.dumps(before))<10000
+    assert not any(k in json.dumps(before) for k in ('ciphertext_b64','vault_key','access_token','private_key'))
 
 
 def test_intervening_authenticated_history_is_required_and_preserved(tmp_path):
@@ -169,6 +190,7 @@ def test_cleanup_intent_is_durable_and_pending_view_is_visible(tmp_path):
         "catch_up_pending",
         "verified_epoch",
         "before_local_commit",
+        "after_recovery_record",
         "after_local_commit",
         "cleanup_pending",
         "deleted_epoch",
@@ -203,6 +225,9 @@ def test_real_kill_restart(tmp_path, stage):
         p.wait(timeout=10)
         assert p.returncode == -signal.SIGKILL
         c = client(tmp_path, 2, e["registry"], e["view"])
+        if stage=='after_recovery_record':
+            with pytest.raises(RotationError): c.observation()
+            c.recover_publication()
         observation = c.observation()
         if stage == "after_local_commit":
             assert observation["key_epoch"] == 5

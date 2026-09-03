@@ -19,7 +19,7 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
   }
   func testRealCatchUpKillAndRestart() throws {
     let v=try vector("atlasvault_epoch_catch_up_history_v2")
-    for stage in ["catch_up_pending","verified_epoch","before_local_commit","after_local_commit","cleanup_pending","deleted_epoch"] {
+    for stage in ["catch_up_pending","verified_epoch","before_local_commit","after_recovery_record","after_local_commit","cleanup_pending","deleted_epoch"] {
       let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),p=Process()
       p.executableURL=URL(fileURLWithPath:"/usr/bin/xcrun")
       p.arguments=["xctest","-XCTest","AtlasUITests.AtlasVaultEpochCatchUpTests/testCatchUpCrashChild",Bundle(for:Self.self).bundleURL.path]
@@ -32,8 +32,10 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
       XCTAssertTrue(FileManager.default.fileExists(atPath:ready.path),stage)
       guard p.isRunning else {XCTFail("C27 worker exited before barrier");return}
       XCTAssertEqual(Darwin.kill(p.processIdentifier,SIGKILL),0);p.waitUntilExit()
-      let c=try device(root,2,v),o=try c.observation()
-      XCTAssertEqual(o["key_epoch"] as? Int,["after_local_commit","cleanup_pending","deleted_epoch"].contains(stage) ? 5 : 3)
+      let c=try device(root,2,v)
+      if stage=="after_recovery_record" {XCTAssertThrowsError(try c.observation());try c.recoverPublication()}
+      let o=try c.observation()
+      XCTAssertEqual(o["key_epoch"] as? Int,["after_recovery_record","after_local_commit","cleanup_pending","deleted_epoch"].contains(stage) ? 5 : 3)
       if stage != "after_local_commit" {
         XCTAssertThrowsError(try c.seal("patch",plaintext:Data([7]),objectID:"probe",revision:"r1",signingKey:Curve25519.Signing.PrivateKey(rawRepresentation:Data(repeating:10,count:32))))
       }
@@ -164,6 +166,24 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     XCTAssertTrue(try c.catchUp([p],currentActivationID:record["transition_id"] as! String,agreementPrivateKey:key))
     XCTAssertEqual(try AtlasVaultEpochRotation.canonical(c.delivery(ids[i])),try AtlasVaultEpochRotation.canonical(p["wrapper"] as! [String:Any]))
     XCTAssertThrowsError(try c.delivery(ids[1-i]))
+  }
+  func testForkEvidenceSurvivesAndBlocksCatchUp() throws {
+    let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),v=try vector()
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+    defer {try? FileManager.default.removeItem(at:root)}
+    let c=try device(root,2,v,initialize:true)
+    var unsigned=v["initial_view"] as! [String:Any]
+    unsigned.removeValue(forKey:"root");unsigned.removeValue(forKey:"signature_b64");unsigned["collection_root"]=String(repeating:"ab",count:32)
+    let fork=try AtlasVaultAuthenticatedStateView.sign(unsigned,signingKey:Curve25519.Signing.PrivateKey(rawRepresentation:Data(repeating:10,count:32)))
+    XCTAssertThrowsError(try c.compareEvidence([fork]))
+    let before=try c.recovery()
+    XCTAssertThrowsError(try c.catchUp((v["packets"] as! [[[String:Any]]])[2],currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:22,count:32)))
+    let bytes=try AtlasVaultEpochRotation.canonical(before)
+    XCTAssertEqual(try AtlasVaultEpochRotation.canonical(device(root,2,v).recovery()),bytes)
+    XCTAssertNotEqual(before["status"] as? String,"ACTIVE")
+    XCTAssertFalse((before["local"] as! [[String:Any]]).isEmpty);XCTAssertFalse((before["peer"] as! [[String:Any]]).isEmpty)
+    XCTAssertLessThan(bytes.count,10000)
+    for forbidden in ["ciphertext_b64","vault_key","access_token","private_key"] {XCTAssertFalse(String(data:bytes,encoding:.utf8)!.contains(forbidden))}
   }
   func testMalformedChainsDoNotPartiallyActivate() throws {
     let v = try vector()

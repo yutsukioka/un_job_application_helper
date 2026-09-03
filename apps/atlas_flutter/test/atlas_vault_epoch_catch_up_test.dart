@@ -9,6 +9,7 @@ import 'package:atlas/src/atlas_vault/android_storage.dart';
 import 'package:atlas/src/atlas_vault/windows_storage.dart';
 import 'package:atlas/src/atlas_vault/plaintext_migration.dart';
 import 'package:atlas/src/atlas_vault/epoch_secure_cleanup.dart';
+import 'package:atlas/src/atlas_vault/authenticated_state_view.dart';
 import 'support/atlas_vault_dart_helper_process.dart';
 
 Map<String, Object?> m(Object? v) => Map<String, Object?>.from(v as Map);
@@ -94,6 +95,22 @@ void main() {
       expect(await c.catchUp([packet],currentActivationID:record['transition_id'] as String,agreementPrivateKey:key),isTrue);
       expect(await c.delivery((old['device_ids'] as List)[i] as String),packet['wrapper']);
       await expectLater(c.delivery((old['device_ids'] as List)[1-i] as String),throwsA(anything));
+    } finally {await root.delete(recursive:true);}
+  });
+  test('C27 fork evidence survives and blocks catch-up',() async {
+    final root=await Directory.systemTemp.createTemp('atlas-c27-fork-');
+    try {
+      final c=await device(root,2,initialize:true);
+      final unsigned=m(v['initial_view'])..remove('root')..remove('signature_b64');
+      unsigned['collection_root']='ab'*32;
+      final fork=await AtlasVaultAuthenticatedStateView.sign(unsigned,await Ed25519().newKeyPairFromSeed(List.filled(32,10)));
+      await expectLater(c.compareEvidence([fork]),throwsA(anything));
+      final before=await c.recovery();
+      await expectLater(c.catchUp(rows((v['packets'] as List)[2]),currentActivationID:v['target_activation_id'] as String,agreementPrivateKey:Uint8List.fromList(List.filled(32,22))),throwsA(anything));
+      expect(await (await device(root,2)).recovery(),before);
+      expect(before['status'],isNot('ACTIVE'));expect(before['local'],isNotEmpty);expect(before['peer'],isNotEmpty);
+      expect(jsonEncode(before).length,lessThan(10000));
+      for(final forbidden in ['ciphertext_b64','vault_key','access_token','private_key']) {expect(jsonEncode(before),isNot(contains(forbidden)));}
     } finally {await root.delete(recursive:true);}
   });
   test('C27 cleanup persists its intent and calls platform deletion boundaries',() async {
@@ -209,7 +226,7 @@ void main() {
       }
     });
   }
-  for(final stage in ['catch_up_pending','verified_epoch','before_local_commit','after_local_commit','cleanup_pending','deleted_epoch']) {
+  for(final stage in ['catch_up_pending','verified_epoch','before_local_commit','after_recovery_record','after_local_commit','cleanup_pending','deleted_epoch']) {
     test('C27 SIGKILL and fresh-process recovery $stage',() async {
       final dir=await Directory.systemTemp.createTemp('atlas-c27-kill-');
       const helper='test/support/atlas_vault_epoch_catch_up_process.dart';
@@ -227,7 +244,7 @@ void main() {
         }
         final observed=await run('observe');
         expect(observed['writes_fenced'],stage!='after_local_commit');
-        expect(observed['key_epoch'],['after_local_commit','cleanup_pending','deleted_epoch'].contains(stage)?5:3);
+        expect(observed['key_epoch'],['after_recovery_record','after_local_commit','cleanup_pending','deleted_epoch'].contains(stage)?5:3);
         final resumed=await run(stage.contains('cleanup')||stage=='deleted_epoch'?'cleanup_resume':'resume');
         expect(resumed['status'],'ACTIVE');expect(resumed['key_epoch'],5);
         stdout.writeln('C27 Dart SIGKILL stage=$stage pid=${p.pid} fenced=${observed['writes_fenced']} resumed_epoch=5');

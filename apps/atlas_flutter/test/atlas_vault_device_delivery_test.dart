@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:atlas/src/atlas_vault/device_delivery.dart';
+import 'package:atlas/src/atlas_vault/revocation.dart';
+import 'package:cryptography/cryptography.dart';
 
 void main() {
   final vector =
@@ -43,6 +45,14 @@ void main() {
       vector['canonical_sha256'],
     );
     expect((packet['proof'] as Map).containsKey('deliveries'), isFalse);
+    final registry=(original['registry'] as List).map((x)=>Map<String,Object?>.from(x as Map)).toList();
+    final current=await AtlasVaultRevocation.verify(Map<String,Object?>.from(original['revocation'] as Map),registry);
+    final key=await Ed25519().newKeyPairFromSeed(List.filled(32,10));
+    Future<Map<String,Object?>> create(List<Map<String,Object?>> entries,bool pending)=>AtlasVaultDeviceDelivery.create(Map<String,Object?>.from(record),recipientDeviceID:vector['recipient_device_id'] as String,issuerDeviceID:original['rotation_signer_device_id'] as String,signingKey:key,currentRegistry:entries,recoveryPending:pending);
+    expect(await create(current,false),packet);
+    await expectLater(create(current,true),throwsException);
+    final revoked=current.map((e)=>{...e,'state':e['device_id']==original['rotation_signer_device_id']?'REVOKED':e['state']}).toList();
+    await expectLater(create(revoked,false),throwsException);
   });
   test(
     'C27 all signed field substitutions and wrong wrapper fail closed',
