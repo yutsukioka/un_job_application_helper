@@ -80,8 +80,9 @@ abstract final class AtlasVaultDeviceDelivery {
           record['version'] is! int ||
           record['version'] != 1 ||
           record['status'] != 'ACTIVATION_ACCEPTED' ||
-          record['transition_id'] != old['root'])
+          record['transition_id'] != old['root']) {
         fail();
+      }
       final result = await AtlasVaultEpochRotation.verify(
         old,
         registry: rows(old['registry']),
@@ -99,8 +100,9 @@ abstract final class AtlasVaultDeviceDelivery {
           (e) => e['device_id'] == id && e['state'] == 'ACTIVE',
         );
         if (digest(rotationCanonical(historic)) !=
-            digest(rotationCanonical(current)))
+            digest(rotationCanonical(current))) {
           fail();
+        }
       }
       final wrapper = rows(
         old['deliveries'],
@@ -166,8 +168,9 @@ abstract final class AtlasVaultDeviceDelivery {
       if ({
         'atlasvault-activation-record',
         'atlasvault-epoch-rotation',
-      }.contains(packet['format']))
+      }.contains(packet['format'])) {
         fail('ATLAS_PER_DEVICE_PROOF_REQUIRED');
+      }
       exact(packet, {'proof', 'wrapper'});
       final p = map(packet['proof']), w = map(packet['wrapper']);
       exact(p, fields);
@@ -184,19 +187,22 @@ abstract final class AtlasVaultDeviceDelivery {
           p['activation_id'] != activationID ||
           p['recipient_device_id'] != recipientDeviceID ||
           AtlasVaultRevocation.registryRoot(rows(p['registry'])) !=
-              AtlasVaultRevocation.registryRoot(registry))
+              AtlasVaultRevocation.registryRoot(registry)) {
         fail();
+      }
       final t = map(p['revocation']), plan = map(p['plan']);
       final after = await AtlasVaultRevocation.verify(t, registry);
       if (t['account_id'] != accountID ||
           t['vault_id'] != vaultID ||
           t['key_epoch'] != previousEpoch ||
-          t['sequence'] != 1)
+          t['sequence'] != 1) {
         fail();
+      }
       AtlasVaultRevocation.validateRotationPlan(plan, t, after, stateRoot);
       if (p['registry_generation'] is! int ||
-          p['registry_generation'] != plan['new_epoch'])
+          p['registry_generation'] != plan['new_epoch']) {
         fail();
+      }
       final issuer = after.firstWhere(
         (e) =>
             e['device_id'] == p['issuer_device_id'] && e['state'] == 'ACTIVE',
@@ -217,15 +223,17 @@ abstract final class AtlasVaultDeviceDelivery {
       });
       if (w['device_id'] != recipientDeviceID ||
           w['key_epoch'] is! int ||
-          w['key_epoch'] != plan['new_epoch'])
+          w['key_epoch'] != plan['new_epoch']) {
         fail();
+      }
       bytes(w['encapsulated_key_b64'], 32);
       bytes(w['ciphertext_b64'], 48);
       if (p['wrapper_sha256'] != digest(rotationCanonical(w)) ||
           p['recipient_agreement_sha256'] !=
               digest(bytes(recipient['agreement_public_b64'], 32)) ||
-          p['root'] != root(p))
+          p['root'] != root(p)) {
         fail();
+      }
       if (!await Ed25519().verify(
         message(p['root']! as String),
         signature: Signature(
@@ -235,8 +243,9 @@ abstract final class AtlasVaultDeviceDelivery {
             type: KeyPairType.ed25519,
           ),
         ),
-      ))
+      )) {
         fail();
+      }
       return {
         'new_epoch': plan['new_epoch'],
         'registry': after,

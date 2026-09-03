@@ -153,8 +153,9 @@ final class AtlasVaultEpochVault {
         if (s['epoch'] != plan['new_epoch'] ||
             AtlasVaultRevocation.registryRoot(_epochRows(s['registry'])) !=
                 plan['resulting_registry_root'] ||
-            jsonEncode(s['recipients']) != jsonEncode(plan['recipients']))
+            jsonEncode(s['recipients']) != jsonEncode(plan['recipients'])) {
           _epochFail();
+        }
       }
       return s;
     }
@@ -220,8 +221,9 @@ final class AtlasVaultEpochVault {
   }
 
   Future<void> _active(Map<String, Object?> s) async {
-    if (['CATCH_UP_PENDING', 'CLEANUP_PENDING'].contains(s['status']))
+    if (['CATCH_UP_PENDING', 'CLEANUP_PENDING'].contains(s['status'])) {
       _epochFail('ATLAS_${s['status']}');
+    }
     if (s['status'] == 'REVOKED') _epochFail('ATLAS_DEVICE_REVOKED');
     if (s['status'] == 'ACTIVATION_PENDING') {
       _epochFail('ATLAS_ACTIVATION_PENDING');
@@ -450,8 +452,9 @@ final class AtlasVaultEpochVault {
       _epochFail('ATLAS_DEVICE_REVOKED');
     }
     if (_object(s['journal'])['kind'] == 'CATCH_UP') {
-      if (recipient != _context['device_id'])
+      if (recipient != _context['device_id']) {
         _epochFail('ATLAS_DEVICE_DELIVERY_REJECTED');
+      }
       return _epochCopy(
         _object(_epochRows(_object(s['journal'])['packets']).last['wrapper']),
       );
@@ -466,8 +469,9 @@ final class AtlasVaultEpochVault {
       _run(() async => _history(await _load()).compareEvidence(peer));
   Future<Map<String, Object?>> recovery() => _run(() async {
     final s = await _load(), result = await _history(await _load()).recovery();
-    if (result['status'] == 'ACTIVE' && s['status'] != 'ACTIVE')
+    if (result['status'] == 'ACTIVE' && s['status'] != 'ACTIVE') {
       result.addAll({'status': s['status'], 'reason': 'ATLAS_${s['status']}'});
+    }
     return result;
   });
   Future<Map<String, Object?>?> pendingActivation() => _run(() async {

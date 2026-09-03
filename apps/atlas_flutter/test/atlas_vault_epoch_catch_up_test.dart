@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:atlas/src/atlas_vault/sync_queue.dart';
 import 'package:cryptography/cryptography.dart';
@@ -271,12 +270,14 @@ void main() {
                 present.remove(id);
                 return null;
               }
-              if (call.method == 'loadVaultKey')
+              if (call.method == 'loadVaultKey') {
                 return present.contains(id)
                     ? Uint8List.fromList(List.filled(32, 7))
                     : null;
-              if (call.method == 'containsVaultKey')
+              }
+              if (call.method == 'containsVaultKey') {
                 return present.contains(id);
+              }
               throw StateError('unexpected method');
             });
         try {
@@ -292,8 +293,9 @@ void main() {
               deleteEpoch: (_) async {},
               containsEpoch: (_) async => false,
               checkpoint: (stage) {
-                if (stage == 'cleanup_pending')
+                if (stage == 'cleanup_pending') {
                   throw StateError('synthetic interruption');
+                }
               },
             ),
             throwsA(anything),
@@ -393,10 +395,12 @@ void main() {
         var packets = rows(jsonDecode(jsonEncode((v['packets'] as List)[2])));
         if (attack == 'missing') packets = packets.sublist(1);
         if (attack == 'reordered') packets = packets.reversed.toList();
-        if (attack == 'recipient')
+        if (attack == 'recipient') {
           packets[1] = rows((v['packets'] as List)[0])[1];
-        if (attack == 'state-root')
+        }
+        if (attack == 'state-root') {
           (packets[0]['proof'] as Map)['plan']['state_root'] = 'ab' * 32;
+        }
         await expectLater(
           c.catchUp(
             packets,
