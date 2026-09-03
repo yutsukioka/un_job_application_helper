@@ -4,6 +4,7 @@ import copy
 from vaultsync.device_delivery import create_device_delivery
 from vaultsync.revocation import verify_transition
 from test_atlasvault_activation_c26 import environment, VAULT
+from atlasvault_api.app import AtlasVaultBackend
 
 
 def test_legacy_fenced_then_only_own_proof_returned(tmp_path):
@@ -54,3 +55,13 @@ def test_legacy_fenced_then_only_own_proof_returned(tmp_path):
         ).status_code
         == 403
     )
+    reopened,client,_,new_headers,_,_=environment(tmp_path,AtlasVaultBackend(commitments_path=tmp_path/'backend.sqlite'))
+    for i in range(2):
+        reply=client.get(f'{route}/4/delivery',headers=new_headers[i])
+        assert reply.status_code==200 and reply.json()==packets[i]
+        assert packets[1-i]['wrapper']['ciphertext_b64'] not in reply.text
+    prior=reopened.commitments.read(proof['plan']['account_id'],VAULT)
+    for bad_route in (f'{route}/3/delivery',f'{route}/5/delivery','/v1/vaults/foreign/activations/4/delivery'):
+        assert client.get(bad_route,headers=new_headers[1]).status_code in (404,423)
+    assert client.get(f'{route}/4/delivery',headers=new_headers[2]).status_code==403
+    assert reopened.commitments.read(proof['plan']['account_id'],VAULT)==prior

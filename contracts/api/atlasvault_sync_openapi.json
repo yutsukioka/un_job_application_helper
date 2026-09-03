@@ -946,7 +946,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ActivationRecord"
+                  "$ref": "#/components/schemas/ActivationReceipt"
                 }
               }
             }
@@ -2529,6 +2529,46 @@
           "signature_b64"
         ],
         "title": "DeviceDeliveryProof"
+      },
+      "ActivationReceipt": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-activation-receipt",
+            "title": "Format",
+            "default": "atlasvault-activation-receipt"
+          },
+          "version": {
+            "type": "integer",
+            "const": 2,
+            "title": "Version",
+            "default": 2
+          },
+          "status": {
+            "type": "string",
+            "const": "ACTIVATION_ACCEPTED",
+            "title": "Status",
+            "default": "ACTIVATION_ACCEPTED"
+          },
+          "transition_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Transition Id"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Key Epoch"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "transition_id",
+          "key_epoch"
+        ],
+        "title": "ActivationReceipt"
       }
     }
   }

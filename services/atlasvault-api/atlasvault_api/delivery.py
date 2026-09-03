@@ -37,3 +37,11 @@ class DeviceDeliveryProof(Closed):
 class DeviceDeliveryPacket(Closed):
     proof: DeviceDeliveryProof
     wrapper: EpochDelivery
+
+
+class ActivationReceipt(Closed):
+    format: Literal['atlasvault-activation-receipt'] = 'atlasvault-activation-receipt'
+    version: Literal[2] = 2
+    status: Literal['ACTIVATION_ACCEPTED'] = 'ACTIVATION_ACCEPTED'
+    transition_id: Digest
+    key_epoch: Counter

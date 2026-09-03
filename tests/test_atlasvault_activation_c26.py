@@ -185,10 +185,13 @@ def test_activation_is_durable_idempotent_and_fences_old_writes(tmp_path):
     assert http.post(route, json=proof).status_code == 401
     accepted = http.post(route, json=proof, headers=headers[0])
     assert accepted.status_code == 200
-    record = accepted.json()
-    assert record["status"] == "ACTIVATION_ACCEPTED"
+    receipt = accepted.json()
+    record = backend.commitments.activation(ACCOUNT_A,VAULT)
+    assert receipt["status"] == "ACTIVATION_ACCEPTED"
+    assert receipt['transition_id']==record['transition_id']
+    assert receipt['key_epoch']==4
     assert record["proof"]["plan"]["new_epoch"] == 4
-    assert http.post(route, json=proof, headers=headers[0]).json() == record
+    assert http.post(route, json=proof, headers=headers[0]).json() == receipt
     # D089 preserves aggregate verification, but forbids aggregate disclosure.
     assert http.get(route, headers=headers[1]).status_code == 423
     assert http.get(route, headers=headers[2]).status_code == 403
@@ -368,9 +371,11 @@ def test_validly_signed_bad_activation_is_rejected(tmp_path, attack):
 
 def test_offline_revoked_attacks_do_not_advance_state_after_backend_restart(tmp_path):
     backend, http, _, headers, proof, old_view = environment(tmp_path)
-    record = http.post(
+    response = http.post(
         f"/v1/vaults/{VAULT}/activations", json=proof, headers=headers[0]
-    ).json()
+    )
+    assert response.status_code==200
+    record=backend.commitments.activation(ACCOUNT_A,VAULT)
     reopened, client, _, new_headers, _, _ = environment(
         tmp_path, AtlasVaultBackend(commitments_path=tmp_path / "backend.sqlite")
     )

@@ -48,8 +48,8 @@ from atlasvault_api.commitments import (
     CommitmentLog,
     StateViewModel,
 )
-from atlasvault_api.activations import ActivationRecord, EpochRotationProof
-from atlasvault_api.delivery import DeviceDeliveryPacket
+from atlasvault_api.activations import EpochRotationProof
+from atlasvault_api.delivery import ActivationReceipt, DeviceDeliveryPacket
 from atlasvault_api.commitments import ActivationUnavailable
 from atlasvault_api.controls import (
     AbuseControlPolicy,
@@ -1467,7 +1467,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
 
     @app.post(
         "/v1/vaults/{vault_id}/activations",
-        response_model=ActivationRecord,
+        response_model=ActivationReceipt,
         operation_id="acceptEpochActivation",
         responses={
             **_STORAGE_WRITE_OPENAPI_RESPONSES,
@@ -1481,14 +1481,11 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         vault_id: VaultPath,
         request: EpochRotationProof,
         authorization: BearerAuthorization = None,
-    ) -> ActivationRecord:
+    ) -> ActivationReceipt:
         _authorized_storage_account(service, authorization)
         try:
-            return ActivationRecord(
-                **service.accept_activation(
-                    _credential_token(authorization), vault_id, request.model_dump()
-                )
-            )
+            record=service.accept_activation(_credential_token(authorization),vault_id,request.model_dump())
+            return ActivationReceipt(transition_id=record['transition_id'],key_epoch=record['proof']['plan']['new_epoch'])
         except AuthorizationFailed:
             raise _bearer_authorization_error() from None
         except ActivationUnavailable:
