@@ -1,8 +1,16 @@
 """Keep the P6 release gate tied to the actual process/HTTP proof."""
 
 from pathlib import Path
+import ast
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_c27_standalone_swift_build_includes_recovery_dependencies():
+    tree = ast.parse((ROOT / "scripts/ci/atlasvault_malicious_server.py").read_text())
+    build = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "compile_swift")
+    names = {n.value for n in ast.walk(build) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert {"AtlasVaultDeviceDelivery.swift", "AtlasVaultEpochCatchUp.swift", "AtlasVaultEpochVault.swift", "AtlasVaultKeyStore.swift"}.issubset(names)
 
 
 def test_c24_hosted_gate_runs_and_removes_hash_only_report():
