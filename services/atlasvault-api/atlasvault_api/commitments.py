@@ -12,6 +12,7 @@ from cryptography.exceptions import InvalidSignature
 from pydantic import BaseModel, ConfigDict, Field
 from vaultsync.authenticated_state_view import EMPTY_REGISTRY, LIMIT, ZERO, _verified
 from vaultsync.epoch_rotation import verify_epoch_rotation
+from vaultsync.device_delivery import verify_device_delivery
 from vaultsync.revocation import registry_root as revocation_registry_root
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -70,6 +71,92 @@ class CommitmentLog:
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS activations (account TEXT NOT NULL, vault TEXT NOT NULL, epoch INTEGER NOT NULL, root TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,vault,epoch), UNIQUE(account,vault,root))"
         )
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS device_deliveries (account TEXT NOT NULL, vault TEXT NOT NULL, epoch INTEGER NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,vault,epoch,recipient))"
+        )
+
+    def activation_at(self, account_id, vault_id, epoch):
+        with self._lock:
+            row = self._db.execute(
+                "SELECT body FROM activations WHERE account=? AND vault=? AND epoch=?",
+                (account_id, vault_id, epoch),
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def put_delivery(self, account_id, vault_id, epoch, issuer_id, packet):
+        """Store a client attestation only after matching immutable activation bytes."""
+        with self._lock:
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                record = self.activation_at(account_id, vault_id, epoch)
+                current = self.activation(account_id, vault_id)
+                if not record or not current:
+                    raise CommitmentConflict()
+                p, old = packet["proof"], record["proof"]
+                recipient = p["recipient_device_id"]
+                if (
+                    p["issuer_device_id"] != issuer_id
+                    or issuer_id not in current["proof"]["plan"]["recipients"]
+                    or recipient not in current["proof"]["plan"]["recipients"]
+                    or any(
+                        p[k] != old[k]
+                        for k in (
+                            "plan",
+                            "revocation",
+                            "registry",
+                            "rotation_signer_device_id",
+                        )
+                    )
+                    or packet["wrapper"]
+                    != next(d for d in old["deliveries"] if d["device_id"] == recipient)
+                ):
+                    raise CommitmentConflict()
+                verify_device_delivery(
+                    packet,
+                    registry=old["registry"],
+                    account_id=account_id,
+                    vault_id=vault_id,
+                    previous_epoch=old["plan"]["previous_epoch"],
+                    state_root=old["plan"]["state_root"],
+                    activation_id=record["transition_id"],
+                    recipient_device_id=recipient,
+                )
+                body = json.dumps(packet, sort_keys=True, separators=(",", ":"))
+                row = self._db.execute(
+                    "SELECT body FROM device_deliveries WHERE account=? AND vault=? AND epoch=? AND recipient=?",
+                    (account_id, vault_id, epoch, recipient),
+                ).fetchone()
+                if row:
+                    if row[0] != body:
+                        raise CommitmentConflict()
+                else:
+                    if (
+                        len(body) > 1024 * 1024
+                        or self._db.execute(
+                            "SELECT COUNT(*) FROM device_deliveries"
+                        ).fetchone()[0]
+                        >= 8192
+                    ):
+                        raise CommitmentConflict()
+                    self._db.execute(
+                        "INSERT INTO device_deliveries VALUES(?,?,?,?,?)",
+                        (account_id, vault_id, epoch, recipient, body),
+                    )
+                self._db.execute("COMMIT")
+            except (ValueError, TypeError, KeyError, StopIteration, sqlite3.Error):
+                raise CommitmentConflict() from None
+            finally:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+
+    def delivery(self, account_id, vault_id, epoch, recipient):
+        with self._lock:
+            self.require_active_epoch(account_id, vault_id, None, recipient)
+            row = self._db.execute(
+                "SELECT body FROM device_deliveries WHERE account=? AND vault=? AND epoch=? AND recipient=?",
+                (account_id, vault_id, epoch, recipient),
+            ).fetchone()
+            return json.loads(row[0]) if row else None
 
     def activation(self, account_id, vault_id):
         with self._lock:

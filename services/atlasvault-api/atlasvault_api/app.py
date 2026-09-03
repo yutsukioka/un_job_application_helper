@@ -49,6 +49,7 @@ from atlasvault_api.commitments import (
     StateViewModel,
 )
 from atlasvault_api.activations import ActivationRecord, EpochRotationProof
+from atlasvault_api.delivery import DeviceDeliveryPacket
 from atlasvault_api.commitments import ActivationUnavailable
 from atlasvault_api.controls import (
     AbuseControlPolicy,
@@ -547,13 +548,28 @@ class AtlasVaultBackend:
                 session.device_id,
             )
 
-    def read_activation(self, token, vault_id):
+    def read_activation(self, token, vault_id, epoch=None):
         with self._lock:
             session = self._vault_session(token, vault_id)
             record = self.commitments.activation(session.account_id, vault_id)
             if record is None:
                 raise HTTPException(status_code=404, detail="Activation unavailable.")
-            return record
+            epoch = record["proof"]["plan"]["new_epoch"] if epoch is None else epoch
+            packet = self.commitments.delivery(
+                session.account_id, vault_id, epoch, session.device_id
+            )
+            if packet is None:
+                raise HTTPException(
+                    status_code=423, detail="ATLAS_PER_DEVICE_PROOF_REQUIRED"
+                )
+            return packet
+
+    def publish_delivery(self, token, vault_id, epoch, packet):
+        with self._lock:
+            session = self._vault_session(token, vault_id)
+            self.commitments.put_delivery(
+                session.account_id, vault_id, epoch, session.device_id, packet
+            )
 
     def append_commitment(
         self, token: str, vault_id: str, view: StateViewModel
@@ -1068,7 +1084,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     service = backend or AtlasVaultBackend()
     app = FastAPI(
         title="AtlasVault Zero-Knowledge Sync API",
-        version="1.3.0",
+        version="1.4.0",
         description=(
             "Account authentication, signed public-device registry, opaque "
             "ciphertext storage, and C15 abuse and observability controls."
@@ -1486,20 +1502,64 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
 
     @app.get(
         "/v1/vaults/{vault_id}/activations",
-        response_model=ActivationRecord,
+        response_model=DeviceDeliveryPacket,
         operation_id="getEpochActivation",
         responses=_STORAGE_READ_OPENAPI_RESPONSES,
     )
     def get_epoch_activation(
         vault_id: VaultPath, authorization: BearerAuthorization = None
-    ) -> ActivationRecord:
+    ) -> DeviceDeliveryPacket:
         _authorized_storage_account(service, authorization)
         try:
-            return ActivationRecord(
+            return DeviceDeliveryPacket(
                 **service.read_activation(_credential_token(authorization), vault_id)
             )
         except AuthorizationFailed:
             raise _bearer_authorization_error() from None
+
+    @app.get(
+        "/v1/vaults/{vault_id}/activations/{epoch}/delivery",
+        response_model=DeviceDeliveryPacket,
+        operation_id="getDeviceEpochDelivery",
+    )
+    def get_device_epoch_delivery(
+        vault_id: VaultPath,
+        epoch: Annotated[int, Path(ge=1, le=9007199254740991)],
+        authorization: BearerAuthorization = None,
+    ) -> DeviceDeliveryPacket:
+        _authorized_storage_account(service, authorization)
+        try:
+            return DeviceDeliveryPacket(
+                **service.read_activation(
+                    _credential_token(authorization), vault_id, epoch
+                )
+            )
+        except AuthorizationFailed:
+            raise _bearer_authorization_error() from None
+
+    @app.post(
+        "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs",
+        status_code=200,
+        operation_id="publishDeviceEpochDelivery",
+    )
+    def publish_device_epoch_delivery(
+        vault_id: VaultPath,
+        epoch: Annotated[int, Path(ge=1, le=9007199254740991)],
+        request: DeviceDeliveryPacket,
+        authorization: BearerAuthorization = None,
+    ) -> dict[str, bool]:
+        _authorized_storage_account(service, authorization)
+        try:
+            service.publish_delivery(
+                _credential_token(authorization), vault_id, epoch, request.model_dump()
+            )
+            return {"accepted": True}
+        except AuthorizationFailed:
+            raise _bearer_authorization_error() from None
+        except CommitmentConflict:
+            raise HTTPException(
+                status_code=409, detail="Device delivery conflict."
+            ) from None
 
     served_schema = app.openapi()
     policy = service.abuse_policy

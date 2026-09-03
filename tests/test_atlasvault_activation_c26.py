@@ -189,7 +189,8 @@ def test_activation_is_durable_idempotent_and_fences_old_writes(tmp_path):
     assert record["status"] == "ACTIVATION_ACCEPTED"
     assert record["proof"]["plan"]["new_epoch"] == 4
     assert http.post(route, json=proof, headers=headers[0]).json() == record
-    assert http.get(route, headers=headers[1]).json() == record
+    # D089 preserves aggregate verification, but forbids aggregate disclosure.
+    assert http.get(route, headers=headers[1]).status_code == 423
     assert http.get(route, headers=headers[2]).status_code == 403
     assert devices[2].device_id not in proof["plan"]["recipients"]
     for epoch, expected in ((3, 409), (4, 201)):

@@ -204,7 +204,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
 
     assert contract["openapi"] == "3.1.0"
-    assert contract["info"]["version"] == "1.3.0"
+    assert contract["info"]["version"] == "1.4.0"
     assert set(contract["paths"]) == {
         "/v1/accounts/{account_id}/devices/bootstrap",
         "/v1/accounts/{account_id}/auth/challenges",
@@ -216,6 +216,8 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         "/v1/vaults/{vault_id}/snapshots",
         "/v1/vaults/{vault_id}/commitments",
         "/v1/vaults/{vault_id}/activations",
+        "/v1/vaults/{vault_id}/activations/{epoch}/delivery",
+        "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs",
     }
     properties = {
         property_name.casefold()
@@ -266,6 +268,8 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         ("/v1/vaults/{vault_id}/commitments", "get"),
         ("/v1/vaults/{vault_id}/activations", "post"),
         ("/v1/vaults/{vault_id}/activations", "get"),
+        ("/v1/vaults/{vault_id}/activations/{epoch}/delivery", "get"),
+        ("/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs", "post"),
     }
     assert {
         (path, method)

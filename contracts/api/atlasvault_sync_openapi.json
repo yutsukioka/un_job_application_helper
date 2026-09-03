@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AtlasVault Zero-Knowledge Sync API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "Account/device-authorized ciphertext-only storage with conditional revisions, safe retries, bounded requests, throttling, and secret-free observability."
   },
   "x-atlasvault-c15-controls": {
@@ -1029,8 +1029,7 @@
               }
             }
           }
-        },
-        "x-atlasvault-implementation-chunk": "C26"
+        }
       },
       "get": {
         "summary": "Get Epoch Activation",
@@ -1060,7 +1059,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ActivationRecord"
+                  "$ref": "#/components/schemas/DeviceDeliveryPacket"
                 }
               }
             }
@@ -1123,8 +1122,137 @@
               }
             }
           }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/activations/{epoch}/delivery": {
+      "get": {
+        "summary": "Get Device Epoch Delivery",
+        "operationId": "getDeviceEpochDelivery",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          },
+          {
+            "name": "epoch",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "Epoch"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDeliveryPacket"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs": {
+      "post": {
+        "summary": "Publish Device Epoch Delivery",
+        "operationId": "publishDeviceEpochDelivery",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          },
+          {
+            "name": "epoch",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "Epoch"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceDeliveryPacket"
+              }
+            }
+          }
         },
-        "x-atlasvault-implementation-chunk": "C26"
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Publishdeviceepochdelivery"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -2259,6 +2387,148 @@
           "recipients"
         ],
         "title": "RotationPlan"
+      },
+      "DeviceDeliveryPacket": {
+        "properties": {
+          "proof": {
+            "$ref": "#/components/schemas/DeviceDeliveryProof"
+          },
+          "wrapper": {
+            "$ref": "#/components/schemas/EpochDelivery"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "proof",
+          "wrapper"
+        ],
+        "title": "DeviceDeliveryPacket"
+      },
+      "DeviceDeliveryProof": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-device-delivery-proof",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 2,
+            "title": "Version"
+          },
+          "activation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Activation Id"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/RotationPlan"
+          },
+          "revocation": {
+            "$ref": "#/components/schemas/RevocationTransition"
+          },
+          "registry": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntry"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Registry"
+          },
+          "recipient_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Recipient Device Id"
+          },
+          "recipient_agreement_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Recipient Agreement Sha256"
+          },
+          "wrapper_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Wrapper Sha256"
+          },
+          "registry_generation": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Registry Generation"
+          },
+          "issuer_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Issuer Device Id"
+          },
+          "rotation_signer_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Rotation Signer Device Id"
+          },
+          "hpke_suite": {
+            "type": "string",
+            "const": "0x0020/0x0001/0x0002",
+            "title": "Hpke Suite"
+          },
+          "hpke_version": {
+            "type": "integer",
+            "const": 2,
+            "title": "Hpke Version"
+          },
+          "signature_algorithm": {
+            "type": "string",
+            "const": "Ed25519",
+            "title": "Signature Algorithm"
+          },
+          "signature_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Signature Version"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Root"
+          },
+          "signature_b64": {
+            "type": "string",
+            "maxLength": 88,
+            "minLength": 88,
+            "title": "Signature B64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "activation_id",
+          "plan",
+          "revocation",
+          "registry",
+          "recipient_device_id",
+          "recipient_agreement_sha256",
+          "wrapper_sha256",
+          "registry_generation",
+          "issuer_device_id",
+          "rotation_signer_device_id",
+          "hpke_suite",
+          "hpke_version",
+          "signature_algorithm",
+          "signature_version",
+          "root",
+          "signature_b64"
+        ],
+        "title": "DeviceDeliveryProof"
       }
     }
   }
