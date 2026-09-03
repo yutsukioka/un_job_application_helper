@@ -90,6 +90,8 @@ void main() {
             '${root.path}/$i/activation',
           ).writeAsString('corrupted synthetic publication');
           await reopened.recoverPublication();
+          expect((await reopened.observation())['status'], 'CATCH_UP_PENDING');
+          await reopened.catchUp(packets,currentActivationID:v['target_activation_id'] as String,agreementPrivateKey:Uint8List.fromList(List.filled(32,20+i)));
           expect((await reopened.observation())['status'], 'ACTIVE');
           final removed = <int>{};
           await reopened.cleanupEpochs(

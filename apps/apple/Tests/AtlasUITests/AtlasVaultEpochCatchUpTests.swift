@@ -65,6 +65,8 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
       try Data("corrupted synthetic publication".utf8).write(
         to: root.appendingPathComponent("\(i)/activation"))
       try reopened.recoverPublication()
+      XCTAssertEqual(try reopened.observation()["status"] as? String, "CATCH_UP_PENDING")
+      _ = try reopened.catchUp(packets,currentActivationID:v["target_activation_id"] as! String,agreementPrivateKey:Data(repeating:UInt8(20+i),count:32))
       XCTAssertEqual(try reopened.observation()["status"] as? String, "ACTIVE")
       var removed = Set<Int>()
       try reopened.cleanupEpochs(

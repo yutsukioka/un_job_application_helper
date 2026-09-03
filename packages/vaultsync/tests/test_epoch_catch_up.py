@@ -93,6 +93,10 @@ def test_corrupted_publication_recovery_and_cleanup(tmp_path):
     reopened = client(tmp_path, 2, e["registry"], e["view"])
     reopened.recover_publication()
     assert reopened.observation()["key_epoch"] == 5
+    assert reopened.observation()["status"] == "CATCH_UP_PENDING"
+    with pytest.raises(RotationError):
+        reopened.seal("patch",b"synthetic",object_id="held",revision="r1",signing_key=e["devices"][2])
+    reopened.catch_up(packets,current_activation_id=b[2]["transition_id"],agreement_private_key=bytes([22])*32)
     removed = []
 
     class Deletion:
