@@ -261,7 +261,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         delivery_responses = document["paths"][
             "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs"
         ]["post"]["responses"]
-        assert {"401", "409", "413", "429"} <= set(delivery_responses)
+        assert {"401", "403", "409", "413", "429"} <= set(delivery_responses)
     implemented_operations = {
         ("/v1/accounts/{account_id}/devices/bootstrap", "post"),
         ("/v1/accounts/{account_id}/auth/challenges", "post"),

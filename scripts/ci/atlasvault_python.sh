@@ -1529,6 +1529,21 @@ asyncio_process_launch_samples = (
         "import asyncio\nloop = asyncio.get_running_loop()\n"
         "await getattr(loop, 'subprocess_shell')(factory, 'python -V')"
     ),
+    (
+        "import asyncio\nloop = asyncio.get_running_loop()\n"
+        "launch, = (loop.subprocess_exec,)\n"
+        "await launch(factory, 'python')"
+    ),
+    (
+        "import asyncio\nloop = asyncio.get_running_loop()\n"
+        "launch = [loop.subprocess_shell][0]\n"
+        "await launch(factory, 'python -V')"
+    ),
+    (
+        "import asyncio\nloop = asyncio.get_running_loop()\n"
+        "launch = {'run': loop.subprocess_exec}['run']\n"
+        "await launch(factory, 'python')"
+    ),
 )
 if not all(
     _blocked_imports(sample) for sample in asyncio_process_launch_samples

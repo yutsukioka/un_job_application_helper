@@ -102,6 +102,7 @@ def test_activation_requires_every_selective_delivery_before_commit(tmp_path):
 
 def test_prepared_delivery_quota_is_vault_scoped_and_stale_rows_expire(tmp_path):
     backend, http, devices, headers, proof, view = environment(tmp_path, stage=False)
+    account_id = proof["plan"]["account_id"]
     backend.commitments._db.executemany(
         "INSERT INTO prepared_device_deliveries VALUES(?,?,?,?,?,?,?)",
         [
@@ -117,6 +118,21 @@ def test_prepared_delivery_quota_is_vault_scoped_and_stale_rows_expire(tmp_path)
             for index in range(8192)
         ],
     )
+    backend.commitments._db.executemany(
+        "INSERT INTO prepared_device_deliveries VALUES(?,?,?,?,?,?,?)",
+        [
+            (
+                account_id,
+                f"abandoned-vault-{index}",
+                f"abandoned-transition-{index}",
+                4,
+                f"recipient-{index}",
+                devices[0].device_id,
+                "{}",
+            )
+            for index in range(8192)
+        ],
+    )
     route = f"/v1/vaults/{VAULT}/activations"
     packets = activation_packets(proof, devices)
     assert (
@@ -124,6 +140,21 @@ def test_prepared_delivery_quota_is_vault_scoped_and_stale_rows_expire(tmp_path)
             f"{route}/4/delivery-proofs", json=packets[0], headers=headers[0]
         ).status_code
         == 200
+    )
+    assert (
+        backend.commitments._db.execute(
+            "SELECT COUNT(*) FROM prepared_device_deliveries WHERE account=?",
+            (account_id,),
+        ).fetchone()[0]
+        <= 8192
+    )
+    assert (
+        backend.commitments._db.execute(
+            "SELECT COUNT(*) FROM prepared_device_deliveries "
+            "WHERE account=? AND vault='abandoned-vault-0'",
+            (account_id,),
+        ).fetchone()[0]
+        == 0
     )
 
     replacement = create_epoch_rotation(
@@ -144,7 +175,7 @@ def test_prepared_delivery_quota_is_vault_scoped_and_stale_rows_expire(tmp_path)
         backend.commitments._db.execute(
             "SELECT COUNT(*) FROM prepared_device_deliveries "
             "WHERE account=? AND vault=? AND epoch<=?",
-            (proof["plan"]["account_id"], VAULT, 4),
+            (account_id, VAULT, 4),
         ).fetchone()[0]
         == 0
     )
