@@ -1725,9 +1725,9 @@ StorageCapabilities ProbeStorageCapabilities() {
   return capabilities;
 }
 
-bool AuthorizePairingKeyRelease(HWND owner_window, bool device_removal = false) {
+bool AuthorizeFreshUserConsent(HWND owner_window, const wchar_t* prompt) {
   try {
-    if (owner_window == nullptr || !IsWindow(owner_window)) {
+    if (owner_window == nullptr || !IsWindow(owner_window) || prompt == nullptr) {
       return false;
     }
     ScopedRoInitialization apartment;
@@ -1743,9 +1743,7 @@ bool AuthorizePairingKeyRelease(HWND owner_window, bool device_removal = false) 
         UserConsentVerifierAvailability::Available) {
       return false;
     }
-    const winrt::hstring message(
-        device_removal ? L"Authorize AtlasVault device removal"
-                       : L"Authorize AtlasVault vault-key delivery");
+    const winrt::hstring message(prompt);
     auto interop = winrt::get_activation_factory<
         UserConsentVerifier, IUserConsentVerifierInterop>();
     winrt::Windows::Foundation::IAsyncOperation<
@@ -1758,6 +1756,16 @@ bool AuthorizePairingKeyRelease(HWND owner_window, bool device_removal = false) 
   } catch (...) {
     return false;
   }
+}
+
+bool AuthorizePairingKeyRelease(HWND owner_window) {
+  return AuthorizeFreshUserConsent(
+      owner_window, L"Authorize AtlasVault vault-key delivery");
+}
+
+bool AuthorizeDeviceRemoval(HWND owner_window) {
+  return AuthorizeFreshUserConsent(
+      owner_window, L"Authorize AtlasVault device removal");
 }
 
 const flutter::EncodableMap* ExactArguments(
@@ -2379,9 +2387,10 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
       result->Success(flutter::EncodableValue(false));
       return;
     }
-    result->Success(
-        flutter::EncodableValue(AuthorizePairingKeyRelease(
-            owner_window_, method == "authorizeDeviceRemoval")));
+    const bool authorized = method == "authorizePairingKeyRelease"
+                                ? AuthorizePairingKeyRelease(owner_window_)
+                                : AuthorizeDeviceRemoval(owner_window_);
+    result->Success(flutter::EncodableValue(authorized));
     return;
   }
 
