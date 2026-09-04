@@ -8,9 +8,15 @@ import 'package:cryptography/cryptography.dart';
 import 'package:pointycastle/export.dart' show SHA256Digest;
 
 import '../cache_file_replacement.dart';
+import 'epoch_rotation.dart' as rotation;
+import 'key_epochs.dart';
+import 'device_delivery.dart' as delivery;
 
 part 'authenticated_state_view.dart';
 part 'sync_recovery.dart';
+part 'revocation.dart';
+part 'epoch_vault.dart';
+part 'epoch_catch_up.dart';
 
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';
@@ -1468,7 +1474,7 @@ final class AtlasVaultDurableEncryptedOutbox {
     required Uint8List encryptionKey,
   }) : _store = _EncryptedQueueFile(file, encryptionKey, kind: 'outbox');
 
-  final _EncryptedQueueFile _store;
+  _EncryptedQueueFile _store;
 
   Future<List<AtlasVaultEncryptedPatchOperation>> pendingOperations() async =>
       List<AtlasVaultEncryptedPatchOperation>.unmodifiable(

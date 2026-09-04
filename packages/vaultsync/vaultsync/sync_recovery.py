@@ -46,6 +46,7 @@ class GuardedSyncState:
         collection_id: str,
         key_epoch: int,
         trusted_signer: bytes,
+        rotation_registry=None,
     ):
         with _boundary():
             if len(trusted_signer) != 32:
@@ -62,14 +63,47 @@ class GuardedSyncState:
                 Path(path), encryption_key=encryption_key, kind="guarded-sync-state-v1"
             )
             self._lock = threading.RLock()
+            self._rotation_registry = rotation_registry
 
-    def _chain(self, raw):
+    def _bridge(self, state):
+        from .epoch_catch_up import bridge_records, verify_bridges
+
+        records = bridge_records(state)
+        if records and self._rotation_registry is None:
+            _reject()
+        proofs = verify_bridges(records, self._rotation_registry, self._context)
+        roots = [v["root"] for v in state["views"]]
+        position = -1
+        for proof in proofs:
+            root = proof["plan"]["state_root"]
+            if root not in roots or roots.index(root) < position:
+                _reject()
+            position = roots.index(root)
+        return proofs
+
+    def _chain(self, raw, proof=None):
         if not isinstance(raw, list) or len(raw) > LIMIT:
             _reject("ATLAS_HISTORY_LIMIT")
         views, previous, registry = [], ZERO, EMPTY_REGISTRY
+        epoch, public = self._context["key_epoch"], self._public
+        proofs = proof or []
+        current = None
         for i, item in enumerate(raw):
-            v = _verified(item, self._public)
-            if any(v[k] != self._context[k] for k in ("account_id", "vault_id", "key_epoch")):
+            for candidate in proofs:
+                if (
+                    previous == candidate["plan"]["state_root"]
+                    and epoch == candidate["plan"]["previous_epoch"]
+                ):
+                    current = candidate
+                    epoch = candidate["plan"]["new_epoch"]
+                    public = self._bridge_public(candidate)
+            v = _verified(item, public)
+            if (
+                any(v[k] != self._context[k] for k in ("account_id", "vault_id"))
+                or v["key_epoch"] != epoch
+            ):
+                _reject()
+            if current and v["registry_root"] != current["plan"]["resulting_registry_root"]:
                 _reject()
             if (
                 v["sequence"] != i + 1
@@ -84,11 +118,16 @@ class GuardedSyncState:
     def _load(self):
         s = self._store.read({})
         if (
-            set(s) != {"context", "views", "records", "cases", "status"}
+            set(s)
+            not in (
+                {"context", "views", "records", "cases", "status"},
+                {"context", "views", "records", "cases", "status", "epoch_bridge"},
+                {"context", "views", "records", "cases", "status", "epoch_bridges"},
+            )
             or s["context"] != self._context
         ):
             _reject()
-        s["views"] = self._chain(s["views"])
+        s["views"] = self._chain(s["views"], self._bridge(s))
         if (
             s["status"] not in ("ACTIVE", "MANUAL_REQUIRED", "RECOVERY_PENDING")
             or not isinstance(s["cases"], list)
@@ -125,6 +164,43 @@ class GuardedSyncState:
         with self._lock, _boundary():
             self._active(self._load())
             return operation()
+
+    def _stage_epoch(self, proof):
+        """Called only inside the enclosing C26 atomic local publication."""
+        from .epoch_catch_up import bridge_records
+
+        s = self._load()
+        self._active(s)
+        records = bridge_records(s)
+        if (
+            len(records) >= 32
+            or not s["views"]
+            or s["views"][-1]["root"] != proof["plan"]["state_root"]
+        ):
+            _reject(_PENDING)
+        if records:
+            s.pop("epoch_bridge", None)
+            s["epoch_bridges"] = [*records, proof]
+        else:
+            s["epoch_bridge"] = proof
+        self._bridge(s)
+        self._chain(s["views"], self._bridge(s))
+        return s
+
+    def _current_policy(self, s):
+        proofs = self._bridge(s)
+        if proofs:
+            proof = proofs[-1]
+            return proof["plan"]["new_epoch"], self._bridge_public(proof)
+        return self._context["key_epoch"], self._public
+
+    @staticmethod
+    def _bridge_public(proof):
+        return base64.b64decode(
+            next(
+                e for e in proof["registry"] if e["device_id"] == proof["rotation_signer_device_id"]
+            )["signing_public_b64"]
+        )
 
     def checkpoint(self):
         with self._lock, _boundary():
@@ -219,8 +295,19 @@ class GuardedSyncState:
                 with _boundary():
                     if not isinstance(peer, list) or len(peer) > LIMIT:
                         _reject("ATLAS_HISTORY_LIMIT")
-                    signed = [_verified(v, self._public) for v in peer]
-                    checked = self._chain(signed)
+                    proof = self._bridge(s)
+                    authorities = {
+                        self._context["key_epoch"]: self._public,
+                        **{p["plan"]["new_epoch"]: self._bridge_public(p) for p in proof},
+                    }
+                    signed = [
+                        _verified(
+                            v,
+                            authorities.get(v.get("key_epoch"), self._public),
+                        )
+                        for v in peer
+                    ]
+                    checked = self._chain(signed, proof)
                     if not checked or not s["views"]:
                         _reject("ATLAS_CHECKPOINT_REQUIRED")
                     if any(a["root"] != b["root"] for a, b in zip(s["views"], checked)):
@@ -237,13 +324,20 @@ class GuardedSyncState:
             registry_digest = None
             try:
                 with _boundary():
-                    view = _verified(raw_view, self._public)
+                    epoch, public = self._current_policy(s)
+                    view = _verified(raw_view, public)
                     peer = [view]
-                    if any(
-                        view[k] != self._context[k] for k in ("account_id", "vault_id", "key_epoch")
+                    if (
+                        any(view[k] != self._context[k] for k in ("account_id", "vault_id"))
+                        or view["key_epoch"] != epoch
                     ):
                         _reject()
-                    registry_digest = registry_root(registry)
+                    if s.get("epoch_bridge") or s.get("epoch_bridges"):
+                        from .revocation import registry_root as rotation_registry_root
+
+                        registry_digest = rotation_registry_root(registry)
+                    else:
+                        registry_digest = registry_root(registry)
                     if registry_digest != view["registry_root"]:
                         _reject("ATLAS_REGISTRY_SUBSTITUTION")
                     if len(opaque_state) > 1024 * 1024:
@@ -256,7 +350,7 @@ class GuardedSyncState:
                         or c.state_sha256 != _state_digest(opaque_state)
                     ):
                         _reject()
-                    Ed25519PublicKey.from_public_bytes(self._public).verify(
+                    Ed25519PublicKey.from_public_bytes(public).verify(
                         base64.b64decode(c.signature_b64),
                         _ROOT_SIGNATURE_DOMAIN + bytes.fromhex(c.root),
                     )
@@ -298,7 +392,11 @@ class GuardedSyncState:
                         if (
                             r.version != 1
                             or r.object_id in records
-                            or r.key_epoch != view["key_epoch"]
+                            or (
+                                r.key_epoch != view["key_epoch"]
+                                and s["records"].get(r.object_id, {}).get("envelope_sha256")
+                                != hashlib.sha256(_canonical_json(r.to_dict())).hexdigest()
+                            )
                         ):
                             _reject()
                         records[r.object_id] = {

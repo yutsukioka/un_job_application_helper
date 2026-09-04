@@ -73,7 +73,10 @@ void main() {
     expect(source, contains('IUserConsentVerifierInterop'));
     expect(source, contains('RequestVerificationForWindowAsync'));
     expect(source, contains('AuthorizePairingKeyRelease(HWND owner_window)'));
+    expect(source, contains('AuthorizeDeviceRemoval(HWND owner_window)'));
     expect(source, contains('AuthorizePairingKeyRelease(owner_window_)'));
+    expect(source, contains('AuthorizeDeviceRemoval(owner_window_)'));
+    expect(source, isNot(contains('bool device_removal = false')));
     expect(source, contains('UserConsentVerificationResult::Verified'));
     expect(source, contains('"authorizePairingKeyRelease"'));
     expect(cmake, contains('"runtimeobject.lib"'));

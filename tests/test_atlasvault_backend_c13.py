@@ -204,7 +204,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
 
     assert contract["openapi"] == "3.1.0"
-    assert contract["info"]["version"] == "1.2.0"
+    assert contract["info"]["version"] == "1.4.0"
     assert set(contract["paths"]) == {
         "/v1/accounts/{account_id}/devices/bootstrap",
         "/v1/accounts/{account_id}/auth/challenges",
@@ -215,6 +215,9 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         "/v1/vaults/{vault_id}/patches",
         "/v1/vaults/{vault_id}/snapshots",
         "/v1/vaults/{vault_id}/commitments",
+        "/v1/vaults/{vault_id}/activations",
+        "/v1/vaults/{vault_id}/activations/{epoch}/delivery",
+        "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs",
     }
     properties = {
         property_name.casefold()
@@ -247,6 +250,18 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
             assert operation["x-atlasvault-implementation-chunk"] == "C14"
 
     generated = create_app(AtlasVaultBackend()).openapi()
+    for document in (contract, generated):
+        for path in (
+            "/v1/vaults/{vault_id}/activations",
+            "/v1/vaults/{vault_id}/activations/{epoch}/delivery",
+        ):
+            responses = document["paths"][path]["get"]["responses"]
+            assert "403" in responses
+            assert "423" in responses
+        delivery_responses = document["paths"][
+            "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs"
+        ]["post"]["responses"]
+        assert {"401", "403", "409", "413", "429"} <= set(delivery_responses)
     implemented_operations = {
         ("/v1/accounts/{account_id}/devices/bootstrap", "post"),
         ("/v1/accounts/{account_id}/auth/challenges", "post"),
@@ -263,6 +278,10 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         ("/v1/vaults/{vault_id}/snapshots", "get"),
         ("/v1/vaults/{vault_id}/commitments", "post"),
         ("/v1/vaults/{vault_id}/commitments", "get"),
+        ("/v1/vaults/{vault_id}/activations", "post"),
+        ("/v1/vaults/{vault_id}/activations", "get"),
+        ("/v1/vaults/{vault_id}/activations/{epoch}/delivery", "get"),
+        ("/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs", "post"),
     }
     assert {
         (path, method)

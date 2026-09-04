@@ -83,6 +83,7 @@ jobs:
           python -m pip install -e "packages/jobagg[dev]"
           python -m pip install -e "services/job-api[dev]"
           python -m pip install -e "packages/vaultsync[dev]"
+          python -m pip install -e "services/atlasvault-api[dev]"
 
       - name: Run AtlasVault Python security checks
         run: ./scripts/ci/atlasvault_python.sh

@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtlasVault C25 revocation and rotation-plan v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/transition"
+    },
+    {
+      "$ref": "#/$defs/rotation_plan"
+    }
+  ],
+  "$defs": {
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version",
+        "account_id",
+        "vault_id",
+        "target_device_id",
+        "initiator_device_id",
+        "prior_registry_root",
+        "resulting_registry_root",
+        "key_epoch",
+        "sequence",
+        "authorization_category",
+        "root",
+        "signature_b64"
+      ],
+      "properties": {
+        "format": {
+          "const": "atlasvault-device-revocation"
+        },
+        "version": {
+          "const": 1
+        },
+        "account_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+        },
+        "vault_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+        },
+        "target_device_id": {
+          "type": "string",
+          "pattern": "^avd1-[0-9a-f]{64}$"
+        },
+        "initiator_device_id": {
+          "type": "string",
+          "pattern": "^avd1-[0-9a-f]{64}$"
+        },
+        "prior_registry_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "resulting_registry_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "key_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740990
+        },
+        "sequence": {
+          "const": 1
+        },
+        "authorization_category": {
+          "const": "DEVICE_PRESENCE"
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature_b64": {
+          "type": "string",
+          "minLength": 88,
+          "maxLength": 88,
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    },
+    "rotation_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version",
+        "account_id",
+        "vault_id",
+        "previous_epoch",
+        "new_epoch",
+        "prior_registry_root",
+        "resulting_registry_root",
+        "state_root",
+        "initiator_device_id",
+        "revocation_root",
+        "recipients"
+      ],
+      "properties": {
+        "format": {
+          "const": "atlasvault-rotation-plan"
+        },
+        "version": {
+          "const": 1
+        },
+        "account_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+        },
+        "vault_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+        },
+        "previous_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740990
+        },
+        "new_epoch": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9007199254740991
+        },
+        "prior_registry_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "resulting_registry_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "state_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "initiator_device_id": {
+          "type": "string",
+          "pattern": "^avd1-[0-9a-f]{64}$"
+        },
+        "revocation_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "recipients": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 255,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "registry": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device_id",
+          "signing_public_b64",
+          "agreement_public_b64",
+          "state"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          },
+          "signing_public_b64": {
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{43}=$"
+          },
+          "agreement_public_b64": {
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{43}=$"
+          },
+          "state": {
+            "enum": [
+              "ACTIVE",
+              "REVOKED"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

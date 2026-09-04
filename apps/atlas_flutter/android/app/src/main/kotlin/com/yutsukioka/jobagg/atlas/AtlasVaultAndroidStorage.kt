@@ -82,7 +82,7 @@ internal class AtlasVaultAndroidStorage(
             return
         }
         when (call.method) {
-            "authorizePairingKeyRelease" -> {
+            "authorizePairingKeyRelease", "authorizeDeviceRemoval" -> {
                 beginAuthorizePairingKeyRelease(call, result)
                 return
             }
@@ -349,9 +349,12 @@ internal class AtlasVaultAndroidStorage(
             result.success(false)
             return
         }
+        val removal = call.method == "authorizeDeviceRemoval"
         val intent = keyguard.createConfirmDeviceCredentialIntent(
-            "Authorize AtlasVault key delivery",
-            "Confirm your device credential before releasing the vault key.",
+            if (removal) "Authorize AtlasVault device removal"
+            else "Authorize AtlasVault key delivery",
+            if (removal) "Confirm removal of the device selected in AtlasVault."
+            else "Confirm your device credential before releasing the vault key.",
         )
         if (intent == null) {
             result.success(false)
@@ -2314,6 +2317,7 @@ internal class AtlasVaultAndroidStorage(
         val SUPPORTED_METHODS = setOf(
             "capabilities",
             "authorizePairingKeyRelease",
+            "authorizeDeviceRemoval",
             "createVaultKey",
             "loadVaultKey",
             "containsVaultKey",

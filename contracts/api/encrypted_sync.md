@@ -12,7 +12,7 @@ must not accept, derive, log, or return decrypted user data.
 
 The machine-readable source is
 `contracts/api/atlasvault_sync_openapi.json` (OpenAPI 3.1, contract version
-1.2.0). Its object schemas reject unknown fields. The Python service models are
+1.3.0). Its object schemas reject unknown fields. The Python service models are
 also strict, and `tests/security/test_A4_encrypted_sync_wire_guard.py` checks
 them against `BANNED_WIRE_FIELD_NAMES` in
 `packages/vaultsync/vaultsync/service_contract_guard.py`.
