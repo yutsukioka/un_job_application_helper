@@ -6,6 +6,86 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultEpochCatchUpTests: XCTestCase {
+  func aggregateProof(_ packet: [String: Any]) throws -> [String: Any] {
+    let perDevice = packet["proof"] as! [String: Any]
+    return try AtlasVaultEpochRotation.create(
+      perDevice["revocation"] as! [String: Any],
+      registry: perDevice["registry"] as! [[String: Any]],
+      stateRoot: (perDevice["plan"] as! [String: Any])["state_root"] as! String,
+      signingKey: Curve25519.Signing.PrivateKey(
+        rawRepresentation: Data(repeating: 10, count: 32)))
+  }
+  func activationRecord(_ proof: [String: Any]) -> [String: Any] {
+    [
+      "format": "atlasvault-activation-record", "version": 1,
+      "status": "ACTIVATION_ACCEPTED", "transition_id": proof["root"]!, "proof": proof,
+    ]
+  }
+  func testActiveGenerationCanBeginTheNextRotation() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let v = try vector()
+    let packets = (v["packets"] as! [[[String: Any]]])[0]
+    let c = try device(root, 0, v, initialize: true)
+    XCTAssertTrue(
+      try c.catchUp(
+        [packets[0]],
+        currentActivationID: (packets[0]["proof"] as! [String: Any])["activation_id"] as! String,
+        agreementPrivateKey: Data(repeating: 20, count: 32)))
+    try c.beginActivation(aggregateProof(packets[1]))
+    XCTAssertEqual(try c.observation()["status"] as? String, "ACTIVATION_PENDING")
+    XCTAssertEqual(try c.observation()["key_epoch"] as? Int, 4)
+  }
+  func testRotationWaitsForOldEpochOutboxAcceptance() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let v = try vector()
+    let packet = (v["packets"] as! [[[String: Any]]])[0][0]
+    let c = try device(root, 0, v, initialize: true)
+    let signer = try Curve25519.Signing.PrivateKey(
+      rawRepresentation: Data(repeating: 10, count: 32))
+    let envelope = try c.seal(
+      "patch", plaintext: Data("synthetic-old-epoch-outbox".utf8),
+      objectID: "queued-before-rotation", revision: "r1", signingKey: signer)
+    try c.queueOperation(
+      AtlasVaultEncryptedPatchOperation(jsonObject: [
+        "format": "atlasvault-encrypted-patch-operation", "version": 1,
+        "operation_id": "10000000-0000-4000-8000-000000000099",
+        "operation_type": "upsert", "author_device_id": (v["device_ids"] as! [String])[0],
+        "author_sequence": 99, "lamport": 99, "envelope": envelope.jsonObject,
+      ]))
+    XCTAssertThrowsError(try c.beginActivation(aggregateProof(packet))) { error in
+      XCTAssertEqual(
+        (error as? AtlasVaultRotationError)?.rawValue, "ATLAS_EPOCH_OUTBOX_PENDING")
+    }
+    XCTAssertEqual(try c.observation()["status"] as? String, "ACTIVE")
+    XCTAssertEqual(try c.observation()["key_epoch"] as? Int, 3)
+    XCTAssertEqual(try c.pendingOperations().count, 1)
+  }
+  func testHistoricalAuthorIsCheckedAtTheCiphertextEpoch() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let v = try vector()
+    let packets = (v["packets"] as! [[[String: Any]]])[0]
+    let first = try aggregateProof(packets[0])
+    let author = try device(root, 4, v, initialize: true)
+    XCTAssertTrue(
+      try author.acceptRotation(
+        first, acceptedRecord: activationRecord(first),
+        agreementPrivateKey: Data(repeating: 24, count: 32)))
+    let historical = try author.seal(
+      "patch", plaintext: Data("synthetic-epoch-four-history".utf8),
+      objectID: "historical-author", revision: "r4",
+      signingKey: Curve25519.Signing.PrivateKey(
+        rawRepresentation: Data(repeating: 14, count: 32)))
+    let reader = try device(root, 0, v, initialize: true)
+    XCTAssertTrue(
+      try reader.catchUp(
+        packets, currentActivationID: v["target_activation_id"] as! String,
+        agreementPrivateKey: Data(repeating: 20, count: 32)))
+    XCTAssertEqual(try reader.observation()["key_epoch"] as? Int, 5)
+    XCTAssertEqual(try reader.open(historical), Data("synthetic-epoch-four-history".utf8))
+  }
   func testCatchUpCrashChild() throws {
     guard let path = ProcessInfo.processInfo.environment["ATLAS_C27_CHILD"],
       let stage = ProcessInfo.processInfo.environment["ATLAS_C27_STAGE"]

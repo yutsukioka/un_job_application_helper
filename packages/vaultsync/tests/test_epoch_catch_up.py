@@ -63,6 +63,74 @@ def scenario(tmp_path):
     return e, first, second
 
 
+def test_active_generation_can_begin_the_next_rotation(tmp_path):
+    e = setup(tmp_path)
+    first = rotate(e, e["registry"], 3, 3)
+    c = e["clients"][0]
+    assert c.catch_up(
+        [first[1][0]],
+        current_activation_id=first[2]["transition_id"],
+        agreement_private_key=bytes([20]) * 32,
+    )
+    second = rotate(e, first[0], 4, 4)
+    c.begin_activation(second[2]["proof"])
+    assert c.observation()["status"] == "ACTIVATION_PENDING"
+    assert c.observation()["key_epoch"] == 4
+
+
+def test_rotation_waits_for_old_epoch_outbox_acceptance(tmp_path):
+    e = setup(tmp_path)
+    first = rotate(e, e["registry"], 3, 3)
+    c = e["clients"][0]
+    envelope = c.seal(
+        "patch",
+        b"synthetic-old-epoch-outbox",
+        object_id="queued-before-rotation",
+        revision="r1",
+        signing_key=e["devices"][0],
+    )
+    c.queue_operation(
+        EncryptedPatchOperation(
+            operation_id="10000000-0000-4000-8000-000000000099",
+            operation_type="upsert",
+            author_device_id=e["devices"][0].device_id,
+            author_sequence=99,
+            lamport=99,
+            envelope=envelope,
+        )
+    )
+    with pytest.raises(RotationError, match="ATLAS_EPOCH_OUTBOX_PENDING"):
+        c.begin_activation(first[2]["proof"])
+    assert c.observation()["status"] == "ACTIVE"
+    assert c.observation()["key_epoch"] == 3
+    assert len(c.pending_operations()) == 1
+
+
+def test_historical_author_is_checked_at_the_ciphertext_epoch(tmp_path):
+    e, first, second = scenario(tmp_path)
+    author = e["clients"][4]
+    assert author.accept_rotation(
+        first[2]["proof"],
+        accepted_record=first[2],
+        agreement_private_key=bytes([24]) * 32,
+    )
+    historical = author.seal(
+        "patch",
+        b"synthetic-epoch-four-history",
+        object_id="historical-author",
+        revision="r4",
+        signing_key=e["devices"][4],
+    )
+    reader = e["clients"][0]
+    assert reader.catch_up(
+        [first[1][0], second[1][0]],
+        current_activation_id=second[2]["transition_id"],
+        agreement_private_key=bytes([20]) * 32,
+    )
+    assert reader.observation()["key_epoch"] == 5
+    assert reader.open(historical) == b"synthetic-epoch-four-history"
+
+
 def test_existing_c26_publication_accepts_its_own_v2_attestation(tmp_path):
     e = setup(tmp_path)
     a = rotate(e, e["registry"], 3, 3)

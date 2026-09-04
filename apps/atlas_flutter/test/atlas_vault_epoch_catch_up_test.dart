@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:atlas/src/atlas_vault/sync_queue.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/services.dart';
+import 'package:atlas/src/atlas_vault/epoch_rotation.dart';
 import 'package:atlas/src/atlas_vault/android_storage.dart';
 import 'package:atlas/src/atlas_vault/windows_storage.dart';
 import 'package:atlas/src/atlas_vault/plaintext_migration.dart';
@@ -68,6 +69,123 @@ void main() {
     }
     return c;
   }
+
+  Future<Map<String, Object?>> aggregateProof(
+    Map<String, Object?> packet,
+  ) async {
+    final perDevice = m(packet['proof']);
+    return AtlasVaultEpochRotation.create(
+      m(perDevice['revocation']),
+      registry: rows(perDevice['registry']),
+      stateRoot: m(perDevice['plan'])['state_root'] as String,
+      signingKey: await Ed25519().newKeyPairFromSeed(List.filled(32, 10)),
+    );
+  }
+
+  Map<String, Object?> activationRecord(Map<String, Object?> proof) => {
+    'format': 'atlasvault-activation-record',
+    'version': 1,
+    'status': 'ACTIVATION_ACCEPTED',
+    'transition_id': proof['root'],
+    'proof': proof,
+  };
+
+  test('active generation can begin the next rotation', () async {
+    final root = await Directory.systemTemp.createTemp('atlas-c28-generation-');
+    try {
+      final packets = rows((v['packets'] as List)[0]);
+      final c = await device(root, 0, initialize: true);
+      await c.catchUp(
+        [packets[0]],
+        currentActivationID: m(packets[0]['proof'])['activation_id'] as String,
+        agreementPrivateKey: Uint8List.fromList(List.filled(32, 20)),
+      );
+      final next = await aggregateProof(packets[1]);
+      await c.beginActivation(next);
+      expect((await c.observation())['status'], 'ACTIVATION_PENDING');
+      expect((await c.observation())['key_epoch'], 4);
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
+
+  test('rotation waits for old-epoch outbox acceptance', () async {
+    final root = await Directory.systemTemp.createTemp('atlas-c28-outbox-');
+    try {
+      final packet = rows((v['packets'] as List)[0]).first;
+      final proof = await aggregateProof(packet);
+      final c = await device(root, 0, initialize: true);
+      final signer = await Ed25519().newKeyPairFromSeed(List.filled(32, 10));
+      final envelope = await c.seal(
+        'patch',
+        Uint8List.fromList(utf8.encode('synthetic-old-epoch-outbox')),
+        objectID: 'queued-before-rotation',
+        revision: 'r1',
+        signingKey: signer,
+      );
+      await c.queueOperation(
+        AtlasVaultEncryptedPatchOperation.fromJson({
+          'format': 'atlasvault-encrypted-patch-operation',
+          'version': 1,
+          'operation_id': '10000000-0000-4000-8000-000000000099',
+          'operation_type': 'upsert',
+          'author_device_id': (v['device_ids'] as List)[0],
+          'author_sequence': 99,
+          'lamport': 99,
+          'envelope': envelope.toJson(),
+        }),
+      );
+      await expectLater(
+        c.beginActivation(proof),
+        throwsA(
+          isA<AtlasVaultRotationException>().having(
+            (error) => error.code,
+            'code',
+            'ATLAS_EPOCH_OUTBOX_PENDING',
+          ),
+        ),
+      );
+      expect((await c.observation())['status'], 'ACTIVE');
+      expect((await c.observation())['key_epoch'], 3);
+      expect(await c.pendingOperations(), hasLength(1));
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
+
+  test('historical author is checked at the ciphertext epoch', () async {
+    final root = await Directory.systemTemp.createTemp('atlas-c28-history-');
+    try {
+      final packets = rows((v['packets'] as List)[0]);
+      final first = await aggregateProof(packets[0]);
+      final author = await device(root, 4, initialize: true);
+      await author.acceptRotation(
+        first,
+        acceptedRecord: activationRecord(first),
+        agreementPrivateKey: Uint8List.fromList(List.filled(32, 24)),
+      );
+      final historical = await author.seal(
+        'patch',
+        Uint8List.fromList(utf8.encode('synthetic-epoch-four-history')),
+        objectID: 'historical-author',
+        revision: 'r4',
+        signingKey: await Ed25519().newKeyPairFromSeed(List.filled(32, 14)),
+      );
+      final reader = await device(root, 0, initialize: true);
+      await reader.catchUp(
+        packets,
+        currentActivationID: v['target_activation_id'] as String,
+        agreementPrivateKey: Uint8List.fromList(List.filled(32, 20)),
+      );
+      expect((await reader.observation())['key_epoch'], 5);
+      expect(
+        await reader.open(historical),
+        utf8.encode('synthetic-epoch-four-history'),
+      );
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
 
   test('C27 cleanup preserves pending inbox keys', () async {
     final root = await Directory.systemTemp.createTemp('atlas-c27-inbox-');
