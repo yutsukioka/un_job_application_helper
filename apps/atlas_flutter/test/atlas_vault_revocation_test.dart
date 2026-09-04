@@ -5,6 +5,8 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:atlas/src/atlas_vault/sync_queue.dart';
 
+import 'support/atlas_vault_dart_helper_process.dart';
+
 void main() {
   final v =
       jsonDecode(
@@ -302,14 +304,10 @@ void main() {
   test('two independent device registries survive process kill', () async {
     for (final name in ['A', 'B']) {
       final ready = File('${dir.path}/$name-ready');
-      final flutter = Platform.environment['FLUTTER_ROOT'];
-      final child =
-          await Process.start(flutter == null ? 'dart' : '$flutter/bin/dart', [
-            'run',
-            'test/support/atlas_vault_revocation_process.dart',
-            '${dir.path}/$name',
-            ready.path,
-          ]);
+      final child = await startAtlasVaultDartHelper(
+        'test/support/atlas_vault_revocation_process.dart',
+        ['${dir.path}/$name', ready.path],
+      );
       final output = child.stdout.drain<void>(),
           errors = child.stderr.drain<void>();
       try {
