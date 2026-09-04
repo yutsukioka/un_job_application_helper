@@ -899,7 +899,6 @@ from pathlib import Path
 blocked_import_roots = frozenset(
     {
         "aiohttp",
-        "asyncio",
         "ftplib",
         "grpc",
         "http",
@@ -979,6 +978,24 @@ def _blocked_imports(source: str) -> bool:
     dynamic_execution_aliases = set()
     getattr_aliases = {"getattr"}
     dynamic_execution_builtins = frozenset({"eval", "exec"})
+    asyncio_network_aliases = set()
+    asyncio_network_apis = frozenset(
+        {
+            "create_connection",
+            "create_server",
+            "create_unix_connection",
+            "create_unix_server",
+            "open_connection",
+            "open_unix_connection",
+            "sendfile",
+            "sock_accept",
+            "sock_connect",
+            "sock_recv",
+            "sock_sendall",
+            "start_server",
+            "start_unix_server",
+        }
+    )
     pty_module_aliases = set()
     pty_spawn_aliases = set()
     os_module_aliases = set()
@@ -1002,6 +1019,8 @@ def _blocked_imports(source: str) -> bool:
                     builtins_module_aliases.add(alias.asname or alias.name)
                 elif alias.name == "importlib":
                     importlib_module_aliases.add(alias.asname or alias.name)
+                elif alias.name.startswith("asyncio."):
+                    return True
                 elif alias.name == "os":
                     os_module_aliases.add(alias.asname or alias.name)
                 elif alias.name == "runpy":
@@ -1016,7 +1035,15 @@ def _blocked_imports(source: str) -> bool:
             module = node.module or ""
             if node.level == 0 and module.partition(".")[0] in blocked_import_roots:
                 return True
-            if module == "builtins":
+            if module == "asyncio":
+                for alias in node.names:
+                    if alias.name == "*":
+                        return True
+                    if alias.name in asyncio_network_apis:
+                        asyncio_network_aliases.add(alias.asname or alias.name)
+            elif module.startswith("asyncio."):
+                return True
+            elif module == "builtins":
                 for alias in node.names:
                     if alias.name == "__import__":
                         builtin_import_aliases.add(alias.asname or alias.name)
@@ -1147,6 +1174,20 @@ def _blocked_imports(source: str) -> bool:
             and node.value.id in builtins_module_aliases
         )
 
+    def _is_asyncio_network_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in asyncio_network_aliases
+        if isinstance(node, ast.Attribute):
+            return node.attr in asyncio_network_apis
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in getattr_aliases
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in asyncio_network_apis
+        )
+
     def _is_pty_spawn_reference(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
             return node.id in pty_spawn_aliases
@@ -1264,6 +1305,7 @@ def _blocked_imports(source: str) -> bool:
             )
             aliases_runpy_execution = _is_runpy_execution_reference(value)
             aliases_dynamic_execution = _is_dynamic_execution_reference(value)
+            aliases_asyncio_network = _is_asyncio_network_reference(value)
             aliases_getattr = (
                 isinstance(value, ast.Name) and value.id in getattr_aliases
             )
@@ -1282,6 +1324,7 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_importlib_direct_loader_execution
                 and not aliases_runpy_execution
                 and not aliases_dynamic_execution
+                and not aliases_asyncio_network
                 and not aliases_getattr
                 and not aliases_pty_spawn
             ):
@@ -1359,6 +1402,12 @@ def _blocked_imports(source: str) -> bool:
                 ):
                     dynamic_execution_aliases.add(target.id)
                     changed = True
+                if (
+                    aliases_asyncio_network
+                    and target.id not in asyncio_network_aliases
+                ):
+                    asyncio_network_aliases.add(target.id)
+                    changed = True
                 if aliases_getattr and target.id not in getattr_aliases:
                     getattr_aliases.add(target.id)
                     changed = True
@@ -1378,6 +1427,8 @@ def _blocked_imports(source: str) -> bool:
         if _is_runpy_execution_reference(node.func):
             return True
         if _is_dynamic_execution_reference(node.func):
+            return True
+        if _is_asyncio_network_reference(node.func):
             return True
         if _is_pty_spawn_reference(node.func):
             return True
@@ -1433,6 +1484,10 @@ if not all(_blocked_imports(sample) for sample in dynamic_import_samples):
 asyncio_network_samples = (
     "import asyncio\nawait asyncio.open_connection(host, port)",
     "import asyncio\nasyncio.start_server(handler, host, port)",
+    "import asyncio as loop\nawait loop.open_connection(host, port)",
+    "from asyncio import open_connection as connect\nawait connect(host, port)",
+    "import asyncio\nconnect = asyncio.open_connection\nawait connect(host, port)",
+    "import asyncio\ngetattr(asyncio, 'open_connection')(host, port)",
 )
 if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
     raise SystemExit("Python AST asyncio network self-test failed.")
