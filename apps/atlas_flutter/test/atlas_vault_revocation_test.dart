@@ -94,6 +94,13 @@ void main() {
     expect(await client.commit(object('transition')), isFalse);
   });
   test('last-device and unauthorized removals fail closed', () async {
+    final normal = store('self-removal');
+    await normal.initialize();
+    await expectLater(
+      normal.prepare(a, a),
+      throwsA(isA<AtlasVaultRevocationException>()),
+    );
+
     final client = AtlasVaultRevocationRegistry(
       file: File('${dir.path}/solo'),
       encryptionKey: Uint8List.fromList(List.filled(32, 7)),

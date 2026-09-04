@@ -116,6 +116,11 @@ def test_epoch_context_and_recipient_substitution_rejected(field):
 
 
 def test_no_recovery_stranding_and_no_unauthorized_signer(tmp_path):
+    normal = store(tmp_path / "self-removal")
+    normal.initialize()
+    with pytest.raises(RevocationError, match="ATLAS_REMOVAL_AUTHORITY"):
+        normal.prepare(A, A)
+
     only = RevocationRegistry(
         tmp_path / "solo",
         bytes([7]) * 32,

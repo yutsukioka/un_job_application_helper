@@ -204,6 +204,11 @@ final class AtlasVaultRevocationTests: XCTestCase {
     }
   }
   func testLastDeviceAndUnauthorizedRemovalAreRejected() throws {
+    let normal = try store("self-removal")
+    try normal.initialize()
+    let selfTarget = entries()[0]["device_id"] as! String
+    XCTAssertThrowsError(try normal.prepare(target: selfTarget, initiator: selfTarget))
+
     let client = try AtlasVaultRevocationRegistry(
       fileURL: directory.appendingPathComponent("solo"),
       encryptionKey: Data(repeating: 7, count: 32), accountID: "account-c25", vaultID: "vault-c25",
@@ -216,6 +221,21 @@ final class AtlasVaultRevocationTests: XCTestCase {
       XCTAssertThrowsError(try client.prepare(target: pair[0], initiator: pair[1]))
     }
     XCTAssertEqual(try client.snapshot()["sequence"] as? Int, 0)
+  }
+  func testRemovalViewRebindsControllerTargetAndEpoch() throws {
+    var root = URL(fileURLWithPath: #filePath)
+    for _ in 0..<3 { root.deleteLastPathComponent() }
+    let source = try String(
+      contentsOf: root.appendingPathComponent("Sources/AtlasUI/AtlasVaultDeviceRemovalView.swift"),
+      encoding: .utf8)
+    for required in [
+      "@State private var binding = AtlasVaultRemovalViewBinding()",
+      "AtlasVaultRemovalTaskID(controller: controller, target: target, epoch: epoch)",
+      "binding.rebind(controller)",
+      ".onDisappear { binding.cancel() }",
+    ] {
+      XCTAssertTrue(source.contains(required), required)
+    }
   }
   @MainActor func testAuthorizationBindingFailuresNeverSign() async throws {
     let a = entries()[0]["device_id"] as! String

@@ -14,6 +14,7 @@ from test_atlasvault_activation_c26 import (
     history_registry,
     initial_collection,
     initial_body,
+    stage_activation_deliveries,
 )
 from vaultsync.authenticated_state_view import (
     EMPTY_REGISTRY,
@@ -22,7 +23,6 @@ from vaultsync.authenticated_state_view import (
     registry_root,
 )
 from vaultsync.device_identity import device_identity_from_private_keys
-from vaultsync.device_delivery import create_device_delivery
 from vaultsync.epoch_rotation import EpochVault, create_epoch_rotation
 from vaultsync.revocation import (
     RevocationRegistry,
@@ -163,6 +163,7 @@ def rotate(env, registry, epoch, target):
         transition, registry=registry, state_root=env["view"]["root"], signing_key=d[0]
     )
     route = f"/v1/vaults/{VAULT}/activations"
+    prepared = stage_activation_deliveries(env["http"], env["headers"], proof, d)
     response = env["http"].post(route, json=proof, headers=env["headers"][0])
     assert response.status_code == 200
     record = env["backend"].commitments.activation(ACCOUNT_A, VAULT)
@@ -171,23 +172,10 @@ def rotate(env, registry, epoch, target):
     for i, identity in enumerate(d):
         if identity.device_id not in proof["plan"]["recipients"]:
             continue
-        packet = create_device_delivery(
-            record,
-            recipient_device_id=identity.device_id,
-            issuer_device_id=d[0].device_id,
-            signing_key=d[0],
-            current_registry=after,
-            recovery_pending=False,
-        )
-        assert (
-            env["http"]
-            .post(
-                f"{route}/{epoch + 1}/delivery-proofs",
-                json=packet,
-                headers=env["headers"][0],
-            )
-            .status_code
-            == 200
+        packet = next(
+            item
+            for item in prepared
+            if item["proof"]["recipient_device_id"] == identity.device_id
         )
         delivered = env["http"].get(
             f"{route}/{epoch + 1}/delivery", headers=env["headers"][i]

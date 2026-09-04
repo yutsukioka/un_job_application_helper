@@ -30,11 +30,13 @@ from vaultsync.authenticated_state_view import (
     registry_root,
 )
 from vaultsync.device_identity import device_identity_from_private_keys
+from vaultsync.device_delivery import create_device_delivery
 from vaultsync.epoch_rotation import create_epoch_rotation
 from vaultsync.revocation import (
     RevocationRegistry,
     _message as removal_message,
     _root as removal_root,
+    verify_transition,
 )
 from vaultsync.sync_queue import SignedStateCommitment
 
@@ -78,7 +80,46 @@ def history_registry(devices):
     return entries
 
 
-def environment(tmp_path, backend=None):
+def activation_record(proof):
+    return {
+        "format": "atlasvault-activation-record",
+        "version": 1,
+        "status": "ACTIVATION_ACCEPTED",
+        "transition_id": proof["root"],
+        "proof": proof,
+    }
+
+
+def activation_packets(proof, devices):
+    record = activation_record(proof)
+    current_registry = verify_transition(proof["revocation"], proof["registry"])
+    return [
+        create_device_delivery(
+            record,
+            recipient_device_id=device.device_id,
+            issuer_device_id=devices[0].device_id,
+            signing_key=devices[0],
+            current_registry=current_registry,
+            recovery_pending=False,
+        )
+        for device in devices
+        if device.device_id in proof["plan"]["recipients"]
+    ]
+
+
+def stage_activation_deliveries(http, headers, proof, devices, packets=None):
+    packets = packets or activation_packets(proof, devices)
+    route = (
+        f"/v1/vaults/{VAULT}/activations/"
+        f"{proof['plan']['new_epoch']}/delivery-proofs"
+    )
+    for packet in packets:
+        response = http.post(route, json=packet, headers=headers[0])
+        assert response.status_code == 200, response.text
+    return packets
+
+
+def environment(tmp_path, backend=None, *, stage=True):
     devices = [
         device_identity_from_private_keys(
             signing_private_seed=bytes([10 + i]) * 32,
@@ -176,6 +217,8 @@ def environment(tmp_path, backend=None):
     proof = create_epoch_rotation(
         transition, registry=registry, state_root=root, signing_key=devices[0]
     )
+    if stage:
+        stage_activation_deliveries(http, headers, proof, devices)
     return backend, http, devices, headers, proof, view
 
 
@@ -192,8 +235,7 @@ def test_activation_is_durable_idempotent_and_fences_old_writes(tmp_path):
     assert receipt["key_epoch"] == 4
     assert record["proof"]["plan"]["new_epoch"] == 4
     assert http.post(route, json=proof, headers=headers[0]).json() == receipt
-    # D089 preserves aggregate verification, but forbids aggregate disclosure.
-    assert http.get(route, headers=headers[1]).status_code == 423
+    assert http.get(route, headers=headers[1]).status_code == 200
     assert http.get(route, headers=headers[2]).status_code == 403
     assert devices[2].device_id not in proof["plan"]["recipients"]
     for epoch, expected in ((3, 409), (4, 201)):
@@ -281,6 +323,7 @@ def test_concurrent_conflicting_activations_have_exactly_one_winner(tmp_path):
         state_root=view["root"],
         signing_key=devices[0],
     )
+    stage_activation_deliveries(http, headers, other, devices)
     barrier = threading.Barrier(2)
 
     def append(p):
