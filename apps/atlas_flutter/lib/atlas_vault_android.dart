@@ -39,6 +39,8 @@ export 'src/atlas_vault/private_state_runtime.dart'
         AtlasVaultActivationResult,
         AtlasVaultPrivateStateException,
         AtlasVaultInteroperabilitySession,
+        AtlasVaultPrivateRecord,
         AtlasVaultPrivateStatePersistence,
         AtlasVaultPrivateStateRuntime,
-        AtlasVaultPrivateStateSnapshot;
+        AtlasVaultPrivateStateSnapshot,
+        AtlasVaultPrivateTombstone;

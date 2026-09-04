@@ -9,15 +9,19 @@ final class AtlasMacProductionHostTests: XCTestCase {
 
         async let first = owner.start()
         async let second = owner.start()
-        XCTAssertEqual(await first, .productionReady)
-        XCTAssertEqual(await second, .productionReady)
+        let firstResult = await first
+        let secondResult = await second
+        XCTAssertEqual(firstResult, .productionReady)
+        XCTAssertEqual(secondResult, .productionReady)
         XCTAssertEqual(harness.startCalls, 1)
         XCTAssertNotNil(owner.productionRootView())
 
         async let firstStop = owner.stop()
         async let secondStop = owner.stop()
-        XCTAssertEqual(await firstStop, .stopped)
-        XCTAssertEqual(await secondStop, .stopped)
+        let firstStopResult = await firstStop
+        let secondStopResult = await secondStop
+        XCTAssertEqual(firstStopResult, .stopped)
+        XCTAssertEqual(secondStopResult, .stopped)
         XCTAssertEqual(harness.stopCalls, 1)
         XCTAssertNil(owner.productionRootView())
     }
@@ -41,7 +45,10 @@ final class AtlasMacProductionHostTests: XCTestCase {
         XCTAssertTrue(host.contains("@main"))
         XCTAssertTrue(host.contains("NSApplicationDelegateAdaptor"))
         XCTAssertTrue(host.contains("beginStart()"))
-        XCTAssertTrue(host.contains("beginTerminalStop()"))
+        XCTAssertTrue(host.contains("applicationShouldTerminate"))
+        XCTAssertTrue(host.contains("processOwner.stop()"))
+        XCTAssertTrue(host.contains(".terminateLater"))
+        XCTAssertTrue(host.contains(".terminateNow"))
         XCTAssertFalse(host.contains("AtlasPreviewApp"))
         XCTAssertFalse(host.contains("UserDefaults"))
     }

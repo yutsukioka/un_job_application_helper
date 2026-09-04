@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault_android.dart';
+import 'package:atlas/atlas_vault_apple.dart';
 import 'package:atlas/atlas_vault_windows.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -36,6 +37,12 @@ final class _AtlasStaleConnectionOperation implements Exception {
 const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 const _plaintextAuthorityUnavailableMessage =
     'Private data is unavailable while AtlasVault migration is pending.';
+const _encryptedAuthorityUnavailableMessage =
+    'Encrypted private data is unavailable.';
+
+Future<AtlasLocalCacheStore?> _noPersistentPlaintextCache({
+  bool Function()? privateStateProtectionActive,
+}) async => null;
 
 Future<AtlasLocalCacheStore?> _defaultCacheStore({
   bool Function()? privateStateProtectionActive,
@@ -2666,12 +2673,13 @@ class _AtlasHomeShellState extends State<AtlasHomeShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    late final _AtlasDefaultControllerAssembly assembly;
     final suppliedController = widget.controller;
     if (suppliedController != null) {
       _controller = suppliedController;
       _ownsController = false;
     } else {
-      final assembly = _buildDefaultControllerAssembly();
+      assembly = _buildDefaultControllerAssembly();
       _controller = assembly.controller;
       _ownedMigrationOwner = assembly.migrationOwner;
       _ownedInteroperabilityOwner = assembly.interoperabilityOwner;
@@ -2681,9 +2689,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell>
     if (_ownsController) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          unawaited(
-            _controller.bootstrapPrivateAuthorityAndLoadPersistedCache(),
-          );
+          unawaited(_bootstrapDefaultAssembly(assembly));
         }
       });
     }
@@ -2815,15 +2821,49 @@ class _AtlasHomeShellState extends State<AtlasHomeShell>
 final class _AtlasDefaultControllerAssembly {
   const _AtlasDefaultControllerAssembly({
     required this.controller,
+    this.bootstrap,
     this.migrationOwner,
     this.interoperabilityOwner,
     this.pairingOwner,
   });
 
   final AtlasAppController controller;
+  final Future<void> Function()? bootstrap;
   final AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
   final AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
   final AtlasVaultTrustedPairingPresentationOwner? pairingOwner;
+}
+
+Future<void> _bootstrapDefaultAssembly(
+  _AtlasDefaultControllerAssembly assembly,
+) async {
+  try {
+    await assembly.bootstrap?.call();
+    await assembly.controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+  } catch (_) {
+    assembly.controller.reportValidationError(
+      _encryptedAuthorityUnavailableMessage,
+    );
+  }
+}
+
+final class _AtlasFailClosedPlaintextAuthorityAdmission
+    implements AtlasVaultPlaintextAuthorityAdmission {
+  const _AtlasFailClosedPlaintextAuthorityAdmission();
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
+    return Future<T>.error(
+      const AtlasVaultPlaintextAuthorityAdmissionException(),
+    );
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) {
+    return Future<T>.error(
+      const AtlasVaultPlaintextAuthorityAdmissionException(),
+    );
+  }
 }
 
 final class _AtlasWindowsTrustedPairingAdmission
@@ -3388,6 +3428,33 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       migrationOwner: owner,
       interoperabilityOwner: interoperabilityOwner,
       pairingOwner: pairingOwner,
+    );
+  }
+
+  if (Platform.isIOS || Platform.isMacOS) {
+    final keyStore = AtlasAppleVaultSecureKeyStore();
+    final localStore = AtlasAppleVaultLocalStoreIO();
+    final selectedVaultStore = AtlasAppleSelectedVaultStore();
+    final runtime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: keyStore,
+      localStoreIO: localStore,
+    );
+    const authorityAdmission = _AtlasFailClosedPlaintextAuthorityAdmission();
+    final controller = AtlasAppController(
+      localCacheStoreFactory: _noPersistentPlaintextCache,
+      privateStatePersistence: runtime,
+      plaintextAuthorityAdmission: authorityAdmission,
+    );
+    return _AtlasDefaultControllerAssembly(
+      controller: controller,
+      bootstrap: () async {
+        final vaultId = await selectedVaultStore.read();
+        if (vaultId == null) return;
+        final result = await controller._activateImportedAtlasVault(vaultId);
+        if (result != AtlasVaultActivationResult.activated) {
+          throw const AtlasVaultPrivateStateException();
+        }
+      },
     );
   }
 

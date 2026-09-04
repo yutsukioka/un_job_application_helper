@@ -9,7 +9,7 @@ public protocol AtlasVaultRuntimeFacading: Sendable {
     ) async throws -> AtlasVaultSaveOutcome
 }
 
-protocol AtlasVaultPrivateStateReading: Sendable {
+public protocol AtlasVaultPrivateStateReading: Sendable {
     func privateState() async throws -> AtlasVaultPrivateStateSnapshot
 }
 
@@ -201,19 +201,23 @@ public struct AtlasVaultRuntimeMutationRequest:
     }
 }
 
-struct AtlasVaultPrivateStateSnapshot:
+public struct AtlasVaultPrivateStateSnapshot:
     Equatable,
     Sendable,
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    let state: AtlasVaultHydratedState
+    public let state: AtlasVaultHydratedState
 
-    var description: String {
+    public init(state: AtlasVaultHydratedState) {
+        self.state = state
+    }
+
+    public var description: String {
         "AtlasVaultPrivateStateSnapshot(state: <redacted>)"
     }
 
-    var debugDescription: String {
+    public var debugDescription: String {
         description
     }
 }
@@ -423,7 +427,7 @@ public actor AtlasVaultRuntimeFacade:
         return true
     }
 
-    func privateState() async throws -> AtlasVaultPrivateStateSnapshot {
+    public func privateState() async throws -> AtlasVaultPrivateStateSnapshot {
         guard runtimeStatus == .unlocked,
               activeOperation == nil else {
             throw AtlasVaultRuntimeFacadeError.privateStateUnavailable

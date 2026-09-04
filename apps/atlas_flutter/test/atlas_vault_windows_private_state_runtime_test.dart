@@ -23,13 +23,13 @@ void main() {
       contains("import 'package:atlas/atlas_vault_windows.dart';"),
     );
     final windowsStart = source.indexOf('if (Platform.isWindows) {');
-    final fallbackStart = source.indexOf(
-      'if (!Platform.isAndroid)',
+    final appleStart = source.indexOf(
+      'if (Platform.isIOS || Platform.isMacOS)',
       windowsStart < 0 ? 0 : windowsStart,
     );
     expect(windowsStart, isNonNegative);
-    expect(fallbackStart, greaterThan(windowsStart));
-    final windowsAssembly = source.substring(windowsStart, fallbackStart);
+    expect(appleStart, greaterThan(windowsStart));
+    final windowsAssembly = source.substring(windowsStart, appleStart);
     expect(
       'AtlasWindowsVaultSecureKeyStore'.allMatches(windowsAssembly),
       hasLength(1),

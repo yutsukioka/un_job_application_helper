@@ -1,0 +1,76 @@
+{
+  "format": "atlasvault-private-record-parity",
+  "version": 1,
+  "capability_semantics": "A true family capability identifies a validated language/runtime primitive. It does not by itself prove that the production host composes that primitive with the P5 outbox and P6/P7 epoch fence.",
+  "production_runtime_integration": {
+    "native_apple": false,
+    "flutter_android": false,
+    "flutter_windows": false,
+    "flutter_ios": false,
+    "flutter_macos": false
+  },
+  "blocking_gap": "Production hosts do not yet construct AtlasVaultEpochVault or atomically couple private-record mutations to its signed outbox and pending-state admission.",
+  "record_families": [
+    {
+      "record_type": "saved_search",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "saved_job",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "application_note",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "profile_snippet",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "draft_metadata",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    }
+  ],
+  "excluded_record_families": [
+    {
+      "record_type": "saved_text",
+      "reason": "legacy_reference_fixture_only"
+    }
+  ]
+}

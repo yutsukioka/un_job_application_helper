@@ -76,6 +76,7 @@ def test_no_supported_production_composition_uses_plaintext_fallback() -> None:
 
 
 def test_production_compositions_bind_sync_outbox_and_epoch_fences() -> None:
+    contract = json.loads(PARITY.read_text(encoding="utf-8"))
     flutter = (
         ROOT / "apps/atlas_flutter/lib/features/app_shell/atlas_app.dart"
     ).read_text(encoding="utf-8")
@@ -86,6 +87,7 @@ def test_production_compositions_bind_sync_outbox_and_epoch_fences() -> None:
         ROOT / "apps/apple/Sources/AtlasUI/AtlasMacAppProcessOwner.swift"
     ).read_text(encoding="utf-8")
 
+    assert all(contract["production_runtime_integration"].values())
     assert "AtlasVaultEpochVault(" in flutter
     assert "queueOperation(" in private_runtime
     for state in (

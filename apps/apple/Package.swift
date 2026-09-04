@@ -11,9 +11,12 @@ let package = Package(
     ],
     products: [
         .library(name: "AtlasUI", targets: ["AtlasUI"]),
+        .executable(name: "AtlasMacHost", targets: ["AtlasMacHost"]),
     ],
     targets: [
         .target(name: "AtlasUI"),
+        // AtlasMacAppProcessOwner is the production lifecycle boundary.
+        .executableTarget(name: "AtlasMacHost", dependencies: ["AtlasUI"]),
         .testTarget(name: "AtlasUITests", dependencies: ["AtlasUI"]),
     ]
 )

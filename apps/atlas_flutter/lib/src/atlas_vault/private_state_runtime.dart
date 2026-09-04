@@ -21,16 +21,59 @@ final class AtlasVaultPrivateStateSnapshot {
   AtlasVaultPrivateStateSnapshot({
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
+    List<AtlasVaultPrivateRecord> records = const <AtlasVaultPrivateRecord>[],
+    List<AtlasVaultPrivateTombstone> tombstones =
+        const <AtlasVaultPrivateTombstone>[],
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
          trackerRecords,
-       );
+       ),
+       records = List<AtlasVaultPrivateRecord>.unmodifiable(records),
+       tombstones = List<AtlasVaultPrivateTombstone>.unmodifiable(tombstones);
 
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
+  final List<AtlasVaultPrivateRecord> records;
+  final List<AtlasVaultPrivateTombstone> tombstones;
 
   @override
   String toString() => 'AtlasVaultPrivateStateSnapshot(<redacted>)';
+}
+
+final class AtlasVaultPrivateRecord {
+  const AtlasVaultPrivateRecord({
+    required this.recordId,
+    required this.revision,
+    required this.parentRevision,
+    required this.keyId,
+    required this.envelope,
+  });
+
+  final String recordId;
+  final String revision;
+  final String? parentRevision;
+  final String keyId;
+  final vault.AtlasVaultPayloadEnvelope envelope;
+
+  @override
+  String toString() => 'AtlasVaultPrivateRecord(<redacted>)';
+}
+
+final class AtlasVaultPrivateTombstone {
+  const AtlasVaultPrivateTombstone({
+    required this.recordId,
+    required this.revision,
+    required this.parentRevision,
+    required this.keyId,
+  });
+
+  final String recordId;
+  final String revision;
+  final String? parentRevision;
+  final String keyId;
+
+  @override
+  String toString() => 'AtlasVaultPrivateTombstone(<redacted>)';
 }
 
 abstract interface class AtlasVaultPrivateStatePersistence {
@@ -88,6 +131,8 @@ final class AtlasVaultPrivateStateRuntime
   Map<String, _PrivateRecordMetadata> _savedSearchMetadata =
       const <String, _PrivateRecordMetadata>{};
   Map<String, _PrivateRecordMetadata> _trackerMetadata =
+      const <String, _PrivateRecordMetadata>{};
+  Map<String, _PrivateRecordMetadata> _recordMetadata =
       const <String, _PrivateRecordMetadata>{};
   Future<void> _mutationTail = Future<void>.value();
   int _pendingMutationCount = 0;
@@ -181,6 +226,70 @@ final class AtlasVaultPrivateStateRuntime
   ) {
     return _enqueueMutation(
       (_MutationSession session) => _saveTrackerRecord(session, value),
+    );
+  }
+
+  Future<AtlasVaultPrivateStateSnapshot> createRecord(
+    vault.AtlasVaultPayloadEnvelope envelope,
+  ) {
+    return _enqueueMutation(
+      (session) => _commitMutation(
+        session,
+        envelope: envelope,
+        existing: null,
+        updatedAt: _utcSeconds(_now()),
+        currentLogicalMetadata: (_) => null,
+        verify: (_) => true,
+      ),
+    );
+  }
+
+  Future<AtlasVaultPrivateStateSnapshot> updateRecord({
+    required String recordId,
+    required String currentRevision,
+    required vault.AtlasVaultPayloadEnvelope envelope,
+  }) {
+    final existing = _recordMetadata[recordId];
+    if (existing == null || existing.record.revision != currentRevision) {
+      return Future<AtlasVaultPrivateStateSnapshot>.error(
+        const AtlasVaultPrivateStateException(),
+      );
+    }
+    return _enqueueMutation(
+      (session) => _commitMutation(
+        session,
+        envelope: envelope,
+        existing: existing,
+        updatedAt: _utcSeconds(_now()),
+        currentLogicalMetadata: (hydrated) => hydrated.recordMetadata[recordId],
+        verify: (hydrated) =>
+            hydrated.recordMetadata[recordId]?.envelope == envelope,
+      ),
+    );
+  }
+
+  Future<AtlasVaultPrivateStateSnapshot> deleteRecord({
+    required String recordId,
+    required String currentRevision,
+  }) {
+    final existing = _recordMetadata[recordId];
+    if (existing == null || existing.record.revision != currentRevision) {
+      return Future<AtlasVaultPrivateStateSnapshot>.error(
+        const AtlasVaultPrivateStateException(),
+      );
+    }
+    return _enqueueMutation(
+      (session) => _commitMutation(
+        session,
+        envelope: existing.envelope,
+        existing: existing,
+        deleted: true,
+        updatedAt: _utcSeconds(_now()),
+        currentLogicalMetadata: (hydrated) => hydrated.recordMetadata[recordId],
+        verify: (hydrated) =>
+            hydrated.tombstoneRecords[recordId]?.parentRevision ==
+            currentRevision,
+      ),
     );
   }
 
@@ -389,6 +498,7 @@ final class AtlasVaultPrivateStateRuntime
     _MutationSession session, {
     required vault.AtlasVaultPayloadEnvelope envelope,
     required _PrivateRecordMetadata? existing,
+    bool deleted = false,
     required String updatedAt,
     required _PrivateRecordMetadata? Function(_HydratedPrivateState hydrated)
     currentLogicalMetadata,
@@ -432,14 +542,14 @@ final class AtlasVaultPrivateStateRuntime
                 vault.AtlasVaultEncryptedRecord.supportedSchemaVersion,
             'revision': revision,
             'parent_revision': existing?.record.revision,
-            'deleted': false,
+            'deleted': deleted,
             'key_id': existing?.record.keyId ?? _recordKeyId,
             'nonce': base64Encode(nonce),
             'ciphertext': base64Encode(
               Uint8List(vault.AtlasVaultEncryptedRecord.gcmTagByteCount),
             ),
           });
-      plaintext = envelope.canonicalBytes();
+      plaintext = deleted ? Uint8List(0) : envelope.canonicalBytes();
       final encrypted = await vault.sealAtlasVaultRecord(
         plaintext: plaintext,
         vaultKey: session.vaultKey,
@@ -480,16 +590,13 @@ final class AtlasVaultPrivateStateRuntime
         vaultKey: session.vaultKey,
         store: committedStore,
       );
-      final committedMetadata = _metadataForRecordId(
-        committedHydrated,
-        recordId,
-      );
-      if (committedMetadata == null ||
-          committedMetadata.record.revision != revision ||
-          committedMetadata.record.parentRevision !=
-              existing?.record.revision ||
-          committedMetadata.record.keyId !=
-              (existing?.record.keyId ?? _recordKeyId) ||
+      final committedRecord = deleted
+          ? committedHydrated.tombstoneRecords[recordId]
+          : committedHydrated.recordMetadata[recordId]?.record;
+      if (committedRecord == null ||
+          committedRecord.revision != revision ||
+          committedRecord.parentRevision != existing?.record.revision ||
+          committedRecord.keyId != (existing?.record.keyId ?? _recordKeyId) ||
           !verify(committedHydrated) ||
           !_active ||
           _generation != session.generation ||
@@ -518,6 +625,10 @@ final class AtlasVaultPrivateStateRuntime
     final trackerRecords = <AtlasApplicationRecord>[];
     final savedMetadata = <String, _PrivateRecordMetadata>{};
     final trackerMetadata = <String, _PrivateRecordMetadata>{};
+    final recordMetadata = <String, _PrivateRecordMetadata>{};
+    final tombstoneRecords = <String, vault.AtlasVaultEncryptedRecord>{};
+    final records = <AtlasVaultPrivateRecord>[];
+    final tombstones = <AtlasVaultPrivateTombstone>[];
 
     for (final record in store.records) {
       Uint8List? plaintext;
@@ -528,10 +639,36 @@ final class AtlasVaultPrivateStateRuntime
           record: record,
         );
         if (record.deleted) {
+          tombstoneRecords[record.id] = record;
+          tombstones.add(
+            AtlasVaultPrivateTombstone(
+              recordId: record.id,
+              revision: record.revision,
+              parentRevision: record.parentRevision,
+              keyId: record.keyId,
+            ),
+          );
           continue;
         }
         final envelope = vault.AtlasVaultPayloadEnvelope.decodeJson(
           utf8.decode(plaintext, allowMalformed: false),
+        );
+        if (recordMetadata.containsKey(record.id)) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        final metadata = _PrivateRecordMetadata(
+          record: record,
+          envelope: envelope,
+        );
+        recordMetadata[record.id] = metadata;
+        records.add(
+          AtlasVaultPrivateRecord(
+            recordId: record.id,
+            revision: record.revision,
+            parentRevision: record.parentRevision,
+            keyId: record.keyId,
+            envelope: envelope,
+          ),
         );
         switch (envelope.type) {
           case vault.AtlasVaultPayloadType.savedSearch:
@@ -582,6 +719,8 @@ final class AtlasVaultPrivateStateRuntime
       snapshot: AtlasVaultPrivateStateSnapshot(
         savedSearches: savedSearches,
         trackerRecords: trackerRecords,
+        records: records,
+        tombstones: tombstones,
       ),
       savedSearchMetadata: Map<String, _PrivateRecordMetadata>.unmodifiable(
         savedMetadata,
@@ -589,6 +728,13 @@ final class AtlasVaultPrivateStateRuntime
       trackerMetadata: Map<String, _PrivateRecordMetadata>.unmodifiable(
         trackerMetadata,
       ),
+      recordMetadata: Map<String, _PrivateRecordMetadata>.unmodifiable(
+        recordMetadata,
+      ),
+      tombstoneRecords:
+          Map<String, vault.AtlasVaultEncryptedRecord>.unmodifiable(
+            tombstoneRecords,
+          ),
     );
   }
 
@@ -683,23 +829,14 @@ final class AtlasVaultPrivateStateRuntime
     _HydratedPrivateState hydrated,
     String recordId,
   ) {
-    for (final metadata in hydrated.savedSearchMetadata.values) {
-      if (metadata.record.id == recordId) {
-        return metadata;
-      }
-    }
-    for (final metadata in hydrated.trackerMetadata.values) {
-      if (metadata.record.id == recordId) {
-        return metadata;
-      }
-    }
-    return null;
+    return hydrated.recordMetadata[recordId];
   }
 
   void _installHydrated(_HydratedPrivateState hydrated) {
     _snapshot = hydrated.snapshot;
     _savedSearchMetadata = hydrated.savedSearchMetadata;
     _trackerMetadata = hydrated.trackerMetadata;
+    _recordMetadata = hydrated.recordMetadata;
   }
 
   void _clearSession() {
@@ -713,6 +850,7 @@ final class AtlasVaultPrivateStateRuntime
     );
     _savedSearchMetadata = const <String, _PrivateRecordMetadata>{};
     _trackerMetadata = const <String, _PrivateRecordMetadata>{};
+    _recordMetadata = const <String, _PrivateRecordMetadata>{};
   }
 
   void _requireActive() {
@@ -735,6 +873,8 @@ final class AtlasVaultPrivateStateRuntime
     return AtlasVaultPrivateStateSnapshot(
       savedSearches: value.savedSearches,
       trackerRecords: value.trackerRecords,
+      records: value.records,
+      tombstones: value.tombstones,
     );
   }
 
@@ -887,9 +1027,13 @@ final class _HydratedPrivateState {
     required this.snapshot,
     required this.savedSearchMetadata,
     required this.trackerMetadata,
+    required this.recordMetadata,
+    required this.tombstoneRecords,
   });
 
   final AtlasVaultPrivateStateSnapshot snapshot;
   final Map<String, _PrivateRecordMetadata> savedSearchMetadata;
   final Map<String, _PrivateRecordMetadata> trackerMetadata;
+  final Map<String, _PrivateRecordMetadata> recordMetadata;
+  final Map<String, vault.AtlasVaultEncryptedRecord> tombstoneRecords;
 }
