@@ -1436,6 +1436,15 @@ asyncio_network_samples = (
 )
 if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
     raise SystemExit("Python AST asyncio network self-test failed.")
+asyncio_lifecycle_samples = (
+    "import asyncio\nawait asyncio.wait_for(operation(), timeout=60)",
+    (
+        "import asyncio\ntry:\n    await operation()\n"
+        "except asyncio.CancelledError:\n    pass"
+    ),
+)
+if any(_blocked_imports(sample) for sample in asyncio_lifecycle_samples):
+    raise SystemExit("Python AST asyncio lifecycle self-test failed.")
 process_launch_samples = (
     "import os.path\nos.system('python -c \"import socket\"')",
     "import subprocess\nsubprocess.run(['python', '-c', 'import socket'])",
