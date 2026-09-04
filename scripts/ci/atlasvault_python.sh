@@ -978,11 +978,13 @@ def _blocked_imports(source: str) -> bool:
     dynamic_execution_aliases = set()
     getattr_aliases = {"getattr"}
     dynamic_execution_builtins = frozenset({"eval", "exec"})
-    asyncio_network_aliases = set()
-    asyncio_network_apis = frozenset(
+    asyncio_restricted_aliases = set()
+    asyncio_restricted_apis = frozenset(
         {
             "create_connection",
             "create_server",
+            "create_subprocess_exec",
+            "create_subprocess_shell",
             "create_unix_connection",
             "create_unix_server",
             "open_connection",
@@ -1039,8 +1041,8 @@ def _blocked_imports(source: str) -> bool:
                 for alias in node.names:
                     if alias.name == "*":
                         return True
-                    if alias.name in asyncio_network_apis:
-                        asyncio_network_aliases.add(alias.asname or alias.name)
+                    if alias.name in asyncio_restricted_apis:
+                        asyncio_restricted_aliases.add(alias.asname or alias.name)
             elif module.startswith("asyncio."):
                 return True
             elif module == "builtins":
@@ -1174,18 +1176,18 @@ def _blocked_imports(source: str) -> bool:
             and node.value.id in builtins_module_aliases
         )
 
-    def _is_asyncio_network_reference(node: ast.expr) -> bool:
+    def _is_asyncio_restricted_reference(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
-            return node.id in asyncio_network_aliases
+            return node.id in asyncio_restricted_aliases
         if isinstance(node, ast.Attribute):
-            return node.attr in asyncio_network_apis
+            return node.attr in asyncio_restricted_apis
         return (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id in getattr_aliases
             and len(node.args) >= 2
             and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value in asyncio_network_apis
+            and node.args[1].value in asyncio_restricted_apis
         )
 
     def _is_pty_spawn_reference(node: ast.expr) -> bool:
@@ -1305,7 +1307,7 @@ def _blocked_imports(source: str) -> bool:
             )
             aliases_runpy_execution = _is_runpy_execution_reference(value)
             aliases_dynamic_execution = _is_dynamic_execution_reference(value)
-            aliases_asyncio_network = _is_asyncio_network_reference(value)
+            aliases_asyncio_restricted = _is_asyncio_restricted_reference(value)
             aliases_getattr = (
                 isinstance(value, ast.Name) and value.id in getattr_aliases
             )
@@ -1324,7 +1326,7 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_importlib_direct_loader_execution
                 and not aliases_runpy_execution
                 and not aliases_dynamic_execution
-                and not aliases_asyncio_network
+                and not aliases_asyncio_restricted
                 and not aliases_getattr
                 and not aliases_pty_spawn
             ):
@@ -1403,10 +1405,10 @@ def _blocked_imports(source: str) -> bool:
                     dynamic_execution_aliases.add(target.id)
                     changed = True
                 if (
-                    aliases_asyncio_network
-                    and target.id not in asyncio_network_aliases
+                    aliases_asyncio_restricted
+                    and target.id not in asyncio_restricted_aliases
                 ):
-                    asyncio_network_aliases.add(target.id)
+                    asyncio_restricted_aliases.add(target.id)
                     changed = True
                 if aliases_getattr and target.id not in getattr_aliases:
                     getattr_aliases.add(target.id)
@@ -1428,7 +1430,7 @@ def _blocked_imports(source: str) -> bool:
             return True
         if _is_dynamic_execution_reference(node.func):
             return True
-        if _is_asyncio_network_reference(node.func):
+        if _is_asyncio_restricted_reference(node.func):
             return True
         if _is_pty_spawn_reference(node.func):
             return True
