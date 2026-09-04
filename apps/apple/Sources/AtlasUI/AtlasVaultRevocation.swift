@@ -97,7 +97,8 @@ public enum AtlasVaultRevocation {
       registry.filter { $0["state"] as? String == "ACTIVE" }.compactMap {
         $0["device_id"] as? String
       })
-    guard active.contains(target), active.contains(initiator), !active.subtracting([target]).isEmpty
+    guard target != initiator, active.contains(target), active.contains(initiator),
+      !active.subtracting([target]).isEmpty
     else { throw AtlasVaultRevocationError.authority }
     return registry.map { e in
       var row = e

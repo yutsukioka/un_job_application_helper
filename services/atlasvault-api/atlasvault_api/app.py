@@ -351,6 +351,17 @@ _STORAGE_READ_OPENAPI_RESPONSES = {
         "model": FixedErrorResponse,
     },
 }
+_ACTIVATION_READ_OPENAPI_RESPONSES = {
+    **_STORAGE_READ_OPENAPI_RESPONSES,
+    403: {
+        "description": "The authenticated device is revoked for this activation",
+        "model": FixedErrorResponse,
+    },
+    423: {
+        "description": "A recipient-bound delivery proof is not yet available",
+        "model": FixedErrorResponse,
+    },
+}
 _STORAGE_LIST_OPENAPI_RESPONSES = {
     **_STORAGE_COMMON_OPENAPI_RESPONSES,
     400: {
@@ -1506,7 +1517,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "/v1/vaults/{vault_id}/activations",
         response_model=DeviceDeliveryPacket,
         operation_id="getEpochActivation",
-        responses=_STORAGE_READ_OPENAPI_RESPONSES,
+        responses=_ACTIVATION_READ_OPENAPI_RESPONSES,
     )
     def get_epoch_activation(
         vault_id: VaultPath, authorization: BearerAuthorization = None
@@ -1523,6 +1534,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "/v1/vaults/{vault_id}/activations/{epoch}/delivery",
         response_model=DeviceDeliveryPacket,
         operation_id="getDeviceEpochDelivery",
+        responses=_ACTIVATION_READ_OPENAPI_RESPONSES,
     )
     def get_device_epoch_delivery(
         vault_id: VaultPath,

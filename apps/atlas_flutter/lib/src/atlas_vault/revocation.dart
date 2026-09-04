@@ -127,7 +127,8 @@ abstract final class AtlasVaultRevocation {
         .where((e) => e['state'] == 'ACTIVE')
         .map((e) => e['device_id'])
         .toSet();
-    if (!active.contains(target) ||
+    if (target == initiator ||
+        !active.contains(target) ||
         !active.contains(initiator) ||
         active.difference({target}).isEmpty) {
       _revFail('ATLAS_REMOVAL_AUTHORITY');

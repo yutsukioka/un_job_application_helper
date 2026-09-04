@@ -137,7 +137,12 @@ def _message(root):
 def _removed(entries, target, initiator):
     registry_root(entries)
     active = {e["device_id"] for e in entries if e["state"] == "ACTIVE"}
-    if target not in active or initiator not in active or len(active - {target}) == 0:
+    if (
+        target == initiator
+        or target not in active
+        or initiator not in active
+        or len(active - {target}) == 0
+    ):
         _fail("ATLAS_REMOVAL_AUTHORITY")
     return [dict(e, state="REVOKED" if e["device_id"] == target else e["state"]) for e in entries]
 

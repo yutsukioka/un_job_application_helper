@@ -74,6 +74,9 @@ class CommitmentLog:
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS device_deliveries (account TEXT NOT NULL, vault TEXT NOT NULL, epoch INTEGER NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,vault,epoch,recipient))"
         )
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS prepared_device_deliveries (account TEXT NOT NULL, vault TEXT NOT NULL, transition TEXT NOT NULL, epoch INTEGER NOT NULL, recipient TEXT NOT NULL, issuer TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,vault,transition,recipient))"
+        )
 
     def activation_at(self, account_id, vault_id, epoch):
         with self._lock:
@@ -83,45 +86,107 @@ class CommitmentLog:
             ).fetchone()
             return json.loads(row[0]) if row else None
 
+    def _delivery_body(
+        self, account_id, vault_id, epoch, issuer_id, packet, record=None
+    ):
+        p = packet["proof"]
+        recipient = p["recipient_device_id"]
+        if p["issuer_device_id"] != issuer_id:
+            raise CommitmentConflict()
+        if record is not None:
+            old = record["proof"]
+            if (
+                p["activation_id"] != record["transition_id"]
+                or any(
+                    p[k] != old[k]
+                    for k in (
+                        "plan",
+                        "revocation",
+                        "registry",
+                        "rotation_signer_device_id",
+                    )
+                )
+                or packet["wrapper"]
+                != next(d for d in old["deliveries"] if d["device_id"] == recipient)
+            ):
+                raise CommitmentConflict()
+            registry = old["registry"]
+            previous_epoch = old["plan"]["previous_epoch"]
+            state_root = old["plan"]["state_root"]
+            activation_id = record["transition_id"]
+        else:
+            plan = p["plan"]
+            if (
+                plan["account_id"] != account_id
+                or plan["vault_id"] != vault_id
+                or plan["new_epoch"] != epoch
+            ):
+                raise CommitmentConflict()
+            registry = p["registry"]
+            previous_epoch = plan["previous_epoch"]
+            state_root = plan["state_root"]
+            activation_id = p["activation_id"]
+        verify_device_delivery(
+            packet,
+            registry=registry,
+            account_id=account_id,
+            vault_id=vault_id,
+            previous_epoch=previous_epoch,
+            state_root=state_root,
+            activation_id=activation_id,
+            recipient_device_id=recipient,
+        )
+        body = json.dumps(packet, sort_keys=True, separators=(",", ":"))
+        if len(body) > 1024 * 1024:
+            raise CommitmentConflict()
+        return recipient, body
+
     def put_delivery(self, account_id, vault_id, epoch, issuer_id, packet):
-        """Store a client attestation only after matching immutable activation bytes."""
+        """Durably stage attestations, then expose them only with an activation."""
         with self._lock:
             try:
                 self._db.execute("BEGIN IMMEDIATE")
                 record = self.activation_at(account_id, vault_id, epoch)
                 current = self.activation(account_id, vault_id)
-                if not record or not current:
-                    raise CommitmentConflict()
-                p, old = packet["proof"], record["proof"]
-                recipient = p["recipient_device_id"]
-                if (
-                    p["issuer_device_id"] != issuer_id
-                    or issuer_id not in current["proof"]["plan"]["recipients"]
+                recipient, body = self._delivery_body(
+                    account_id, vault_id, epoch, issuer_id, packet, record
+                )
+                if current and (
+                    issuer_id not in current["proof"]["plan"]["recipients"]
                     or recipient not in current["proof"]["plan"]["recipients"]
-                    or any(
-                        p[k] != old[k]
-                        for k in (
-                            "plan",
-                            "revocation",
-                            "registry",
-                            "rotation_signer_device_id",
-                        )
-                    )
-                    or packet["wrapper"]
-                    != next(d for d in old["deliveries"] if d["device_id"] == recipient)
                 ):
                     raise CommitmentConflict()
-                verify_device_delivery(
-                    packet,
-                    registry=old["registry"],
-                    account_id=account_id,
-                    vault_id=vault_id,
-                    previous_epoch=old["plan"]["previous_epoch"],
-                    state_root=old["plan"]["state_root"],
-                    activation_id=record["transition_id"],
-                    recipient_device_id=recipient,
-                )
-                body = json.dumps(packet, sort_keys=True, separators=(",", ":"))
+                if record is None:
+                    transition = packet["proof"]["activation_id"]
+                    row = self._db.execute(
+                        "SELECT issuer,body FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=? AND recipient=?",
+                        (account_id, vault_id, transition, recipient),
+                    ).fetchone()
+                    if row:
+                        if row != (issuer_id, body):
+                            raise CommitmentConflict()
+                    else:
+                        if (
+                            self._db.execute(
+                                "SELECT COUNT(*) FROM prepared_device_deliveries"
+                            ).fetchone()[0]
+                            >= 8192
+                        ):
+                            raise CommitmentConflict()
+                        self._db.execute(
+                            "INSERT INTO prepared_device_deliveries VALUES(?,?,?,?,?,?,?)",
+                            (
+                                account_id,
+                                vault_id,
+                                transition,
+                                epoch,
+                                recipient,
+                                issuer_id,
+                                body,
+                            ),
+                        )
+                    self._db.execute("COMMIT")
+                    return
                 row = self._db.execute(
                     "SELECT body FROM device_deliveries WHERE account=? AND vault=? AND epoch=? AND recipient=?",
                     (account_id, vault_id, epoch, recipient),
@@ -131,8 +196,7 @@ class CommitmentLog:
                         raise CommitmentConflict()
                 else:
                     if (
-                        len(body) > 1024 * 1024
-                        or self._db.execute(
+                        self._db.execute(
                             "SELECT COUNT(*) FROM device_deliveries"
                         ).fetchone()[0]
                         >= 8192
@@ -187,6 +251,24 @@ class CommitmentLog:
                         or device_id not in proof["plan"]["recipients"]
                     ):
                         raise CommitmentConflict()
+                    rows = self._db.execute(
+                        "SELECT recipient,body FROM device_deliveries WHERE account=? AND vault=? AND epoch=?",
+                        (account_id, vault_id, proof["plan"]["new_epoch"]),
+                    ).fetchall()
+                    if {row[0] for row in rows} != set(proof["plan"]["recipients"]):
+                        raise CommitmentConflict()
+                    for recipient, body in rows:
+                        packet = json.loads(body)
+                        actual, canonical = self._delivery_body(
+                            account_id,
+                            vault_id,
+                            proof["plan"]["new_epoch"],
+                            device_id,
+                            packet,
+                            current,
+                        )
+                        if actual != recipient or canonical != body:
+                            raise CommitmentConflict()
                     self._db.execute("COMMIT")
                     return current
                 prior_registry = registry
@@ -227,13 +309,60 @@ class CommitmentLog:
                 body = json.dumps(record, sort_keys=True, separators=(",", ":"))
                 if len(body) > 1024 * 1024:
                     raise CommitmentConflict()
+                prepared = self._db.execute(
+                    "SELECT recipient,issuer,body FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=? AND epoch=?",
+                    (account_id, vault_id, proof["root"], result["new_epoch"]),
+                ).fetchall()
+                if {row[0] for row in prepared} != set(result["recipients"]):
+                    raise CommitmentConflict()
+                deliveries = []
+                for recipient, issuer, delivery_body in prepared:
+                    packet = json.loads(delivery_body)
+                    actual, canonical = self._delivery_body(
+                        account_id,
+                        vault_id,
+                        result["new_epoch"],
+                        issuer,
+                        packet,
+                        record,
+                    )
+                    if (
+                        issuer != device_id
+                        or actual != recipient
+                        or canonical != delivery_body
+                    ):
+                        raise CommitmentConflict()
+                    deliveries.append((recipient, delivery_body))
+                if (
+                    self._db.execute(
+                        "SELECT COUNT(*) FROM device_deliveries"
+                    ).fetchone()[0]
+                    + len(deliveries)
+                    > 8192
+                ):
+                    raise CommitmentConflict()
                 self._db.execute(
                     "INSERT INTO activations VALUES(?,?,?,?,?)",
                     (account_id, vault_id, result["new_epoch"], proof["root"], body),
                 )
+                for recipient, delivery_body in deliveries:
+                    self._db.execute(
+                        "INSERT INTO device_deliveries VALUES(?,?,?,?,?)",
+                        (
+                            account_id,
+                            vault_id,
+                            result["new_epoch"],
+                            recipient,
+                            delivery_body,
+                        ),
+                    )
+                self._db.execute(
+                    "DELETE FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=?",
+                    (account_id, vault_id, proof["root"]),
+                )
                 self._db.execute("COMMIT")
                 return record
-            except (ValueError, TypeError, KeyError, sqlite3.Error):
+            except (ValueError, TypeError, KeyError, StopIteration, sqlite3.Error):
                 raise CommitmentConflict() from None
             finally:
                 if self._db.in_transaction:

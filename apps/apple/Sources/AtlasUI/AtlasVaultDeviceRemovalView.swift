@@ -19,6 +19,29 @@ extension AtlasVaultRemovalController {
   func cancel() { context.invalidate() }
 }
 
+struct AtlasVaultRemovalTaskID: Hashable {
+  private let controller: ObjectIdentifier
+  private let target: String
+  private let epoch: Int64
+  init(controller: AtlasVaultRemovalController, target: String, epoch: Int64) {
+    self.controller = ObjectIdentifier(controller)
+    self.target = target
+    self.epoch = epoch
+  }
+}
+
+@MainActor final class AtlasVaultRemovalViewBinding {
+  private var controller: AtlasVaultRemovalController?
+  func rebind(_ controller: AtlasVaultRemovalController) {
+    self.controller?.cancel()
+    self.controller = controller
+  }
+  func cancel() {
+    controller?.cancel()
+    controller = nil
+  }
+}
+
 @MainActor public struct AtlasAppleDeviceRemovalAuthorizer: CustomStringConvertible {
   private let evaluate: () async -> Bool
   public init() { evaluate = Self.evaluateFresh }
@@ -57,6 +80,7 @@ extension AtlasVaultRemovalController {
   @State private var busy = false
   @State private var status = "Loading"
   @State private var root = ""
+  @State private var binding = AtlasVaultRemovalViewBinding()
   public init(controller: AtlasVaultRemovalController, targetDevice: String, keyEpoch: Int64) {
     self.controller = controller
     self.target = targetDevice
@@ -96,8 +120,8 @@ extension AtlasVaultRemovalController {
       .disabled(!confirmed || busy || status != "ACTIVE")
     }
     .navigationTitle("Remove Device")
-    .task(id: target) {
-      controller.cancel()
+    .task(id: AtlasVaultRemovalTaskID(controller: controller, target: target, epoch: epoch)) {
+      binding.rebind(controller)
       confirmed = false
       do {
         guard target.range(of: "^avd1-[0-9a-f]{64}$", options: .regularExpression) != nil,
@@ -109,6 +133,6 @@ extension AtlasVaultRemovalController {
         root = state["root"] as! String
       } catch { status = "RECOVERY_PENDING" }
     }
-    .onDisappear { controller.cancel() }
+    .onDisappear { binding.cancel() }
   }
 }

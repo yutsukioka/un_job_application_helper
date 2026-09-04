@@ -110,8 +110,7 @@ def activation_packets(proof, devices):
 def stage_activation_deliveries(http, headers, proof, devices, packets=None):
     packets = packets or activation_packets(proof, devices)
     route = (
-        f"/v1/vaults/{VAULT}/activations/"
-        f"{proof['plan']['new_epoch']}/delivery-proofs"
+        f"/v1/vaults/{VAULT}/activations/{proof['plan']['new_epoch']}/delivery-proofs"
     )
     for packet in packets:
         response = http.post(route, json=packet, headers=headers[0])

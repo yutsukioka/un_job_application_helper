@@ -1121,6 +1121,26 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The authenticated device is revoked for this activation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "A recipient-bound delivery proof is not yet available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1176,6 +1196,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated device is revoked for this activation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "A recipient-bound delivery proof is not yet available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
                 }
               }
             }
