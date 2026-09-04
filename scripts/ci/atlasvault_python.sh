@@ -1491,6 +1491,28 @@ asyncio_network_samples = (
 )
 if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
     raise SystemExit("Python AST asyncio network self-test failed.")
+asyncio_process_launch_samples = (
+    (
+        "import asyncio\n"
+        "await asyncio.create_subprocess_exec('python', '-c', 'import socket')"
+    ),
+    (
+        "from asyncio import create_subprocess_shell as launch\n"
+        "await launch('python -c \\\"import socket\\\"')"
+    ),
+    (
+        "import asyncio\nlaunch = asyncio.create_subprocess_exec\n"
+        "await launch('python', '-c', 'import socket')"
+    ),
+    (
+        "import asyncio\n"
+        "await getattr(asyncio, 'create_subprocess_shell')('python -V')"
+    ),
+)
+if not all(
+    _blocked_imports(sample) for sample in asyncio_process_launch_samples
+):
+    raise SystemExit("Python AST asyncio process-launch self-test failed.")
 asyncio_lifecycle_samples = (
     "import asyncio\nawait asyncio.wait_for(operation(), timeout=60)",
     (
