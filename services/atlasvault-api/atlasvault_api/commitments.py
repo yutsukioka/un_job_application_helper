@@ -20,6 +20,7 @@ Identifier = Annotated[
     str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._~-]+$")
 ]
 Counter = Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]
+MAX_VAULT_ROTATION_ROWS = 8192
 
 
 class StateViewModel(BaseModel):
@@ -166,13 +167,23 @@ class CommitmentLog:
                         if row != (issuer_id, body):
                             raise CommitmentConflict()
                     else:
-                        if (
+                        while (
                             self._db.execute(
-                                "SELECT COUNT(*) FROM prepared_device_deliveries"
+                                "SELECT COUNT(*) FROM prepared_device_deliveries WHERE account=? AND vault=?",
+                                (account_id, vault_id),
                             ).fetchone()[0]
-                            >= 8192
+                            >= MAX_VAULT_ROTATION_ROWS
                         ):
-                            raise CommitmentConflict()
+                            stale = self._db.execute(
+                                "SELECT transition FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition<>? GROUP BY transition ORDER BY MIN(rowid) LIMIT 1",
+                                (account_id, vault_id, transition),
+                            ).fetchone()
+                            if stale is None:
+                                raise CommitmentConflict()
+                            self._db.execute(
+                                "DELETE FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=?",
+                                (account_id, vault_id, stale[0]),
+                            )
                         self._db.execute(
                             "INSERT INTO prepared_device_deliveries VALUES(?,?,?,?,?,?,?)",
                             (
@@ -197,9 +208,10 @@ class CommitmentLog:
                 else:
                     if (
                         self._db.execute(
-                            "SELECT COUNT(*) FROM device_deliveries"
+                            "SELECT COUNT(*) FROM device_deliveries WHERE account=? AND vault=?",
+                            (account_id, vault_id),
                         ).fetchone()[0]
-                        >= 8192
+                        >= MAX_VAULT_ROTATION_ROWS
                     ):
                         raise CommitmentConflict()
                     self._db.execute(
@@ -293,10 +305,11 @@ class CommitmentLog:
                     or device_id not in result["recipients"]
                     or proof["plan"]["prior_registry_root"]
                     != revocation_registry_root(prior_registry)
-                    or self._db.execute("SELECT COUNT(*) FROM activations").fetchone()[
-                        0
-                    ]
-                    >= 8192
+                    or self._db.execute(
+                        "SELECT COUNT(*) FROM activations WHERE account=? AND vault=?",
+                        (account_id, vault_id),
+                    ).fetchone()[0]
+                    >= MAX_VAULT_ROTATION_ROWS
                 ):
                     raise CommitmentConflict()
                 record = dict(
@@ -335,10 +348,11 @@ class CommitmentLog:
                     deliveries.append((recipient, delivery_body))
                 if (
                     self._db.execute(
-                        "SELECT COUNT(*) FROM device_deliveries"
+                        "SELECT COUNT(*) FROM device_deliveries WHERE account=? AND vault=?",
+                        (account_id, vault_id),
                     ).fetchone()[0]
                     + len(deliveries)
-                    > 8192
+                    > MAX_VAULT_ROTATION_ROWS
                 ):
                     raise CommitmentConflict()
                 self._db.execute(
@@ -357,8 +371,8 @@ class CommitmentLog:
                         ),
                     )
                 self._db.execute(
-                    "DELETE FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=?",
-                    (account_id, vault_id, proof["root"]),
+                    "DELETE FROM prepared_device_deliveries WHERE account=? AND vault=? AND epoch<=?",
+                    (account_id, vault_id, result["new_epoch"]),
                 )
                 self._db.execute("COMMIT")
                 return record

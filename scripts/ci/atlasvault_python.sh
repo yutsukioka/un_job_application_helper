@@ -996,6 +996,8 @@ def _blocked_imports(source: str) -> bool:
             "sock_sendall",
             "start_server",
             "start_unix_server",
+            "subprocess_exec",
+            "subprocess_shell",
         }
     )
     pty_module_aliases = set()

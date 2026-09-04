@@ -2,17 +2,18 @@
 
 import copy
 import json
-from vaultsync.device_delivery import create_device_delivery
-from vaultsync.epoch_rotation import create_epoch_rotation
-from vaultsync.revocation import verify_transition
-from test_atlasvault_backend_c13 import ACCOUNT_B
+
+from atlasvault_api.app import AtlasVaultBackend
 from test_atlasvault_activation_c26 import (
     VAULT,
     activation_packets,
     activation_record,
     environment,
 )
-from atlasvault_api.app import AtlasVaultBackend
+from test_atlasvault_backend_c13 import ACCOUNT_B
+from vaultsync.device_delivery import create_device_delivery
+from vaultsync.epoch_rotation import create_epoch_rotation
+from vaultsync.revocation import verify_transition
 
 
 def test_legacy_fenced_then_only_own_proof_returned(tmp_path):
@@ -104,8 +105,15 @@ def test_prepared_delivery_quota_is_vault_scoped_and_stale_rows_expire(tmp_path)
     backend.commitments._db.executemany(
         "INSERT INTO prepared_device_deliveries VALUES(?,?,?,?,?,?,?)",
         [
-            (ACCOUNT_B, "foreign-vault", f"transition-{index}", 4,
-             f"recipient-{index}", "foreign-issuer", "{}")
+            (
+                ACCOUNT_B,
+                "foreign-vault",
+                f"transition-{index}",
+                4,
+                f"recipient-{index}",
+                "foreign-issuer",
+                "{}",
+            )
             for index in range(8192)
         ],
     )
@@ -132,13 +140,19 @@ def test_prepared_delivery_quota_is_vault_scoped_and_stale_rows_expire(tmp_path)
             == 200
         )
     assert http.post(route, json=replacement, headers=headers[0]).status_code == 200
-    assert backend.commitments._db.execute(
-        "SELECT COUNT(*) FROM prepared_device_deliveries "
-        "WHERE account=? AND vault=? AND epoch<=?",
-        (proof["plan"]["account_id"], VAULT, 4),
-    ).fetchone()[0] == 0
-    assert backend.commitments._db.execute(
-        "SELECT COUNT(*) FROM prepared_device_deliveries "
-        "WHERE account=? AND vault=?",
-        (ACCOUNT_B, "foreign-vault"),
-    ).fetchone()[0] == 8192
+    assert (
+        backend.commitments._db.execute(
+            "SELECT COUNT(*) FROM prepared_device_deliveries "
+            "WHERE account=? AND vault=? AND epoch<=?",
+            (proof["plan"]["account_id"], VAULT, 4),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        backend.commitments._db.execute(
+            "SELECT COUNT(*) FROM prepared_device_deliveries "
+            "WHERE account=? AND vault=?",
+            (ACCOUNT_B, "foreign-vault"),
+        ).fetchone()[0]
+        == 8192
+    )

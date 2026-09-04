@@ -1555,6 +1555,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs",
         status_code=200,
         operation_id="publishDeviceEpochDelivery",
+        responses=_STORAGE_WRITE_OPENAPI_RESPONSES,
     )
     def publish_device_epoch_delivery(
         vault_id: VaultPath,
