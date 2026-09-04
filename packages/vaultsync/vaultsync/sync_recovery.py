@@ -167,15 +167,22 @@ class GuardedSyncState:
 
     def _stage_epoch(self, proof):
         """Called only inside the enclosing C26 atomic local publication."""
+        from .epoch_catch_up import bridge_records
+
         s = self._load()
         self._active(s)
+        records = bridge_records(s)
         if (
-            s.get("epoch_bridge") is not None
+            len(records) >= 32
             or not s["views"]
             or s["views"][-1]["root"] != proof["plan"]["state_root"]
         ):
             _reject(_PENDING)
-        s["epoch_bridge"] = proof
+        if records:
+            s.pop("epoch_bridge", None)
+            s["epoch_bridges"] = [*records, proof]
+        else:
+            s["epoch_bridge"] = proof
         self._bridge(s)
         self._chain(s["views"], self._bridge(s))
         return s

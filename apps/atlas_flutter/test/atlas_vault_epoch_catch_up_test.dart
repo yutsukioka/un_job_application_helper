@@ -148,6 +148,10 @@ void main() {
       expect((await c.observation())['status'], 'ACTIVE');
       expect((await c.observation())['key_epoch'], 3);
       expect(await c.pendingOperations(), hasLength(1));
+      await c.confirmRemoteAcceptance('10000000-0000-4000-8000-000000000099');
+      await c.beginActivation(proof);
+      expect((await c.observation())['status'], 'ACTIVATION_PENDING');
+      expect(await c.pendingOperations(), isEmpty);
     } finally {
       await root.delete(recursive: true);
     }
@@ -158,6 +162,7 @@ void main() {
     try {
       final packets = rows((v['packets'] as List)[0]);
       final first = await aggregateProof(packets[0]);
+      final second = await aggregateProof(packets[1]);
       final author = await device(root, 4, initialize: true);
       await author.acceptRotation(
         first,
@@ -172,9 +177,14 @@ void main() {
         signingKey: await Ed25519().newKeyPairFromSeed(List.filled(32, 14)),
       );
       final reader = await device(root, 0, initialize: true);
-      await reader.catchUp(
-        packets,
-        currentActivationID: v['target_activation_id'] as String,
+      await reader.acceptRotation(
+        first,
+        acceptedRecord: activationRecord(first),
+        agreementPrivateKey: Uint8List.fromList(List.filled(32, 20)),
+      );
+      await reader.acceptRotation(
+        second,
+        acceptedRecord: activationRecord(second),
         agreementPrivateKey: Uint8List.fromList(List.filled(32, 20)),
       );
       expect((await reader.observation())['key_epoch'], 5);

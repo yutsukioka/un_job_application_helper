@@ -125,13 +125,19 @@ final class AtlasVaultGuardedSyncState {
   Future<Map<String, Object?>> _stageEpoch(Map<String, Object?> proof) async {
     final s = await _load();
     await _active(s);
-    if (s['epoch_bridge'] != null ||
+    final records = _epochBridgeRecords(s);
+    if (records.length >= 32 ||
         _views(s['views']).isEmpty ||
         _views(s['views']).last['root'] !=
             _object(proof['plan'])['state_root']) {
       _viewFail('ATLAS_RECOVERY_PENDING');
     }
-    s['epoch_bridge'] = proof;
+    if (records.isEmpty) {
+      s['epoch_bridge'] = proof;
+    } else {
+      s.remove('epoch_bridge');
+      s['epoch_bridges'] = [...records, proof];
+    }
     await _bridge(s);
     await _chain(_views(s['views']), await _bridge(s));
     return s;

@@ -104,6 +104,10 @@ def test_rotation_waits_for_old_epoch_outbox_acceptance(tmp_path):
     assert c.observation()["status"] == "ACTIVE"
     assert c.observation()["key_epoch"] == 3
     assert len(c.pending_operations()) == 1
+    c.confirm_remote_acceptance("10000000-0000-4000-8000-000000000099")
+    c.begin_activation(first[2]["proof"])
+    assert c.observation()["status"] == "ACTIVATION_PENDING"
+    assert not c.pending_operations()
 
 
 def test_historical_author_is_checked_at_the_ciphertext_epoch(tmp_path):

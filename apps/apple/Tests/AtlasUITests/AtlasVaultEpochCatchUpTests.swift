@@ -61,6 +61,10 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     XCTAssertEqual(try c.observation()["status"] as? String, "ACTIVE")
     XCTAssertEqual(try c.observation()["key_epoch"] as? Int, 3)
     XCTAssertEqual(try c.pendingOperations().count, 1)
+    try c.confirmRemoteAcceptance("10000000-0000-4000-8000-000000000099")
+    try c.beginActivation(aggregateProof(packet))
+    XCTAssertEqual(try c.observation()["status"] as? String, "ACTIVATION_PENDING")
+    XCTAssertTrue(try c.pendingOperations().isEmpty)
   }
   func testHistoricalAuthorIsCheckedAtTheCiphertextEpoch() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -68,6 +72,7 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
     let v = try vector()
     let packets = (v["packets"] as! [[[String: Any]]])[0]
     let first = try aggregateProof(packets[0])
+    let second = try aggregateProof(packets[1])
     let author = try device(root, 4, v, initialize: true)
     XCTAssertTrue(
       try author.acceptRotation(
@@ -80,8 +85,12 @@ final class AtlasVaultEpochCatchUpTests: XCTestCase {
         rawRepresentation: Data(repeating: 14, count: 32)))
     let reader = try device(root, 0, v, initialize: true)
     XCTAssertTrue(
-      try reader.catchUp(
-        packets, currentActivationID: v["target_activation_id"] as! String,
+      try reader.acceptRotation(
+        first, acceptedRecord: activationRecord(first),
+        agreementPrivateKey: Data(repeating: 20, count: 32)))
+    XCTAssertTrue(
+      try reader.acceptRotation(
+        second, acceptedRecord: activationRecord(second),
         agreementPrivateKey: Data(repeating: 20, count: 32)))
     XCTAssertEqual(try reader.observation()["key_epoch"] as? Int, 5)
     XCTAssertEqual(try reader.open(historical), Data("synthetic-epoch-four-history".utf8))

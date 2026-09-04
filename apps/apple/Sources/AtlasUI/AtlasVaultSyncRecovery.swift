@@ -133,10 +133,16 @@ public final class AtlasVaultGuardedSyncState {
   func stageEpoch(_ proof: [String: Any]) throws -> [String: Any] {
     var s = try load()
     try active(s)
-    guard s["epoch_bridge"] == nil, let views = s["views"] as? [[String: Any]],
+    let records = try EpochCatchUp.records(s)
+    guard records.count < 32, let views = s["views"] as? [[String: Any]],
       views.last?["root"] as? String == (proof["plan"] as? [String: Any])?["state_root"] as? String
     else { throw AtlasVaultSyncRecoveryError.pending }
-    s["epoch_bridge"] = proof
+    if records.isEmpty {
+      s["epoch_bridge"] = proof
+    } else {
+      s.removeValue(forKey: "epoch_bridge")
+      s["epoch_bridges"] = records + [proof]
+    }
     _ = try bridge(s)
     _ = try chain(views, proof: bridge(s))
     return s

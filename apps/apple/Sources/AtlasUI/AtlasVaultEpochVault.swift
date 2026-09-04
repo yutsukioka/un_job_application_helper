@@ -43,13 +43,30 @@ public final class AtlasVaultEpochVault {
     guard let v = value as? [[String: Any]] else { throw AtlasVaultRotationError.rejected }
     return v
   }
-  private func verify(_ proof: [String: Any]) throws -> [String: Any] {
-    try R.verify(
-      proof, registry: registry, accountID: context["account_id"] as! String,
-      vaultID: context["vault_id"] as! String,
-      previousEpoch: R.integer(context["key_epoch"]), stateRoot: context["state_root"] as! String)
+  private func bridgeProof(_ record: [String: Any]) throws -> [String: Any] {
+    record["wrapper"] == nil ? record : try map(record["proof"])
   }
-  private func record(_ value: [String: Any]) throws -> [String: Any] {
+  private func stateRoot(_ state: [String: Any]) throws -> String {
+    let views = try rows(map(map(state["components"])["history"])["views"])
+    guard let root = views.last?["root"] as? String, root.utf8.count == 64 else {
+      throw AtlasVaultRotationError.rejected
+    }
+    return root
+  }
+  private func verify(_ proof: [String: Any], state: [String: Any]? = nil) throws
+    -> [String: Any]
+  {
+    try R.verify(
+      proof, registry: try state.map { try rows($0["registry"]) } ?? registry,
+      accountID: context["account_id"] as! String,
+      vaultID: context["vault_id"] as! String,
+      previousEpoch: try state.map { try R.integer($0["epoch"]) }
+        ?? R.integer(context["key_epoch"]),
+      stateRoot: try state.map { try stateRoot($0) } ?? context["state_root"] as! String)
+  }
+  private func record(_ value: [String: Any], state: [String: Any]? = nil) throws
+    -> [String: Any]
+  {
     try R.exact(value, ["format", "version", "status", "transition_id", "proof"])
     let proof = try map(value["proof"])
     guard value["format"] as? String == "atlasvault-activation-record",
@@ -57,7 +74,7 @@ public final class AtlasVaultEpochVault {
       value["status"] as? String == "ACTIVATION_ACCEPTED",
       value["transition_id"] as? String == proof["root"] as? String
     else { throw AtlasVaultRotationError.rejected }
-    return try verify(proof)
+    return try verify(proof, state: state)
   }
   func ring(_ state: [String: Any]) throws -> AtlasVaultKeyEpochRing {
     let raw = try map(state["keys"])
@@ -116,20 +133,35 @@ public final class AtlasVaultEpochVault {
         ].contains(j["phase"] as? String ?? "")
       else { throw AtlasVaultRotationError.rejected }
       let proof = try map(j["proof"])
-      let verified = try verify(proof)
-      if let r = j["record"] as? [String: Any] {
-        _ = try record(r)
-        guard try R.canonical(map(r["proof"])) == R.canonical(proof) else {
-          throw AtlasVaultRotationError.rejected
-        }
-      }
       if j["phase"] as? String == "ACTIVE" {
-        guard try R.integer(s["epoch"]) == R.integer(verified["new_epoch"]),
-          NSDictionary(dictionary: ["r": s["registry"]!]).isEqual(to: ["r": verified["registry"]!]),
-          s["recipients"] as? [String] == verified["recipients"] as? [String],
-          try R.canonical(map(map(map(s["components"])["history"])["epoch_bridge"]))
-            == R.canonical(proof)
+        let records = try EpochCatchUp.records(map(map(s["components"])["history"]))
+        let bridges = try EpochCatchUp.verify(records, registry: registry, context: context)
+        guard let latest = records.last, !bridges.isEmpty,
+          try R.canonical(bridgeProof(latest)) == R.canonical(proof)
         else { throw AtlasVaultRotationError.rejected }
+        if let value = j["record"] as? [String: Any] {
+          try R.exact(value, ["format", "version", "status", "transition_id", "proof"])
+          guard value["format"] as? String == "atlasvault-activation-record",
+            try R.integer(value["version"]) == 1,
+            value["status"] as? String == "ACTIVATION_ACCEPTED",
+            value["transition_id"] as? String == proof["root"] as? String,
+            try R.canonical(map(value["proof"])) == R.canonical(proof)
+          else { throw AtlasVaultRotationError.rejected }
+        }
+        let plan = try map(proof["plan"])
+        guard try R.integer(s["epoch"]) == R.integer(plan["new_epoch"]),
+          try AtlasVaultRevocation.registryRoot(rows(s["registry"]))
+            == plan["resulting_registry_root"] as? String,
+          s["recipients"] as? [String] == plan["recipients"] as? [String]
+        else { throw AtlasVaultRotationError.rejected }
+      } else {
+        _ = try verify(proof, state: s)
+        if let value = j["record"] as? [String: Any] {
+          _ = try record(value, state: s)
+          guard try R.canonical(map(value["proof"])) == R.canonical(proof) else {
+            throw AtlasVaultRotationError.rejected
+          }
+        }
       }
     }
     return s
@@ -239,15 +271,20 @@ public final class AtlasVaultEpochVault {
     try run {
       var s = try load()
       try active(s)
-      _ = try verify(proof)
+      let outbox = try AtlasVaultDurableEncryptedOutbox(
+        fileURL: file.fileURL, encryptionKey: key)
+      outbox.store = try componentFile("outbox")
+      guard try outbox.pendingOperations().isEmpty else {
+        throw AtlasVaultRotationError.outboxPending
+      }
+      _ = try verify(proof, state: s)
       guard
         try history(s).checkpoint()["cursor"] as? String == map(proof["plan"])["state_root"]
           as? String
       else { throw AtlasVaultRotationError.recovery }
-      if let j = s["journal"] as? [String: Any],
-        (j["proof"] as? [String: Any])?["root"] as? String != proof["root"] as? String
-      {
-        throw AtlasVaultRotationError.conflict
+      if let j = s["journal"] as? [String: Any], j["phase"] as? String != "ACTIVE" {
+        guard (j["proof"] as? [String: Any])?["root"] as? String == proof["root"] as? String
+        else { throw AtlasVaultRotationError.conflict }
       }
       s["journal"] = ["phase": "PREPARED", "proof": proof, "record": NSNull()]
       try file.write(s)
@@ -276,19 +313,26 @@ public final class AtlasVaultEpochVault {
   ) throws -> Bool {
     try run {
       var s = try load()
-      let verified = try record(acceptedRecord)
       guard try R.canonical(map(acceptedRecord["proof"])) == R.canonical(proof) else {
         throw AtlasVaultRotationError.rejected
       }
+      if let j = s["journal"] as? [String: Any], j["phase"] as? String == "ACTIVE",
+        let existing = j["proof"] as? [String: Any],
+        try R.canonical(existing) == R.canonical(proof)
+      {
+        guard let accepted = j["record"] as? [String: Any],
+          try R.canonical(accepted) == R.canonical(acceptedRecord)
+        else { throw AtlasVaultRotationError.rejected }
+        return false
+      }
+      let verified = try record(acceptedRecord, state: s)
       if s["status"] as? String == "REVOKED" { throw AtlasVaultRotationError.revoked }
       guard s["status"] as? String != "RECOVERY_PENDING",
         try history(s).recovery()["status"] as? String == "ACTIVE"
       else { throw AtlasVaultRotationError.recovery }
-      if let j = s["journal"] as? [String: Any] {
-        guard (j["proof"] as? [String: Any])?["root"] as? String == proof["root"] as? String else {
-          throw AtlasVaultRotationError.conflict
-        }
-        if j["phase"] as? String == "ACTIVE" { return false }
+      if let j = s["journal"] as? [String: Any], j["phase"] as? String != "ACTIVE" {
+        guard (j["proof"] as? [String: Any])?["root"] as? String == proof["root"] as? String
+        else { throw AtlasVaultRotationError.conflict }
       }
       var j: [String: Any] = [
         "phase": "BACKEND_ACCEPTED", "proof": proof, "record": acceptedRecord,
@@ -354,6 +398,16 @@ public final class AtlasVaultEpochVault {
       let outbox = try AtlasVaultDurableEncryptedOutbox(fileURL: file.fileURL, encryptionKey: key)
       outbox.store = try componentFile("outbox")
       return try outbox.pendingOperations()
+    }
+  }
+  public func confirmRemoteAcceptance(_ operationID: String) throws {
+    try run {
+      let s = try load()
+      try active(s)
+      let outbox = try AtlasVaultDurableEncryptedOutbox(
+        fileURL: file.fileURL, encryptionKey: key)
+      outbox.store = try componentFile("outbox")
+      try outbox.confirmRemoteAcceptance(operationID)
     }
   }
   public func delivery(_ recipient: String) throws -> [String: Any] {
@@ -501,15 +555,27 @@ public final class AtlasVaultEpochVault {
         m["object_id"] as? String == envelope.objectID,
         m["revision"] as? String == envelope.revision, try R.canonical(m) == aad
       else { throw AtlasVaultRotationError.rejected }
-      if envelope.keyEpoch > (try viewInteger(context["key_epoch"])),
-        !(s["recipients"] as! [String]).contains(m["device_id"] as? String ?? "")
-      {
-        throw AtlasVaultRotationError.revoked
+      let authorRegistry: [[String: Any]]
+      if envelope.keyEpoch == (try viewInteger(s["epoch"])) {
+        authorRegistry = try rows(s["registry"])
+      } else if envelope.keyEpoch == (try viewInteger(context["key_epoch"])) {
+        authorRegistry = registry
+      } else {
+        let records = try EpochCatchUp.records(map(map(s["components"])["history"]))
+        _ = try EpochCatchUp.verify(records, registry: registry, context: context)
+        guard
+          let found = try records.first(where: {
+            try R.integer(map(bridgeProof($0)["plan"])["previous_epoch"])
+              == envelope.keyEpoch
+          })
+        else { throw AtlasVaultRotationError.rejected }
+        authorRegistry = try rows(bridgeProof(found)["registry"])
       }
       let nonce = try R.bytes(raw["nonce_b64"], 12)
       guard
-        let entry = registry.first(where: {
+        let entry = authorRegistry.first(where: {
           $0["device_id"] as? String == m["device_id"] as? String
+            && $0["state"] as? String == "ACTIVE"
         }),
         try Curve25519.Signing.PublicKey(
           rawRepresentation: R.bytes(entry["signing_public_b64"], 32)

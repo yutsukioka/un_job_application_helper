@@ -106,17 +106,39 @@ class EpochVault:
         self._file = EpochPublication(Path(directory) / "activation", self._key)
         self._lock = threading.RLock()
 
-    def _verify(self, proof):
+    @staticmethod
+    def _bridge_proof(record):
+        return record["proof"] if "wrapper" in record else record
+
+    def _bridges(self, state):
+        from .epoch_catch_up import bridge_records, verify_bridges
+
+        records = bridge_records(state["components"]["history"])
+        return records, verify_bridges(records, self._registry, self._context)
+
+    def _state_root(self, state):
+        views = state["components"]["history"].get("views")
+        if not isinstance(views, list) or not views or not isinstance(views[-1], dict):
+            _reject()
+        root = views[-1].get("root")
+        if not isinstance(root, str) or len(root) != 64:
+            _reject()
+        return root
+
+    def _verify(self, proof, state=None):
+        registry = self._registry if state is None else state["registry"]
+        epoch = self._context["key_epoch"] if state is None else state["epoch"]
+        state_root = self._context["state_root"] if state is None else self._state_root(state)
         return verify_epoch_rotation(
             proof,
-            registry=self._registry,
+            registry=registry,
             account_id=self._context["account_id"],
             vault_id=self._context["vault_id"],
-            previous_epoch=self._context["key_epoch"],
-            state_root=self._context["state_root"],
+            previous_epoch=epoch,
+            state_root=state_root,
         )
 
-    def _record(self, record):
+    def _record(self, record, state=None):
         _exact(record, {"format", "version", "status", "transition_id", "proof"})
         if (
             record["format"] != "atlasvault-activation-record"
@@ -126,7 +148,7 @@ class EpochVault:
             or record["transition_id"] != record["proof"]["root"]
         ):
             _reject()
-        return self._verify(record["proof"])
+        return self._verify(record["proof"], state)
 
     def _load(self):
         s = self._file.read({})
@@ -159,13 +181,9 @@ class EpochVault:
             _reject()
         journal = s["journal"]
         if journal and journal.get("kind") == "CATCH_UP":
-            from .epoch_catch_up import bridge_records, verify_bridges
-
             if journal["phase"] not in ("ACTIVE", "CATCH_UP_PENDING"):
                 _reject()
-            bridges = verify_bridges(
-                bridge_records(s["components"]["history"]), self._registry, self._context
-            )
+            _, bridges = self._bridges(s)
             if journal["phase"] == "ACTIVE":
                 if (
                     not bridges
@@ -186,19 +204,39 @@ class EpochVault:
                 "RECOVERY_PENDING",
             ):
                 _reject()
-            verified = self._verify(journal["proof"])
-            if journal.get("record") is not None:
-                self._record(journal["record"])
-                if journal["record"]["proof"] != journal["proof"]:
-                    _reject()
             if journal["phase"] == "ACTIVE":
+                records, bridges = self._bridges(s)
                 if (
-                    s["epoch"] != verified["new_epoch"]
-                    or s["registry"] != verified["registry"]
-                    or s["recipients"] != verified["recipients"]
-                    or s["components"]["history"].get("epoch_bridge") != journal["proof"]
+                    not records
+                    or self._bridge_proof(records[-1]) != journal["proof"]
+                    or not bridges
                 ):
                     _reject()
+                if journal.get("record") is not None:
+                    record = journal["record"]
+                    _exact(record, {"format", "version", "status", "transition_id", "proof"})
+                    if (
+                        record["format"] != "atlasvault-activation-record"
+                        or type(record["version"]) is not int
+                        or record["version"] != 1
+                        or record["status"] != "ACTIVATION_ACCEPTED"
+                        or record["transition_id"] != journal["proof"]["root"]
+                        or record["proof"] != journal["proof"]
+                    ):
+                        _reject()
+                plan = journal["proof"]["plan"]
+                if (
+                    s["epoch"] != plan["new_epoch"]
+                    or registry_root(s["registry"]) != plan["resulting_registry_root"]
+                    or s["recipients"] != plan["recipients"]
+                ):
+                    _reject()
+            else:
+                self._verify(journal["proof"], s)
+                if journal.get("record") is not None:
+                    self._record(journal["record"], s)
+                    if journal["record"]["proof"] != journal["proof"]:
+                        _reject()
         return s
 
     def _ring(self, s):
@@ -358,11 +396,17 @@ class EpochVault:
         with self._lock:
             s = self._load()
             self._active(s)
-            self._verify(proof)
+            outbox = DurableEncryptedOutbox(self._file.path, encryption_key=self._key)
+            outbox._store = _EpochComponent(self, "outbox")
+            if outbox.pending_operations():
+                _reject("ATLAS_EPOCH_OUTBOX_PENDING")
+            self._verify(proof, s)
             if self._history(s).checkpoint()["cursor"] != proof["plan"]["state_root"]:
                 _reject("ATLAS_RECOVERY_PENDING")
-            if s["journal"] and s["journal"]["proof"]["root"] != proof["root"]:
-                _reject("ATLAS_EPOCH_CONFLICT")
+            if s["journal"] and s["journal"].get("phase") != "ACTIVE":
+                previous = s["journal"].get("proof")
+                if not previous or previous["root"] != proof["root"]:
+                    _reject("ATLAS_EPOCH_CONFLICT")
             s["journal"] = dict(phase="PREPARED", proof=copy.deepcopy(proof), record=None)
             self._file.write(s)
 
@@ -386,9 +430,17 @@ class EpochVault:
     ):
         with self._lock:
             s = self._load()
-            result = self._record(accepted_record)
             if accepted_record["proof"] != proof:
                 _reject()
+            if (
+                s["journal"]
+                and s["journal"].get("phase") == "ACTIVE"
+                and s["journal"].get("proof") == proof
+            ):
+                if s["journal"].get("record") != accepted_record:
+                    _reject()
+                return False
+            result = self._record(accepted_record, s)
             if s["status"] == "REVOKED":
                 _reject("ATLAS_DEVICE_REVOKED")
             if (
@@ -396,10 +448,10 @@ class EpochVault:
                 or self._history(s).recovery()["status"] != "ACTIVE"
             ):
                 _reject("ATLAS_RECOVERY_PENDING")
-            if s["journal"] and s["journal"]["proof"]["root"] != proof["root"]:
-                _reject("ATLAS_EPOCH_CONFLICT")
-            if s["journal"] and s["journal"]["phase"] == "ACTIVE":
-                return False
+            if s["journal"] and s["journal"].get("phase") != "ACTIVE":
+                previous = s["journal"].get("proof")
+                if not previous or previous["root"] != proof["root"]:
+                    _reject("ATLAS_EPOCH_CONFLICT")
             s["status"] = "ACTIVATION_PENDING"
             s["journal"] = dict(
                 phase="BACKEND_ACCEPTED",
@@ -464,6 +516,15 @@ class EpochVault:
             outbox = DurableEncryptedOutbox(self._file.path, encryption_key=self._key)
             outbox._store = _EpochComponent(self, "outbox")
             return outbox.pending_operations()
+
+    @_checked
+    def confirm_remote_acceptance(self, operation_id):
+        with self._lock:
+            s = self._load()
+            self._active(s)
+            outbox = DurableEncryptedOutbox(self._file.path, encryption_key=self._key)
+            outbox._store = _EpochComponent(self, "outbox")
+            outbox.confirm_remote_acceptance(operation_id)
 
     @_checked
     def compare_evidence(self, peer):
@@ -643,16 +704,37 @@ class EpochVault:
                 or _canonical(metadata) != aad
             ):
                 _reject()
-            if (
-                envelope.key_epoch > self._context["key_epoch"]
-                and metadata["device_id"] not in s["recipients"]
-            ):
-                _reject("ATLAS_DEVICE_REVOKED")
+            if envelope.key_epoch == s["epoch"]:
+                author_registry = s["registry"]
+            elif envelope.key_epoch == self._context["key_epoch"]:
+                author_registry = self._registry
+            else:
+                records, _ = self._bridges(s)
+                author_registry = next(
+                    (
+                        self._bridge_proof(record)["registry"]
+                        for record in records
+                        if self._bridge_proof(record)["plan"]["previous_epoch"]
+                        == envelope.key_epoch
+                    ),
+                    None,
+                )
+                if author_registry is None:
+                    _reject()
             nonce, ciphertext = (
                 base64.b64decode(envelope.nonce_b64),
                 base64.b64decode(envelope.ciphertext_b64),
             )
-            entry = next(e for e in self._registry if e["device_id"] == metadata["device_id"])
+            entry = next(
+                (
+                    e
+                    for e in author_registry
+                    if e["device_id"] == metadata["device_id"] and e["state"] == "ACTIVE"
+                ),
+                None,
+            )
+            if entry is None:
+                _reject("ATLAS_DEVICE_REVOKED")
             Ed25519PublicKey.from_public_bytes(_decode(entry["signing_public_b64"], 32)).verify(
                 _decode(envelope.signature_b64, 64),
                 b"atlasvault-epoch-ciphertext-signature-v1\0" + aad + nonce + ciphertext,

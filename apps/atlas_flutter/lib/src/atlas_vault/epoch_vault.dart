@@ -78,16 +78,34 @@ final class AtlasVaultEpochVault {
     }
   }
 
-  Future<Map<String, Object?>> _verify(Map<String, Object?> proof) =>
-      rotation.AtlasVaultEpochRotation.verify(
-        proof,
-        registry: _registry,
-        accountID: _context['account_id']! as String,
-        vaultID: _context['vault_id']! as String,
-        previousEpoch: _context['key_epoch']! as int,
-        stateRoot: _context['state_root']! as String,
-      );
-  Future<Map<String, Object?>> _record(Map<String, Object?> record) async {
+  Map<String, Object?> _bridgeProof(Map<String, Object?> record) =>
+      record.containsKey('wrapper') ? _object(record['proof']) : record;
+  String _stateRoot(Map<String, Object?> state) {
+    final history = _object(_object(state['components'])['history']),
+        views = _epochRows(history['views']);
+    if (views.isEmpty || views.last['root'] is! String) _epochFail();
+    return views.last['root']! as String;
+  }
+
+  Future<Map<String, Object?>> _verify(
+    Map<String, Object?> proof, [
+    Map<String, Object?>? state,
+  ]) => rotation.AtlasVaultEpochRotation.verify(
+    proof,
+    registry: state == null ? _registry : _epochRows(state['registry']),
+    accountID: _context['account_id']! as String,
+    vaultID: _context['vault_id']! as String,
+    previousEpoch: state == null
+        ? _context['key_epoch']! as int
+        : state['epoch']! as int,
+    stateRoot: state == null
+        ? _context['state_root']! as String
+        : _stateRoot(state),
+  );
+  Future<Map<String, Object?>> _record(
+    Map<String, Object?> record, [
+    Map<String, Object?>? state,
+  ]) async {
     _exact(record, {'format', 'version', 'status', 'transition_id', 'proof'});
     if (record['format'] != 'atlasvault-activation-record' ||
         record['version'] is! int ||
@@ -96,7 +114,7 @@ final class AtlasVaultEpochVault {
         record['transition_id'] != _object(record['proof'])['root']) {
       _epochFail();
     }
-    return _verify(_object(record['proof']));
+    return _verify(_object(record['proof']), state);
   }
 
   AtlasVaultKeyEpochRing _ring(Map<String, Object?> s) {
@@ -172,28 +190,51 @@ final class AtlasVaultEpochVault {
       ].contains(j['phase'])) {
         _epochFail();
       }
-      final v = await _verify(proof);
-      if (j['record'] != null) {
-        await _record(_object(j['record']));
-        if (jsonEncode(_canonicalValue(_object(j['record'])['proof'])) !=
-            jsonEncode(_canonicalValue(proof))) {
+      if (j['phase'] == 'ACTIVE') {
+        final records = _epochBridgeRecords(
+              _object(_object(s['components'])['history']),
+            ),
+            bridges = await _verifyEpochBridges(records, _registry, _context);
+        if (records.isEmpty ||
+            bridges.isEmpty ||
+            jsonEncode(_canonicalValue(_bridgeProof(records.last))) !=
+                jsonEncode(_canonicalValue(proof))) {
           _epochFail();
         }
-      }
-      if (j['phase'] == 'ACTIVE' &&
-          (s['epoch'] != v['new_epoch'] ||
-              jsonEncode(_canonicalValue(s['registry'])) !=
-                  jsonEncode(_canonicalValue(v['registry'])) ||
-              jsonEncode(s['recipients']) != jsonEncode(v['recipients']) ||
-              jsonEncode(
-                    _canonicalValue(
-                      _object(
-                        _object(s['components'])['history'],
-                      )['epoch_bridge'],
-                    ),
-                  ) !=
-                  jsonEncode(_canonicalValue(proof)))) {
-        _epochFail();
+        if (j['record'] != null) {
+          final record = _object(j['record']);
+          _exact(record, {
+            'format',
+            'version',
+            'status',
+            'transition_id',
+            'proof',
+          });
+          if (record['format'] != 'atlasvault-activation-record' ||
+              record['version'] != 1 ||
+              record['status'] != 'ACTIVATION_ACCEPTED' ||
+              record['transition_id'] != proof['root'] ||
+              jsonEncode(_canonicalValue(record['proof'])) !=
+                  jsonEncode(_canonicalValue(proof))) {
+            _epochFail();
+          }
+        }
+        final plan = _object(proof['plan']);
+        if (s['epoch'] != plan['new_epoch'] ||
+            AtlasVaultRevocation.registryRoot(_epochRows(s['registry'])) !=
+                plan['resulting_registry_root'] ||
+            jsonEncode(s['recipients']) != jsonEncode(plan['recipients'])) {
+          _epochFail();
+        }
+      } else {
+        await _verify(proof, s);
+        if (j['record'] != null) {
+          await _record(_object(j['record']), s);
+          if (jsonEncode(_canonicalValue(_object(j['record'])['proof'])) !=
+              jsonEncode(_canonicalValue(proof))) {
+            _epochFail();
+          }
+        }
       }
     }
     return s;
@@ -307,14 +348,23 @@ final class AtlasVaultEpochVault {
   Future<void> _prepare(Map<String, Object?> proof) async {
     final s = await _load();
     await _active(s);
-    await _verify(proof);
+    final outbox = AtlasVaultDurableEncryptedOutbox(
+      _file.file,
+      encryptionKey: _key,
+    ).._store = _EpochComponentFile(this, 'outbox');
+    if ((await outbox.pendingOperations()).isNotEmpty) {
+      _epochFail('ATLAS_EPOCH_OUTBOX_PENDING');
+    }
+    await _verify(proof, s);
     if ((await _history(s).checkpoint())['cursor'] !=
         _object(proof['plan'])['state_root']) {
       _epochFail('ATLAS_RECOVERY_PENDING');
     }
-    if (s['journal'] != null &&
-        _object(_object(s['journal'])['proof'])['root'] != proof['root']) {
-      _epochFail('ATLAS_EPOCH_CONFLICT');
+    if (s['journal'] != null && _object(s['journal'])['phase'] != 'ACTIVE') {
+      final previous = _object(s['journal'])['proof'];
+      if (previous is! Map || _object(previous)['root'] != proof['root']) {
+        _epochFail('ATLAS_EPOCH_CONFLICT');
+      }
     }
     s['journal'] = {
       'phase': 'PREPARED',
@@ -348,22 +398,32 @@ final class AtlasVaultEpochVault {
     required Uint8List agreementPrivateKey,
     Future<void> Function(String)? checkpoint,
   }) => _run(() async {
-    final s = await _load(), result = await _record(acceptedRecord);
+    final s = await _load();
     if (jsonEncode(_canonicalValue(acceptedRecord['proof'])) !=
         jsonEncode(_canonicalValue(proof))) {
       _epochFail();
     }
+    if (s['journal'] != null &&
+        _object(s['journal'])['phase'] == 'ACTIVE' &&
+        jsonEncode(_canonicalValue(_object(s['journal'])['proof'])) ==
+            jsonEncode(_canonicalValue(proof))) {
+      if (jsonEncode(_canonicalValue(_object(s['journal'])['record'])) !=
+          jsonEncode(_canonicalValue(acceptedRecord))) {
+        _epochFail();
+      }
+      return false;
+    }
+    final result = await _record(acceptedRecord, s);
     if (s['status'] == 'REVOKED') _epochFail('ATLAS_DEVICE_REVOKED');
     if (s['status'] == 'RECOVERY_PENDING' ||
         (await _history(s).recovery())['status'] != 'ACTIVE') {
       _epochFail('ATLAS_RECOVERY_PENDING');
     }
-    if (s['journal'] != null &&
-        _object(_object(s['journal'])['proof'])['root'] != proof['root']) {
-      _epochFail('ATLAS_EPOCH_CONFLICT');
-    }
-    if (s['journal'] != null && _object(s['journal'])['phase'] == 'ACTIVE') {
-      return false;
+    if (s['journal'] != null && _object(s['journal'])['phase'] != 'ACTIVE') {
+      final previous = _object(s['journal'])['proof'];
+      if (previous is! Map || _object(previous)['root'] != proof['root']) {
+        _epochFail('ATLAS_EPOCH_CONFLICT');
+      }
     }
     s['status'] = 'ACTIVATION_PENDING';
     s['journal'] = {
@@ -443,6 +503,15 @@ final class AtlasVaultEpochVault {
       encryptionKey: _key,
     ).._store = _EpochComponentFile(this, 'outbox')).pendingOperations(),
   );
+  Future<void> confirmRemoteAcceptance(String operationID) => _run(() async {
+    final s = await _load();
+    await _active(s);
+    final outbox = AtlasVaultDurableEncryptedOutbox(
+      _file.file,
+      encryptionKey: _key,
+    ).._store = _EpochComponentFile(this, 'outbox');
+    await outbox.confirmRemoteAcceptance(operationID);
+  });
   Future<Map<String, Object?>> delivery(String recipient) => _run(() async {
     final s = await _load();
     await _active(s);
@@ -634,15 +703,35 @@ final class AtlasVaultEpochVault {
             base64Encode(rotation.rotationCanonical(m)) != base64Encode(aad)) {
           _epochFail();
         }
-        if (envelope.keyEpoch > (_context['key_epoch']! as int) &&
-            !(s['recipients']! as List).contains(m['device_id'])) {
-          _epochFail('ATLAS_DEVICE_REVOKED');
+        late List<Map<String, Object?>> authorRegistry;
+        if (envelope.keyEpoch == s['epoch']) {
+          authorRegistry = _epochRows(s['registry']);
+        } else if (envelope.keyEpoch == _context['key_epoch']) {
+          authorRegistry = _registry;
+        } else {
+          final records = _epochBridgeRecords(
+            _object(_object(s['components'])['history']),
+          );
+          await _verifyEpochBridges(records, _registry, _context);
+          Map<String, Object?>? found;
+          for (final record in records) {
+            final candidate = _bridgeProof(record),
+                plan = _object(candidate['plan']);
+            if (plan['previous_epoch'] == envelope.keyEpoch) {
+              found = candidate;
+              break;
+            }
+          }
+          if (found == null) _epochFail();
+          authorRegistry = _epochRows(found['registry']);
         }
         final nonce = _base64(raw['nonce_b64'], exactLength: 12),
             ciphertext = _base64(raw['ciphertext_b64'], minimumLength: 16);
-        final entry = _registry.firstWhere(
-          (e) => e['device_id'] == m['device_id'],
+        final entry = authorRegistry.cast<Map<String, Object?>?>().firstWhere(
+          (e) => e?['device_id'] == m['device_id'] && e?['state'] == 'ACTIVE',
+          orElse: () => null,
         );
+        if (entry == null) _epochFail('ATLAS_DEVICE_REVOKED');
         if (!await Ed25519().verify(
           [
             ...ascii.encode('atlasvault-epoch-ciphertext-signature-v1\u0000'),
