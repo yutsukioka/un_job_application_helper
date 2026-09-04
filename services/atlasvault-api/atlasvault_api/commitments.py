@@ -20,6 +20,7 @@ Identifier = Annotated[
     str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._~-]+$")
 ]
 Counter = Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]
+MAX_ACCOUNT_ROTATION_ROWS = 8192
 MAX_VAULT_ROTATION_ROWS = 8192
 
 
@@ -183,6 +184,23 @@ class CommitmentLog:
                             self._db.execute(
                                 "DELETE FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=?",
                                 (account_id, vault_id, stale[0]),
+                            )
+                        while (
+                            self._db.execute(
+                                "SELECT COUNT(*) FROM prepared_device_deliveries WHERE account=?",
+                                (account_id,),
+                            ).fetchone()[0]
+                            >= MAX_ACCOUNT_ROTATION_ROWS
+                        ):
+                            stale = self._db.execute(
+                                "SELECT vault,transition FROM prepared_device_deliveries WHERE account=? AND NOT (vault=? AND transition=?) GROUP BY vault,transition ORDER BY MIN(rowid) LIMIT 1",
+                                (account_id, vault_id, transition),
+                            ).fetchone()
+                            if stale is None:
+                                raise CommitmentConflict()
+                            self._db.execute(
+                                "DELETE FROM prepared_device_deliveries WHERE account=? AND vault=? AND transition=?",
+                                (account_id, stale[0], stale[1]),
                             )
                         self._db.execute(
                             "INSERT INTO prepared_device_deliveries VALUES(?,?,?,?,?,?,?)",

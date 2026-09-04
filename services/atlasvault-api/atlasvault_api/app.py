@@ -362,6 +362,13 @@ _ACTIVATION_READ_OPENAPI_RESPONSES = {
         "model": FixedErrorResponse,
     },
 }
+_DELIVERY_WRITE_OPENAPI_RESPONSES = {
+    **_STORAGE_WRITE_OPENAPI_RESPONSES,
+    403: {
+        "description": "The authenticated device is revoked for this activation",
+        "model": FixedErrorResponse,
+    },
+}
 _STORAGE_LIST_OPENAPI_RESPONSES = {
     **_STORAGE_COMMON_OPENAPI_RESPONSES,
     400: {
@@ -1555,7 +1562,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs",
         status_code=200,
         operation_id="publishDeviceEpochDelivery",
-        responses=_STORAGE_WRITE_OPENAPI_RESPONSES,
+        responses=_DELIVERY_WRITE_OPENAPI_RESPONSES,
     )
     def publish_device_epoch_delivery(
         vault_id: VaultPath,

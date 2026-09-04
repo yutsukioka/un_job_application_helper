@@ -1420,6 +1420,8 @@ def _blocked_imports(source: str) -> bool:
                     changed = True
 
     for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and _is_asyncio_restricted_reference(node):
+            return True
         if not isinstance(node, ast.Call):
             continue
         if _is_os_process_reference(node.func):
