@@ -74,3 +74,25 @@ def test_no_supported_production_composition_uses_plaintext_fallback() -> None:
     assert "AtlasLocalCacheStore(" not in apple_branch
     assert "resolveAtlasLegacyTemporaryCacheFile" not in apple_branch
 
+
+def test_production_compositions_bind_sync_outbox_and_epoch_fences() -> None:
+    flutter = (
+        ROOT / "apps/atlas_flutter/lib/features/app_shell/atlas_app.dart"
+    ).read_text(encoding="utf-8")
+    private_runtime = (
+        ROOT / "apps/atlas_flutter/lib/src/atlas_vault/private_state_runtime.dart"
+    ).read_text(encoding="utf-8")
+    mac_owner = (
+        ROOT / "apps/apple/Sources/AtlasUI/AtlasMacAppProcessOwner.swift"
+    ).read_text(encoding="utf-8")
+
+    assert "AtlasVaultEpochVault(" in flutter
+    assert "queueOperation(" in private_runtime
+    for state in (
+        "ACTIVATION_PENDING",
+        "CATCH_UP_PENDING",
+        "RECOVERY_PENDING",
+        "CLEANUP_PENDING",
+    ):
+        assert state in private_runtime
+        assert state in mac_owner
