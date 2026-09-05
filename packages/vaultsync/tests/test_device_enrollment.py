@@ -9,15 +9,22 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from vaultsync.device_enrollment import EnrollmentError, create_enrollment, verify_enrollment
 
-V = json.loads((Path(__file__).resolve().parents[3] /
-    "contracts/sync/test_vectors/atlasvault_device_enrollment_v1.json").read_text())
+V = json.loads(
+    (
+        Path(__file__).resolve().parents[3]
+        / "contracts/sync/test_vectors/atlasvault_device_enrollment_v1.json"
+    ).read_text()
+)
 
 
 def checked(proof=None, registry=None, context=None, transcript=None, status="ACTIVE"):
     return verify_enrollment(
-        proof or V["proof"], registry=registry or V["registry"],
+        proof or V["proof"],
+        registry=registry or V["registry"],
         context=context or V["context"],
-        confirmed_transcript=transcript if transcript is not None else V["proof"]["transcript_sha256"],
+        confirmed_transcript=transcript
+        if transcript is not None
+        else V["proof"]["transcript_sha256"],
         status=status,
     )
 
@@ -27,9 +34,14 @@ def test_shared_enrollment_and_active_signature():
     assert len(after) == len(V["registry"]) + 1
     assert V["target"] in after
     unsigned = {k: v for k, v in V["proof"].items() if k not in ("root", "signature_b64")}
-    created = create_enrollment(unsigned, registry=V["registry"], context=V["context"],
-        confirmed_transcript=V["proof"]["transcript_sha256"], status="ACTIVE",
-        signing_key=Ed25519PrivateKey.from_private_bytes(bytes([10]) * 32))
+    created = create_enrollment(
+        unsigned,
+        registry=V["registry"],
+        context=V["context"],
+        confirmed_transcript=V["proof"]["transcript_sha256"],
+        status="ACTIVE",
+        signing_key=Ed25519PrivateKey.from_private_bytes(bytes([10]) * 32),
+    )
     assert created == V["proof"]
 
 
@@ -49,7 +61,10 @@ def test_valid_signature_cannot_override_current_context(field):
         checked(context=context)
 
 
-@pytest.mark.parametrize("status", ["RECOVERY_PENDING", "ACTIVATION_PENDING", "CATCH_UP_PENDING", "CLEANUP_PENDING", "REVOKED"])
+@pytest.mark.parametrize(
+    "status",
+    ["RECOVERY_PENDING", "ACTIVATION_PENDING", "CATCH_UP_PENDING", "CLEANUP_PENDING", "REVOKED"],
+)
 def test_pending_and_revoked_fences(status):
     with pytest.raises(EnrollmentError):
         checked(status=status)
@@ -69,3 +84,29 @@ def test_replay_and_revoked_identity_are_not_new_enrollment():
     with pytest.raises(EnrollmentError):
         checked(registry=registry)
 
+
+@pytest.mark.parametrize(
+    "field", ["version", "key_epoch", "registry_generation", "next_registry_generation"]
+)
+def test_float_counters_rejected(field):
+    bad = dict(V["proof"])
+    bad[field] = float(bad[field])
+    with pytest.raises(EnrollmentError):
+        checked(bad)
+
+
+@pytest.mark.parametrize("field", ["account_id", "vault_id"])
+def test_signed_identifier_whitespace_is_not_canonical(field):
+    unsigned = {k: v for k, v in V["proof"].items() if k not in ("root", "signature_b64")}
+    context = dict(V["context"])
+    context[field] += "\n"
+    unsigned[field] = context[field]
+    with pytest.raises(EnrollmentError):
+        create_enrollment(
+            unsigned,
+            registry=V["registry"],
+            context=context,
+            confirmed_transcript=V["proof"]["transcript_sha256"],
+            status="ACTIVE",
+            signing_key=Ed25519PrivateKey.from_private_bytes(bytes([10]) * 32),
+        )
