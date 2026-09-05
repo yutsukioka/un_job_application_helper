@@ -4,12 +4,13 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-
 from test_epoch_activation import accept, backend_accept, device, initialize
-from vaultsync.device_enrollment import create_enrollment
+
 from vaultsync.device_delivery import create_device_delivery
+from vaultsync.device_enrollment import create_enrollment
 from vaultsync.epoch_rotation import RotationError
 from vaultsync.revocation import registry_root
 
@@ -72,13 +73,24 @@ def test_enrollment_adds_signed_current_member_without_rewriting_activation(tmp_
     )
     assert published["view"]["registry_root"] == proof["resulting_registry_root"]
     assert device(tmp_path, 0, env[4]).observation()["key_epoch"] == 4
-    packet = create_device_delivery(record, recipient_device_id=env[2][0].device_id,
-        issuer_device_id=env[2][0].device_id, signing_key=env[2][0],
-        current_registry=a.enrollment_registry(), recovery_pending=False)
-    assert a.catch_up([packet], current_activation_id=record["transition_id"],
-                      agreement_private_key=bytes([20]) * 32)
-    assert not a.catch_up([packet], current_activation_id=record["transition_id"],
-                          agreement_private_key=bytes([20]) * 32)
+    packet = create_device_delivery(
+        record,
+        recipient_device_id=env[2][0].device_id,
+        issuer_device_id=env[2][0].device_id,
+        signing_key=env[2][0],
+        current_registry=a.enrollment_registry(),
+        recovery_pending=False,
+    )
+    assert a.catch_up(
+        [packet],
+        current_activation_id=record["transition_id"],
+        agreement_private_key=bytes([20]) * 32,
+    )
+    assert not a.catch_up(
+        [packet],
+        current_activation_id=record["transition_id"],
+        agreement_private_key=bytes([20]) * 32,
+    )
     assert a.observation()["registry_root"] == proof["resulting_registry_root"]
     assert device(tmp_path, 0, env[4]).enrollment_context()["registry_generation"] == 5
 
@@ -104,3 +116,30 @@ def test_enrollment_rejection_never_publishes_membership(tmp_path, attack):
     with pytest.raises(RotationError):
         a.accept_enrollment(proof, confirmed_transcript=transcript)
     assert (tmp_path / "0/activation").read_bytes() == before
+
+
+def test_backend_enrollment_cas_and_exact_retry_preserve_activation(tmp_path):
+    (a, _, _), env = initialize(tmp_path)
+    record = backend_accept(env)
+    accept(a, 0, env[4], record)
+    proof = enrollment(a, env[2][0])
+    backend, http = env[:2]
+    path = "/v1/vaults/vault-c26/enrollments"
+    assert http.post(path, json=proof).status_code == 401
+    assert http.post(path, json=proof, headers=env[3][2]).status_code == 403
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(pool.map(lambda _: http.post(path, json=proof, headers=env[3][0]), range(2)))
+    assert [r.status_code for r in replies] == [200, 200]
+    assert sorted(r.json()["appended"] for r in replies) == [False, True]
+    assert backend.commitments.activation(proof["account_id"], "vault-c26") == record
+    before = backend.commitments.read(proof["account_id"], "vault-c26")
+    for field in ("key_epoch", "activation_id", "state_root", "prior_registry_root", "issuer_device_id"):
+        bad = dict(proof, **{field: 3 if field == "key_epoch" else "bad"})
+        assert http.post(path, json=bad, headers=env[3][0]).status_code in (409, 422)
+    assert backend.commitments.read(proof["account_id"], "vault-c26") == before
+    from atlasvault_api.commitments import CommitmentLog
+    reopened = CommitmentLog(tmp_path / "backend.sqlite")
+    membership = reopened.enrollment_membership(proof["account_id"], "vault-c26")
+    assert membership["context"]["registry_generation"] == 5
+    assert registry_root(membership["registry"]) == proof["resulting_registry_root"]
+    reopened.require_active_epoch(proof["account_id"], "vault-c26", 4, proof["target_device_id"])
