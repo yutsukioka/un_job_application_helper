@@ -7,6 +7,44 @@ import XCTest
 
 @MainActor
 final class AtlasVaultRuntimeIntegrationTests: XCTestCase {
+  func testC30CurrentEpochOnlyBootstrapCannotRestoreRetainedRecord() async throws {
+    let fixture = try RuntimeIntegrationFixture()
+    defer { fixture.remove() }
+    try fixture.createLegacy()
+    let epoch = try fixture.enroll()
+    let source = fixture.runtime()
+    try await source.activate(.init(vaultID: fixture.vaultID))
+    let before = try await source.privateState().state
+    XCTAssertEqual(before.applicationNotes.count, 1)
+    await source.lock()
+    for operation in try epoch.pendingOperations() {
+      try epoch.confirmRemoteAcceptance(operation.operationID)
+    }
+    try fixture.activateEpoch(epoch)
+    let withHistory = fixture.runtime()
+    try await withHistory.activate(.init(vaultID: fixture.vaultID))
+    let restored = try await withHistory.privateState().state
+    XCTAssertEqual(restored.applicationNotes.count, 1)
+    await withHistory.lock()
+    var currentOnly = try epoch.load()
+    let keys = try epoch.map(currentOnly["keys"])
+    XCTAssertEqual(Set(keys.keys), ["3", "4"])
+    XCTAssertEqual(currentOnly["epoch"] as? Int, 4)
+    // Synthetic fixture only: model a bootstrap that delivers epoch 4, not 3.
+    // No application cleanup or production entry is modified by this diagnostic.
+    currentOnly["keys"] = ["4": keys["4"]!]
+    try epoch.file.write(currentOnly)
+    let limited = fixture.runtime()
+    var unavailable = false
+    do { try await limited.activate(.init(vaultID: fixture.vaultID)) }
+    catch { unavailable = true }
+    XCTAssertTrue(unavailable, "Current-epoch-only bootstrap must not fake restored history")
+    var exposed = false
+    do { _ = try await limited.privateState(); exposed = true } catch {}
+    XCTAssertFalse(exposed, "No plaintext fallback or partial history is exposed")
+    await limited.lock()
+  }
+
   func testProvisioningPinsOnlyAuthenticatedInitialRegistryAndPostBridgeUsesPublishedRegistry()
     throws
   {
