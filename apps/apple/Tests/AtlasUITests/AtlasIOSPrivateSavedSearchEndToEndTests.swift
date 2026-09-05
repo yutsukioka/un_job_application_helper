@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 import Synchronization
@@ -31,12 +32,13 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let selected = try await createAndUnlock(
             with: first,
-            keychain: keychain
+            keychain: keychain, root: root
         )
         XCTAssertEqual(firstContext.owner.status, .ready)
         XCTAssertTrue(firstContext.owner.items.isEmpty)
         let publicShellBeforeCreate =
             first.presentationOwner.flowState.publicShell
+        let legacyBeforeCreate = try Data(contentsOf: storeURL(root: root, selected: selected))
 
         let privateName = "PRIVATE_SAVED_SEARCH_NAME_2D63"
         let privateQuery = "PRIVATE_SAVED_SEARCH_QUERY_2D63"
@@ -62,7 +64,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             publicShellBeforeCreate
         )
 
-        let createdStoreBytes = try storeBytes(
+        let createdStoreBytes = try runtimeStoreBytes(
             root: root,
             selected: selected
         )
@@ -83,12 +85,11 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
                 plaintext
             )
         }
-        let createdStore = try AtlasVaultLocalStoreIO.decode(
-            createdStoreBytes
-        )
+        let createdStore = try runtimeStore(root: root, selected: selected, keychain: keychain)
         XCTAssertEqual(createdStore.records.count, 1)
-        XCTAssertFalse(createdStore.records[0].deleted)
-        XCTAssertFalse(createdStore.records[0].ciphertext.isEmpty)
+        XCTAssertFalse(createdStore.records[0].tombstone)
+        XCTAssertFalse(createdStore.records[0].ciphertextBase64.isEmpty)
+        XCTAssertTrue(try Data(contentsOf: storeURL(root: root, selected: selected)) == legacyBeforeCreate)
         let localVaultKey = try XCTUnwrap(
             AtlasKeychainVaultKeyStore(client: keychain)
                 .loadVaultKey(for: selected.vaultID)
@@ -98,11 +99,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             vaultKey: localVaultKey
         )
         let createdHydrated = try XCTUnwrap(
-            AtlasVaultRecordHydrator()
-                .hydrate(
-                    records: createdStore.records,
-                    session: localSession
-                )
+            runtimeOwner(root: root, selected: selected, keychain: keychain, session: localSession).runtimeState()
                 .savedSearches
                 .first
         )
@@ -129,7 +126,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             editedPrivateQuery
         )
 
-        let editedStoreBytes = try storeBytes(
+        let editedStoreBytes = try runtimeStoreBytes(
             root: root,
             selected: selected
         )
@@ -145,17 +142,15 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         ] {
             XCTAssertFalse(editedStoreText.contains(plaintext), plaintext)
         }
-        let editedStore = try AtlasVaultLocalStoreIO.decode(
-            editedStoreBytes
-        )
+        let editedStore = try runtimeStore(root: root, selected: selected, keychain: keychain)
         XCTAssertEqual(editedStore.records.count, 1)
         XCTAssertEqual(
-            editedStore.records[0].id,
-            createdStore.records[0].id
+            editedStore.records[0].objectID,
+            createdStore.records[0].objectID
         )
         XCTAssertEqual(
-            editedStore.records[0].keyID,
-            createdStore.records[0].keyID
+            editedStore.records[0].keyEpoch,
+            createdStore.records[0].keyEpoch
         )
         XCTAssertNotEqual(
             editedStore.records[0].revision,
@@ -166,11 +161,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             createdStore.records[0].revision
         )
         let editedHydrated = try XCTUnwrap(
-            AtlasVaultRecordHydrator()
-                .hydrate(
-                    records: editedStore.records,
-                    session: localSession
-                )
+            runtimeOwner(root: root, selected: selected, keychain: keychain, session: localSession).runtimeState()
                 .savedSearches
                 .first
         )
@@ -199,6 +190,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             first.presentationOwner.flowState.publicShell,
             publicShellBeforeCreate
         )
+        XCTAssertTrue(try Data(contentsOf: storeURL(root: root, selected: selected)) == legacyBeforeCreate)
 
         let recoveryCode = try await configureRecovery(
             with: first
@@ -235,7 +227,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         XCTAssertEqual(secondContext.owner.status, .ready)
         XCTAssertTrue(secondContext.owner.items.isEmpty)
 
-        let deletedBytes = try storeBytes(
+        let deletedBytes = try runtimeStoreBytes(
             root: root,
             selected: selected
         )
@@ -245,30 +237,26 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         XCTAssertFalse(deletedText.contains(editedPrivateName))
         XCTAssertFalse(deletedText.contains(editedPrivateQuery))
         XCTAssertFalse(deletedText.contains("saved_search"))
-        let deletedStore = try AtlasVaultLocalStoreIO.decode(
-            deletedBytes
-        )
+        let deletedStore = try runtimeStore(root: root, selected: selected, keychain: keychain)
         XCTAssertEqual(deletedStore.records.count, 1)
-        XCTAssertTrue(deletedStore.records[0].deleted)
+        XCTAssertTrue(deletedStore.records[0].tombstone)
         let tombstoneCiphertext = try XCTUnwrap(
-            Data(base64Encoded: deletedStore.records[0].ciphertext)
+            Data(base64Encoded: deletedStore.records[0].ciphertextBase64)
         )
+        let tombstonePlaintext = try runtimeOwner(root: root, selected: selected, keychain: keychain).open(deletedStore.records[0])
         XCTAssertEqual(
             tombstoneCiphertext.count,
-            AtlasVaultRecordCrypto.gcmTagByteCount
+            tombstonePlaintext.count + AtlasVaultRecordCrypto.gcmTagByteCount
         )
         let tombstoneVaultKey = try XCTUnwrap(
             AtlasKeychainVaultKeyStore(client: keychain)
                 .loadVaultKey(for: selected.vaultID)
         )
-        XCTAssertEqual(
-            try AtlasVaultRecordCrypto.open(
-                record: deletedStore.records[0],
-                vaultKey: tombstoneVaultKey,
-                vaultID: selected.vaultID
-            ),
-            Data()
-        )
+        XCTAssertTrue(tombstoneVaultKey == localVaultKey)
+        let tombstoneBody = try AtlasVaultDeviceDelivery.map(JSONSerialization.jsonObject(with: tombstonePlaintext))
+        XCTAssertTrue(tombstoneBody["payload"] is NSNull)
+        XCTAssertEqual(tombstoneBody["tombstone"] as? Bool, true)
+        XCTAssertTrue(tombstoneBody["parent_revision"] as? String == editedStore.records[0].revision)
         _ = await second.stop()
 
         let third = try makeHarness(
@@ -389,13 +377,12 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
         _ = await recoveryOnly.stop()
 
-        let finalStore = try AtlasVaultLocalStoreIO.decode(
-            storeBytes(root: root, selected: selected)
-        )
+        let finalStore = try runtimeStore(root: root, selected: selected, keychain: keychain, session: localSession)
         XCTAssertEqual(finalStore.records.count, 2)
-        XCTAssertTrue(finalStore.records.allSatisfy(\.deleted))
+        XCTAssertTrue(finalStore.records.allSatisfy(\.tombstone))
+        XCTAssertEqual(try runtimeOwner(root: root, selected: selected, keychain: keychain, session: localSession).pendingOperations().count, 6)
         let finalText = String(
-            decoding: try storeBytes(root: root, selected: selected),
+            decoding: try runtimeStoreBytes(root: root, selected: selected),
             as: UTF8.self
         )
         XCTAssertFalse(finalText.contains("RECOVERY_SESSION_PRIVATE_NAME"))
@@ -421,7 +408,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
         _ = try await createAndUnlock(
             with: harness,
-            keychain: keychain
+            keychain: keychain, root: root
         )
         let context = try XCTUnwrap(
             harness.savedSearchContextForTesting
@@ -474,7 +461,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
         let selected = try await createAndUnlock(
             with: seed,
-            keychain: keychain
+            keychain: keychain, root: root
         )
         let seedContext = try XCTUnwrap(
             seed.savedSearchContextForTesting
@@ -613,7 +600,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
         let selected = try await createAndUnlock(
             with: seed,
-            keychain: keychain
+            keychain: keychain, root: root
         )
         let seedContext = try XCTUnwrap(
             seed.savedSearchContextForTesting
@@ -759,7 +746,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
     private func createAndUnlock(
         with harness: AtlasVaultProductionCompositionHarness,
-        keychain: PrivateSearchE2EKeychainClient
+        keychain: PrivateSearchE2EKeychainClient,
+        root: URL
     ) async throws -> AtlasSelectedVaultID {
         _ = try await harness.start()
         try await performPublicSearch(with: harness)
@@ -782,11 +770,78 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             harness.presentationOwner.flowState
                 .unlockPanelState?.selectedMethod
         )
+        let selected = try await selectedVault(using: keychain)
+        try provisionAuthenticatedRuntime(root: root, selected: selected, keychain: keychain)
         await harness.unlockActions.select(.localKey)
         let unlocked = await harness.unlockActions.submit(.localKey)
         XCTAssertEqual(unlocked, .unlocked)
-        let selected = try await selectedVault(using: keychain)
         return selected
+    }
+
+    private func provisionAuthenticatedRuntime(
+        root: URL, selected: AtlasSelectedVaultID, keychain: PrivateSearchE2EKeychainClient
+    ) throws {
+        // Synthetic enrollment receipt, admitted by the unchanged P6 verifier before binding.
+        let identity = try AtlasVaultDeviceIdentity(signingPrivateSeed: Data(repeating: 91, count: 32),
+            agreementPrivateKey: Data(repeating: 92, count: 32), createdAt: "2026-07-27T00:00:00Z")
+        let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 91, count: 32))
+        let registry: [[String: Any]] = [["device_id": identity.deviceID, "state": "ACTIVE",
+            "signing_public_b64": identity.signingPublicKey.base64EncodedString(),
+            "agreement_public_b64": identity.agreementPublicKey.base64EncodedString()]]
+        let descriptors: [[String: Any]] = [["device_id": AtlasVaultEpochRotation.digest(Data(identity.deviceID.utf8)),
+            "descriptor_sha256": AtlasVaultEpochRotation.digest(try JSONEncoder().encode(identity.descriptor))]]
+        let opaque = try AtlasVaultEpochRotation.canonical(["format": "atlasvault-guarded-collection", "version": 1,
+            "route": "patch", "records": [[String: Any]]()])
+        let zero = String(repeating: "0", count: 64)
+        let collection = try AtlasVaultSignedStateCommitment.sign(opaque, collectionID: "collection-e2e", sequence: 1,
+            previousRoot: zero, signingKey: signer)
+        let view = try AtlasVaultAuthenticatedStateView.sign(["format": "atlasvault-authenticated-state-view", "version": 2,
+            "account_id": "account-e2e", "vault_id": selected.vaultID, "key_epoch": 1, "sequence": 1,
+            "previous_root": zero, "collection_root": collection.root,
+            "registry_root": AtlasVaultAuthenticatedStateView.registryRoot(descriptors),
+            "previous_registry_root": AtlasVaultEpochRotation.digest(Data("atlasvault-registry-root-v1\n".utf8))], signingKey: signer)
+        let history = try AtlasVaultGuardedSyncState(fileURL: root.appendingPathComponent("enrollment-history"),
+            encryptionKey: Data(repeating: 93, count: 32), accountID: "account-e2e", vaultID: selected.vaultID,
+            collectionID: "collection-e2e", keyEpoch: 1, trustedSigner: signer.publicKey.rawRepresentation)
+        try history.initialize()
+        _ = try history.ingest(view: view, registry: descriptors, collection: collection.jsonObject, opaqueState: opaque)
+        let epoch = try AtlasVaultEpochVault(directory: storeURL(root: root, selected: selected).deletingLastPathComponent()
+            .appendingPathComponent("epoch"), storageKey: Data(repeating: 94, count: 32), deviceID: identity.deviceID,
+            registry: registry, accountID: "account-e2e", vaultID: selected.vaultID, keyEpoch: 1, stateRoot: view["root"] as! String)
+        try epoch.initialize(keys: [1: Data(repeating: 95, count: 32)], history: history)
+        try AtlasKeychainDeviceIdentityStore(client: keychain).createPrimaryIdentity(identity.secretBundle().canonicalData())
+        try AtlasKeychainRuntimeBindingStore(client: keychain).createAuthenticatedBinding(from: epoch,
+            authenticatedHistoryRegistry: descriptors)
+    }
+
+    private func runtimeOwner(
+        root: URL, selected: AtlasSelectedVaultID, keychain: PrivateSearchE2EKeychainClient,
+        session: AtlasVaultUnlockedSession? = nil
+    ) throws -> AtlasVaultEpochVault {
+        let binding = try XCTUnwrap(AtlasKeychainRuntimeBindingStore(client: keychain).load(for: selected.vaultID))
+        let unlocked: AtlasVaultUnlockedSession
+        if let session { unlocked = session } else {
+            unlocked = try AtlasVaultUnlockedSession(vaultID: selected.vaultID,
+                vaultKey: XCTUnwrap(AtlasKeychainVaultKeyStore(client: keychain).loadVaultKey(for: selected.vaultID)))
+        }
+        return try binding.open(directory: storeURL(root: root, selected: selected).deletingLastPathComponent()
+            .appendingPathComponent("epoch"), session: unlocked)
+    }
+
+    private struct RuntimeStoreSnapshot {
+        let records: [AtlasVaultOpaqueCiphertextEnvelope]
+    }
+
+    private func runtimeStore(
+        root: URL, selected: AtlasSelectedVaultID, keychain: PrivateSearchE2EKeychainClient,
+        session: AtlasVaultUnlockedSession? = nil
+    ) throws -> RuntimeStoreSnapshot {
+        let epoch = try runtimeOwner(root: root, selected: selected, keychain: keychain, session: session)
+        _ = try epoch.runtimeState()
+        let replica = try AtlasVaultDurableEncryptedConvergentReplica(fileURL: epoch.file.fileURL,
+            encryptionKey: epoch.key, authenticationKey: epoch.key, collectionID: "collection-e2e")
+        replica.store = try epoch.componentFile("runtime")
+        return try RuntimeStoreSnapshot(records: replica.currentRecords())
     }
 
     private func unlockExistingLocally(
@@ -893,11 +948,12 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         return root
     }
 
-    private func storeBytes(
+    private func runtimeStoreBytes(
         root: URL,
         selected: AtlasSelectedVaultID
     ) throws -> Data {
-        try Data(contentsOf: storeURL(root: root, selected: selected))
+        try Data(contentsOf: storeURL(root: root, selected: selected).deletingLastPathComponent()
+            .appendingPathComponent("epoch/activation"))
     }
 
     private func storeURL(
@@ -928,13 +984,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             vaultID: selected.vaultID,
             vaultKey: key
         )
-        let store = try AtlasVaultLocalStoreIO.decode(
-            storeBytes(root: root, selected: selected)
-        )
-        let state = try AtlasVaultRecordHydrator().hydrate(
-            records: store.records,
-            session: session
-        )
+        let epoch = try runtimeOwner(root: root, selected: selected, keychain: keychain, session: session)
+        let state = try epoch.runtimeState()
         let current = try XCTUnwrap(state.savedSearches.first)
         XCTAssertEqual(state.savedSearches.count, 1)
         let updatedAt = "2026-07-27T04:00:00Z"
@@ -952,9 +1003,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             clientCreatedAt: current.clientCreatedAt,
             clientUpdatedAt: updatedAt
         )
-        let updatedRecord = try XCTUnwrap(
-            AtlasVaultRecordSaver().save(
-                mutations: AtlasVaultMutationSet(
+        let binding = try XCTUnwrap(AtlasKeychainRuntimeBindingStore(client: keychain).load(for: selected.vaultID))
+        let result = try epoch.commitRuntimeMutations(AtlasVaultMutationSet(
                     updates: [
                         AtlasVaultUpdateMutation(
                             recordID: current.metadata.id,
@@ -963,27 +1013,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
                             keyID: current.metadata.keyID
                         ),
                     ]
-                ),
-                session: session
-            ).first
-        )
-        let records = store.records.map { record in
-            record.id == current.metadata.id ? updatedRecord : record
-        }
-        let replacement = AtlasVaultLocalStoreEnvelope(
-            format: store.format,
-            version: store.version,
-            storeID: store.storeID,
-            createdAt: store.createdAt,
-            updatedAt: updatedAt,
-            vaultMetadata: store.vaultMetadata,
-            records: records
-        )
-        _ = try AtlasVaultAtomicStoreWriter().write(
-            replacement,
-            to: storeURL(root: root, selected: selected),
-            overwrite: true
-        )
+                ), signingKey: binding.signingKey())
+        XCTAssertEqual(result.commitState, .committed)
     }
 
     private static func configuration()

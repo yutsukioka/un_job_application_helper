@@ -50,8 +50,10 @@ void main() {
     );
     expect(
       windowsAssembly,
-      contains('localCacheStoreFactory: _defaultCacheStore'),
+      contains('localCacheStoreFactory: _noPersistentPlaintextCache'),
     );
+    expect(windowsAssembly, contains('requireEncryptedPrivateState: true'));
+    expect(windowsAssembly, contains('epochSessionFactory:'));
     expect(windowsAssembly, isNot(contains('activateExistingAtlasVault')));
     expect(windowsAssembly, isNot(contains('AtlasVaultPlaintextMigration')));
     expect(windowsAssembly, isNot(contains('AtlasVaultInteroperability')));
