@@ -88,7 +88,8 @@ void main() {
       inviteeAcceptance.disposition,
       AtlasVaultTrustedPairingDisposition.acceptanceReady,
     );
-    expect(inviteeAcceptance.sas, isNotNull);
+    // Comparison starts only after the acceptance has been exported.
+    expect(inviteeAcceptance.sas == null, isTrue);
     expect(
       (await journey.invitee.savePairingAcceptance()).disposition,
       AtlasVaultTrustedPairingDisposition.acceptanceSaved,
@@ -99,10 +100,26 @@ void main() {
       inviterCodes.disposition,
       AtlasVaultTrustedPairingDisposition.codesReady,
     );
-    expect(inviterCodes.sas, inviteeCodes.sas);
+    expect(
+      inviterCodes.sas == inviteeCodes.sas && inviterCodes.sas != null,
+      isTrue,
+    );
+    final wrongTranscript = await journey.inviter.confirmCodesMatch(
+      expectedTranscriptSha256: '0' * 64,
+    );
+    expect(
+      wrongTranscript.disposition,
+      AtlasVaultTrustedPairingDisposition.failed,
+    );
+    expect(
+      (await journey.inviter.inspect()).stage,
+      AtlasVaultPairingStage.acceptanceImported,
+    );
 
     expect(
-      (await journey.inviter.confirmCodesMatch()).disposition,
+      (await journey.inviter.confirmCodesMatch(
+        expectedTranscriptSha256: inviterCodes.transcriptSha256,
+      )).disposition,
       AtlasVaultTrustedPairingDisposition.deliveryReady,
     );
     expect(

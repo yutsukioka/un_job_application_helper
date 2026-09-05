@@ -28,6 +28,7 @@ void main() {
     final coordinator = _PairingViewCoordinator();
     final owner = AtlasVaultTrustedPairingPresentationOwner(
       coordinator: coordinator,
+      now: () => DateTime.utc(2026, 1, 1),
     );
     addTearDown(owner.dispose);
     final blocked = Completer<AtlasVaultTrustedPairingResult>();
@@ -39,6 +40,10 @@ void main() {
     blocked.complete(
       const AtlasVaultTrustedPairingResult(
         disposition: AtlasVaultTrustedPairingDisposition.codesReady,
+        stage: AtlasVaultPairingStage.acceptanceImported,
+        transcriptSha256:
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        expiresAt: '2026-01-01T00:05:00Z',
         sas: 'ABCD-EF12-3456',
         pendingTransaction: true,
       ),
@@ -218,8 +223,9 @@ final class _PairingViewCoordinator
       _result('importAcceptance');
 
   @override
-  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch() =>
-      _result('confirm');
+  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch({
+    String? expectedTranscriptSha256,
+  }) => _result('confirm');
 
   @override
   Future<AtlasVaultTrustedPairingResult> saveKeyDelivery() =>

@@ -992,13 +992,16 @@ public enum AtlasVaultTrustedPairingDisposition: Sendable {
     case failed
 }
 
-public struct AtlasVaultTrustedPairingResult: Sendable {
+public struct AtlasVaultTrustedPairingResult:
+    Sendable, CustomStringConvertible, CustomDebugStringConvertible
+{
     public let disposition: AtlasVaultTrustedPairingDisposition
     public let role: AtlasVaultPairingRole?
     public let stage: AtlasVaultPairingStage?
     public let localFingerprint: String?
     public let peerFingerprint: String?
     public let sas: String?
+    public let transcriptSHA256: String?
     public let expiresAt: String?
     public let trusted: Bool
     public let pendingTransaction: Bool
@@ -1010,6 +1013,7 @@ public struct AtlasVaultTrustedPairingResult: Sendable {
         localFingerprint: String? = nil,
         peerFingerprint: String? = nil,
         sas: String? = nil,
+        transcriptSHA256: String? = nil,
         expiresAt: String? = nil,
         trusted: Bool = false,
         pendingTransaction: Bool = false
@@ -1020,10 +1024,13 @@ public struct AtlasVaultTrustedPairingResult: Sendable {
         self.localFingerprint = localFingerprint
         self.peerFingerprint = peerFingerprint
         self.sas = sas
+        self.transcriptSHA256 = transcriptSHA256
         self.expiresAt = expiresAt
         self.trusted = trusted
         self.pendingTransaction = pendingTransaction
     }
+    public var description: String { "AtlasVaultTrustedPairingResult(<redacted>)" }
+    public var debugDescription: String { description }
 }
 
 public protocol AtlasVaultTrustedPairingCoordinating: Sendable {
@@ -1044,6 +1051,7 @@ public protocol AtlasVaultTrustedPairingCoordinating: Sendable {
         _ artifact: AtlasVaultPairingArtifact
     ) async -> AtlasVaultTrustedPairingResult
     func confirmCodesMatch() async -> AtlasVaultTrustedPairingResult
+    func confirmCodesMatch(expectedTranscriptSHA256: String) async -> AtlasVaultTrustedPairingResult
     func importKeyDelivery(
         _ artifact: AtlasVaultPairingArtifact
     ) async -> AtlasVaultTrustedPairingResult
@@ -1574,6 +1582,14 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 try await self.clearTransaction(updated)
                 return self.fixed(.completed, trusted: true)
             }
+            if kind == .acceptance,
+               let identity = try await self.environment.loadIdentity() {
+                return try await self.resultWithSAS(
+                    expected.3,
+                    transaction: updated,
+                    identity: identity
+                )
+            }
             return self.result(
                 expected.3,
                 updated,
@@ -1766,13 +1782,30 @@ public actor AtlasVaultTrustedPairingCoordinator:
         }
     }
 
-    public func confirmCodesMatch() async
+    public func confirmCodesMatch() async -> AtlasVaultTrustedPairingResult {
+        await confirmDisplayedCodes(expectedTranscriptSHA256: nil)
+    }
+
+    public func confirmCodesMatch(expectedTranscriptSHA256: String) async
+        -> AtlasVaultTrustedPairingResult
+    {
+        await confirmDisplayedCodes(expectedTranscriptSHA256: expectedTranscriptSHA256)
+    }
+
+    private func confirmDisplayedCodes(expectedTranscriptSHA256: String?) async
         -> AtlasVaultTrustedPairingResult
     {
         await run {
             guard let identity = try await self.environment.loadIdentity(),
                   let transaction = try await self.environment.loadTransaction()
             else { return self.fixed(.failed) }
+            if let expectedTranscriptSHA256 {
+                guard expectedTranscriptSHA256.range(
+                    of: "^[0-9a-f]{64}$", options: .regularExpression
+                ) != nil,
+                      expectedTranscriptSHA256 == transaction.transcriptSHA256
+                else { return self.fixed(.failed, pending: true) }
+            }
             if transaction.role == .invitee {
                 guard transaction.stage == .acceptanceSaved else {
                     return self.fixed(.failed, pending: true)
@@ -3209,10 +3242,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         if let identity,
            transaction.transcriptSHA256 != nil,
            transaction.acceptanceSHA256 != nil,
-           [.acceptanceSaved, .acceptanceImported, .sasConfirmed,
-            .offerConsumed, .deliveryCreated, .deliveryExportStarted,
-            .deliverySaved]
-            .contains(transaction.stage) {
+           [.acceptanceSaved, .acceptanceImported].contains(transaction.stage) {
             return try await resultWithSAS(
                 disposition,
                 transaction: transaction,
@@ -3247,7 +3277,9 @@ public actor AtlasVaultTrustedPairingCoordinator:
             peerFingerprint: peerDeviceID.flatMap(
                 AtlasVaultPairingFoundation.deviceFingerprint
             ),
-            sas: sas,
+            sas: [.acceptanceSaved, .acceptanceImported]
+                .contains(transaction.stage) ? sas : nil,
+            transcriptSHA256: transaction.transcriptSHA256,
             expiresAt: expiresAt,
             trusted: trusted,
             pendingTransaction: true

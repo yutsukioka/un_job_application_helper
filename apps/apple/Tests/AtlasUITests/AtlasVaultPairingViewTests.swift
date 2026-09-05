@@ -5,6 +5,65 @@ import XCTest
 
 @MainActor
 final class AtlasVaultPairingViewTests: XCTestCase {
+    func testC30LiveComparisonIsBoundAndClearedOnConfirmation() async {
+        let transcript = String(repeating: "a", count: 64)
+        let coordinator = PairingViewCancellationCoordinator(response: .init(
+            disposition: .codesReady, stage: .acceptanceImported,
+            sas: "ABCD-EF12-3456", transcriptSHA256: transcript,
+            expiresAt: "2026-01-01T00:05:00Z", pendingTransaction: true))
+        let owner = AtlasVaultTrustedPairingPresentationOwner(coordinator: coordinator,
+            now: { Date(timeIntervalSince1970: 1767225600) })
+        owner.resumePairing()
+        for _ in 0..<1000 { if !owner.isBusy { break }; await Task.yield() }
+        XCTAssertTrue(owner.sas != nil)
+        let resultDescription = await coordinator.responseDescription()
+        XCTAssertFalse(resultDescription.contains(owner.sas ?? "missing"))
+        await coordinator.setResponse(.init(disposition: .codesConfirmed))
+        owner.confirmCodesMatch()
+        XCTAssertTrue(owner.sas == nil)
+        for _ in 0..<1000 { if !owner.isBusy { break }; await Task.yield() }
+        let confirmed = await coordinator.confirmedTranscript()
+        XCTAssertEqual(confirmed, transcript)
+        owner.confirmCodesMatch()
+        let count = await coordinator.confirmationCount()
+        XCTAssertEqual(count, 1)
+        await owner.stopAndDrain()
+    }
+
+    func testC30ExpiryTaskClearsComparisonWithStationaryWallClock() async throws {
+        let coordinator = PairingViewCancellationCoordinator(response: .init(
+            disposition: .codesReady, stage: .acceptanceImported,
+            sas: "ABCD-EF12-3456", transcriptSHA256: String(repeating: "a", count: 64),
+            expiresAt: "1970-01-01T00:00:01Z", pendingTransaction: true))
+        let owner = AtlasVaultTrustedPairingPresentationOwner(coordinator: coordinator,
+            now: { Date(timeIntervalSince1970: 0.9) })
+        owner.resumePairing()
+        for _ in 0..<1000 { if !owner.isBusy { break }; await Task.yield() }
+        XCTAssertTrue(owner.sas != nil)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(owner.sas == nil)
+        owner.confirmCodesMatch()
+        let count = await coordinator.confirmationCount()
+        XCTAssertEqual(count, 0)
+        await owner.stopAndDrain()
+    }
+
+    func testC30UnboundComparisonAndDismissalAreFenced() async {
+        let coordinator = PairingViewCancellationCoordinator(response: .init(
+            disposition: .codesReady, stage: .acceptanceImported,
+            sas: "ABCD-EF12-3456", expiresAt: "2026-01-01T00:05:00Z", pendingTransaction: true))
+        let owner = AtlasVaultTrustedPairingPresentationOwner(coordinator: coordinator,
+            now: { Date(timeIntervalSince1970: 1767225600) })
+        owner.resumePairing()
+        for _ in 0..<1000 { if !owner.isBusy { break }; await Task.yield() }
+        XCTAssertTrue(owner.sas == nil)
+        owner.dismiss()
+        owner.confirmCodesMatch()
+        let count = await coordinator.confirmationCount()
+        XCTAssertEqual(count, 0)
+        await owner.stopAndDrain()
+    }
+
     func testC30ConsumedAndExpiredComparisonIsNotDisplayed() async {
         for disposition: AtlasVaultTrustedPairingDisposition in [.completed, .codesConfirmed, .failed, .cancelled, .codesReady] {
             let coordinator = PairingViewCancellationCoordinator(response: .init(
@@ -200,7 +259,11 @@ final class AtlasVaultPairingViewTests: XCTestCase {
 private actor PairingViewCancellationCoordinator:
     AtlasVaultTrustedPairingCoordinating
 {
-    private let response: AtlasVaultTrustedPairingResult
+    private var response: AtlasVaultTrustedPairingResult
+    private var transcript: String?
+    func setResponse(_ result: AtlasVaultTrustedPairingResult) { response = result }
+    func responseDescription() -> String { String(reflecting: response) }
+    func confirmedTranscript() -> String? { transcript }
     private var confirmations = 0
     init(response: AtlasVaultTrustedPairingResult = .init(disposition: .cancelled)) {
         self.response = response
@@ -265,6 +328,11 @@ private actor PairingViewCancellationCoordinator:
     }
     func confirmCodesMatch() async -> AtlasVaultTrustedPairingResult {
         confirmations += 1
+        return response
+    }
+    func confirmCodesMatch(expectedTranscriptSHA256: String) async -> AtlasVaultTrustedPairingResult {
+        confirmations += 1
+        transcript = expectedTranscriptSHA256
         return response
     }
     func importKeyDelivery(

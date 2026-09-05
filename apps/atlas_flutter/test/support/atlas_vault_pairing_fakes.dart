@@ -630,8 +630,10 @@ runAtlasVaultPairingPlatformJourney({
       acceptance.disposition,
       AtlasVaultTrustedPairingDisposition.acceptanceReady,
     );
+    expect(acceptance.sas == null, isTrue);
+    final inviteeCodes = await invitee.savePairingAcceptance();
     expect(
-      (await invitee.savePairingAcceptance()).disposition,
+      inviteeCodes.disposition,
       AtlasVaultTrustedPairingDisposition.acceptanceSaved,
     );
     artifacts[AtlasVaultPairingArtifactKind.acceptance] =
@@ -643,13 +645,18 @@ runAtlasVaultPairingPlatformJourney({
       inviterCodes.disposition,
       AtlasVaultTrustedPairingDisposition.codesReady,
     );
-    expect(inviterCodes.sas, acceptance.sas);
+    expect(inviterCodes.sas != null, isTrue);
+    expect(inviterCodes.sas == inviteeCodes.sas, isTrue);
     expect(
-      (await inviter.confirmCodesMatch()).disposition,
+      (await inviter.confirmCodesMatch(
+        expectedTranscriptSha256: inviterCodes.transcriptSha256,
+      )).disposition,
       AtlasVaultTrustedPairingDisposition.deliveryReady,
     );
     expect(
-      (await invitee.confirmCodesMatch()).disposition,
+      (await invitee.confirmCodesMatch(
+        expectedTranscriptSha256: inviteeCodes.transcriptSha256,
+      )).disposition,
       AtlasVaultTrustedPairingDisposition.codesConfirmed,
     );
     artifacts[AtlasVaultPairingArtifactKind.delivery] =
@@ -708,9 +715,11 @@ runAtlasVaultPairingPlatformJourney({
             as String;
     for (final bytes in artifacts.values) {
       final text = utf8.decode(bytes);
-      expect(text, isNot(contains(sentinel)));
-      expect(text, isNot(contains('"vault_key"')));
-      expect(text, isNot(contains('"private_key"')));
+      expect(text.contains(sentinel), isFalse);
+      expect(text.contains('"vault_key"'), isFalse);
+      expect(text.contains('"private_key"'), isFalse);
+      expect(text.contains(inviterCodes.sas!), isFalse);
+      expect(text.contains('"sas"'), isFalse);
     }
 
     final evidence = AtlasVaultPairingPlatformJourneyEvidence(

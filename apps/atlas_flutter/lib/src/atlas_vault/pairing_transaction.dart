@@ -605,6 +605,7 @@ final class AtlasVaultTrustedPairingResult {
     this.localFingerprint,
     this.peerFingerprint,
     this.sas,
+    this.transcriptSha256,
     this.expiresAt,
     this.trusted = false,
     this.pendingTransaction = false,
@@ -616,6 +617,7 @@ final class AtlasVaultTrustedPairingResult {
   final String? localFingerprint;
   final String? peerFingerprint;
   final String? sas;
+  final String? transcriptSha256;
   final String? expiresAt;
   final bool trusted;
   final bool pendingTransaction;
@@ -641,7 +643,9 @@ abstract interface class AtlasVaultTrustedPairingCoordinating {
 
   Future<AtlasVaultTrustedPairingResult> importPairingAcceptance();
 
-  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch();
+  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch({
+    String? expectedTranscriptSha256,
+  });
 
   Future<AtlasVaultTrustedPairingResult> saveKeyDelivery();
 
@@ -1208,13 +1212,23 @@ final class AtlasVaultTrustedPairingCoordinator
   );
 
   @override
-  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch() => _run(() async {
+  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch({
+    String? expectedTranscriptSha256,
+  }) => _run(() async {
     AtlasVaultPairingTransaction? transaction;
     AtlasVaultDeviceIdentity? identity;
     try {
       transaction = await _transactionStore.read();
       if (transaction == null) {
         return _fixed(AtlasVaultTrustedPairingDisposition.failed);
+      }
+      if (expectedTranscriptSha256 != null &&
+          (!RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedTranscriptSha256) ||
+              transaction.transcriptSha256 != expectedTranscriptSha256)) {
+        return _fixed(
+          AtlasVaultTrustedPairingDisposition.failed,
+          pending: true,
+        );
       }
       identity = await _requireIdentity();
       if (transaction.role == AtlasVaultPairingRole.invitee) {
@@ -2598,6 +2612,13 @@ final class AtlasVaultTrustedPairingCoordinator
       _requireCurrentDeliveryForSave(kind, artifact);
       final updated = await _advance(transaction, savedStage);
       identity = await _loadIdentity();
+      if (savedStage == AtlasVaultPairingStage.acceptanceSaved) {
+        return await _resultFor(
+          updated,
+          identity: identity,
+          dispositionOverride: disposition,
+        );
+      }
       return _result(disposition, updated, local: identity);
     } catch (_) {
       return _fixed(
@@ -2626,6 +2647,7 @@ final class AtlasVaultTrustedPairingCoordinator
   Future<AtlasVaultTrustedPairingResult> _resultFor(
     AtlasVaultPairingTransaction transaction, {
     AtlasVaultDeviceIdentity? identity,
+    AtlasVaultTrustedPairingDisposition? dispositionOverride,
   }) async {
     final ownedIdentity = identity == null ? await _loadIdentity() : null;
     final local = identity ?? ownedIdentity;
@@ -2667,21 +2689,34 @@ final class AtlasVaultTrustedPairingCoordinator
           AtlasVaultTrustedPairingDisposition.recoveryRequired,
       };
       String? sas;
+      String? expiry;
       if (local != null &&
+          [
+            AtlasVaultPairingStage.acceptanceSaved,
+            AtlasVaultPairingStage.acceptanceImported,
+          ].contains(transaction.stage) &&
           transaction.transcriptSha256 != null &&
           transaction.acceptanceSha256 != null) {
         try {
+          await _requireLivePairingDeadlineFor(transaction);
           sas = await _sasFor(transaction, local);
+          expiry = _signedOffer(
+            await _requireStaged(
+              AtlasVaultPairingArtifactKind.offer,
+              transaction,
+            ),
+          ).offer.expiresAt;
         } catch (_) {
           sas = null;
         }
       }
       return _result(
-        disposition,
+        dispositionOverride ?? disposition,
         transaction,
         local: local,
         peerDeviceId: transaction.peerDeviceId,
         sas: sas,
+        expiresAt: expiry,
         trusted:
             transaction.stage == AtlasVaultPairingStage.trustCommitted ||
             transaction.stage ==
@@ -2711,7 +2746,14 @@ final class AtlasVaultTrustedPairingCoordinator
     peerFingerprint: peerDeviceId == null
         ? null
         : atlasVaultPairingDeviceFingerprint(peerDeviceId),
-    sas: sas,
+    sas:
+        [
+          AtlasVaultPairingStage.acceptanceSaved,
+          AtlasVaultPairingStage.acceptanceImported,
+        ].contains(transaction.stage)
+        ? sas
+        : null,
+    transcriptSha256: transaction.transcriptSha256,
     expiresAt: expiresAt,
     trusted: trusted,
     pendingTransaction: true,
