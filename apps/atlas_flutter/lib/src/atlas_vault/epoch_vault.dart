@@ -63,6 +63,7 @@ final class AtlasVaultEpochVault {
   final List<Map<String, Object?>> _registry;
   final Map<String, Object?> _context;
   final _EpochPublication _file;
+  List<Map<String, Object?>>? _runtimePublicationRegistry;
   bool _busy = false;
   Future<T> _run<T>(Future<T> Function() action) async {
     if (_busy) _epochFail();
@@ -156,7 +157,13 @@ final class AtlasVaultEpochVault {
     }
     AtlasVaultRevocation.registryRoot(_epochRows(s['registry']));
     _ring(s);
-    _exact(_object(s['components']), {'history', 'outbox', 'inbox'});
+    final components = _object(s['components']);
+    _exact(components, {
+      'history',
+      'outbox',
+      'inbox',
+      if (components.containsKey('runtime')) 'runtime',
+    });
     if (s['journal'] != null && _object(s['journal'])['kind'] == 'CATCH_UP') {
       final j = _object(s['journal']);
       if (!['ACTIVE', 'CATCH_UP_PENDING'].contains(j['phase'])) _epochFail();
@@ -556,14 +563,69 @@ final class AtlasVaultEpochVault {
   Future<Map<String, Object?>> createCommitment(
     Uint8List opaqueState, {
     required SimpleKeyPair signingKey,
+    List<Map<String, Object?>>? authenticatedRegistry,
   }) => _run(() async {
     final s = await _load();
+    return _createCommitment(
+      s,
+      opaqueState,
+      signingKey: signingKey,
+      authenticatedRegistry: authenticatedRegistry,
+    );
+  });
+
+  Future<List<Map<String, Object?>>> _publicationRegistry(
+    Map<String, Object?> s,
+    List<Map<String, Object?>>? supplied,
+  ) async {
+    final history = _history(s),
+        bridges = await history._bridge(await history._load());
+    if (bridges.isEmpty) {
+      final registry = supplied ?? _runtimePublicationRegistry;
+      if (registry == null) _epochFail('ATLAS_RUNTIME_PROVISIONING_REQUIRED');
+      final prior = (await history.exportEvidence()).last;
+      if (AtlasVaultAuthenticatedStateView.registryRoot(registry) !=
+          prior['registry_root']) {
+        _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+      }
+      return _epochRows(jsonDecode(jsonEncode(registry)));
+    }
+    final registry = _epochRows(s['registry']);
+    if (supplied != null &&
+        AtlasVaultRevocation.registryRoot(supplied) !=
+            AtlasVaultRevocation.registryRoot(registry)) {
+      _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+    }
+    return registry;
+  }
+
+  Future<Map<String, Object?>> _createCommitment(
+    Map<String, Object?> s,
+    Uint8List opaqueState, {
+    required SimpleKeyPair signingKey,
+    List<Map<String, Object?>>? authenticatedRegistry,
+  }) async {
     await _active(s);
-    if (s['journal'] == null || _object(s['journal'])['phase'] != 'ACTIVE') {
+    if (s['journal'] != null && _object(s['journal'])['phase'] != 'ACTIVE') {
       _epochFail();
     }
     final history = _history(s),
         prior = (await _history(s).exportEvidence()).last;
+    final bridges = await history._bridge(await history._load());
+    final public = bridges.isEmpty
+        ? history._public
+        : history._bridgePublic(bridges.last);
+    if (base64Encode((await signingKey.extractPublicKey()).bytes) !=
+        base64Encode(public)) {
+      _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+    }
+    final publicationRegistry = await _publicationRegistry(
+      s,
+      authenticatedRegistry,
+    );
+    final registryRoot = bridges.isEmpty
+        ? AtlasVaultAuthenticatedStateView.registryRoot(publicationRegistry)
+        : AtlasVaultRevocation.registryRoot(publicationRegistry);
     final collection = await AtlasVaultSignedStateCommitment.sign(
       opaqueState,
       collectionId:
@@ -583,20 +645,19 @@ final class AtlasVaultEpochVault {
       'sequence': collection.sequence,
       'previous_root': prior['root'],
       'collection_root': collection.root,
-      'registry_root': AtlasVaultRevocation.registryRoot(
-        _epochRows(s['registry']),
-      ),
+      'registry_root': registryRoot,
       'previous_registry_root': prior['registry_root'],
       'key_epoch': s['epoch'],
     }, signingKey);
     await history.ingest(
       view,
-      _epochRows(s['registry']),
+      publicationRegistry,
       collection.toJson(),
       opaqueState,
     );
     return {'view': view, 'collection': collection.toJson()};
-  });
+  }
+
   Future<AtlasVaultOpaqueCiphertextEnvelope> seal(
     String kind,
     Uint8List plaintext, {
@@ -606,6 +667,24 @@ final class AtlasVaultEpochVault {
   }) => _run(() async {
     final s = await _load();
     await _active(s);
+    return _seal(
+      s,
+      kind,
+      plaintext,
+      objectID: objectID,
+      revision: revision,
+      signingKey: signingKey,
+    );
+  });
+
+  Future<AtlasVaultOpaqueCiphertextEnvelope> _seal(
+    Map<String, Object?> s,
+    String kind,
+    Uint8List plaintext, {
+    required String objectID,
+    required String revision,
+    required SimpleKeyPair signingKey,
+  }) async {
     final ring = _ring(s);
     if (!['patch', 'snapshot'].contains(kind) ||
         plaintext.length > 1024 * 1024) {
@@ -673,97 +752,102 @@ final class AtlasVaultEpochVault {
       'tombstone': false,
       'content_sha256': _sha256Hex(Uint8List.fromList(ciphertext)),
     });
-  });
+  }
+
   Future<Uint8List> open(AtlasVaultOpaqueCiphertextEnvelope envelope) =>
       _run(() async {
-        final s = await _load(),
-            ring = _ring(await _load()),
-            raw = envelope.toJson();
-        final aad = _base64(raw['aad_b64']),
-            m = _object(jsonDecode(ascii.decode(_base64(raw['aad_b64']))));
-        _exact(m, {
-          'format',
-          'version',
-          'account_id',
-          'vault_id',
-          'key_epoch',
-          'device_id',
-          'kind',
-          'object_id',
-          'revision',
-        });
-        if (m['format'] != 'atlasvault-epoch-ciphertext' ||
-            m['version'] is! int ||
-            m['version'] != 1 ||
-            !['patch', 'snapshot'].contains(m['kind']) ||
-            ['account_id', 'vault_id'].any((k) => m[k] != _context[k]) ||
-            m['key_epoch'] != envelope.keyEpoch ||
-            m['object_id'] != envelope.objectId ||
-            m['revision'] != envelope.revision ||
-            base64Encode(rotation.rotationCanonical(m)) != base64Encode(aad)) {
-          _epochFail();
-        }
-        late List<Map<String, Object?>> authorRegistry;
-        if (envelope.keyEpoch == s['epoch']) {
-          authorRegistry = _epochRows(s['registry']);
-        } else if (envelope.keyEpoch == _context['key_epoch']) {
-          authorRegistry = _registry;
-        } else {
-          final records = _epochBridgeRecords(
-            _object(_object(s['components'])['history']),
-          );
-          await _verifyEpochBridges(records, _registry, _context);
-          Map<String, Object?>? found;
-          for (final record in records) {
-            final candidate = _bridgeProof(record),
-                plan = _object(candidate['plan']);
-            if (plan['previous_epoch'] == envelope.keyEpoch) {
-              found = candidate;
-              break;
-            }
-          }
-          if (found == null) _epochFail();
-          authorRegistry = _epochRows(found['registry']);
-        }
-        final nonce = _base64(raw['nonce_b64'], exactLength: 12),
-            ciphertext = _base64(raw['ciphertext_b64'], minimumLength: 16);
-        final entry = authorRegistry.cast<Map<String, Object?>?>().firstWhere(
-          (e) => e?['device_id'] == m['device_id'] && e?['state'] == 'ACTIVE',
-          orElse: () => null,
-        );
-        if (entry == null) _epochFail('ATLAS_DEVICE_REVOKED');
-        if (!await Ed25519().verify(
-          [
-            ...ascii.encode('atlasvault-epoch-ciphertext-signature-v1\u0000'),
-            ...aad,
-            ...nonce,
-            ...ciphertext,
-          ],
-          signature: Signature(
-            _base64(raw['signature_b64'], exactLength: 64),
-            publicKey: SimplePublicKey(
-              _base64(entry['signing_public_b64'], exactLength: 32),
-              type: KeyPairType.ed25519,
-            ),
-          ),
-        )) {
-          _epochFail();
-        }
-        final key = await ring.deriveRecordKey(
-          keyEpoch: envelope.keyEpoch,
-          vaultId: _context['vault_id']! as String,
-          recordId: envelope.objectId,
-        );
-        return Uint8List.fromList(
-          await AesGcm.with256bits().decrypt(
-            SecretBox(
-              ciphertext.sublist(0, ciphertext.length - 16),
-              nonce: nonce,
-              mac: Mac(ciphertext.sublist(ciphertext.length - 16)),
-            ),
-            secretKey: SecretKey(key),
-            aad: aad,
-          ),
-        );
+        return _open(await _load(), envelope);
       });
+  Future<Uint8List> _open(
+    Map<String, Object?> s,
+    AtlasVaultOpaqueCiphertextEnvelope envelope,
+  ) async {
+    final ring = _ring(s), raw = envelope.toJson();
+    final aad = _base64(raw['aad_b64']),
+        m = _object(jsonDecode(ascii.decode(_base64(raw['aad_b64']))));
+    _exact(m, {
+      'format',
+      'version',
+      'account_id',
+      'vault_id',
+      'key_epoch',
+      'device_id',
+      'kind',
+      'object_id',
+      'revision',
+    });
+    if (m['format'] != 'atlasvault-epoch-ciphertext' ||
+        m['version'] is! int ||
+        m['version'] != 1 ||
+        !['patch', 'snapshot'].contains(m['kind']) ||
+        ['account_id', 'vault_id'].any((k) => m[k] != _context[k]) ||
+        m['key_epoch'] != envelope.keyEpoch ||
+        m['object_id'] != envelope.objectId ||
+        m['revision'] != envelope.revision ||
+        base64Encode(rotation.rotationCanonical(m)) != base64Encode(aad)) {
+      _epochFail();
+    }
+    late List<Map<String, Object?>> authorRegistry;
+    if (envelope.keyEpoch == s['epoch']) {
+      authorRegistry = _epochRows(s['registry']);
+    } else if (envelope.keyEpoch == _context['key_epoch']) {
+      authorRegistry = _registry;
+    } else {
+      final records = _epochBridgeRecords(
+        _object(_object(s['components'])['history']),
+      );
+      await _verifyEpochBridges(records, _registry, _context);
+      Map<String, Object?>? found;
+      for (final record in records) {
+        final candidate = _bridgeProof(record),
+            plan = _object(candidate['plan']);
+        if (plan['previous_epoch'] == envelope.keyEpoch) {
+          found = candidate;
+          break;
+        }
+      }
+      if (found == null) _epochFail();
+      authorRegistry = _epochRows(found['registry']);
+    }
+    final nonce = _base64(raw['nonce_b64'], exactLength: 12),
+        ciphertext = _base64(raw['ciphertext_b64'], minimumLength: 16);
+    final entry = authorRegistry.cast<Map<String, Object?>?>().firstWhere(
+      (e) => e?['device_id'] == m['device_id'] && e?['state'] == 'ACTIVE',
+      orElse: () => null,
+    );
+    if (entry == null) _epochFail('ATLAS_DEVICE_REVOKED');
+    if (!await Ed25519().verify(
+      [
+        ...ascii.encode('atlasvault-epoch-ciphertext-signature-v1\u0000'),
+        ...aad,
+        ...nonce,
+        ...ciphertext,
+      ],
+      signature: Signature(
+        _base64(raw['signature_b64'], exactLength: 64),
+        publicKey: SimplePublicKey(
+          _base64(entry['signing_public_b64'], exactLength: 32),
+          type: KeyPairType.ed25519,
+        ),
+      ),
+    )) {
+      _epochFail();
+    }
+    final key = await ring.deriveRecordKey(
+      keyEpoch: envelope.keyEpoch,
+      vaultId: _context['vault_id']! as String,
+      recordId: envelope.objectId,
+    );
+    return Uint8List.fromList(
+      await AesGcm.with256bits().decrypt(
+        SecretBox(
+          ciphertext.sublist(0, ciphertext.length - 16),
+          nonce: nonce,
+          mac: Mac(ciphertext.sublist(ciphertext.length - 16)),
+        ),
+        secretKey: SecretKey(key),
+        aad: aad,
+      ),
+    );
+  }
 }

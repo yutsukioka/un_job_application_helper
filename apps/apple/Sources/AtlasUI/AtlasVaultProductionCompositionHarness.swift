@@ -507,6 +507,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
     private let savedSearchContext: AtlasVaultSavedSearchContext?
+    private let recordsContext: AtlasVaultRecordsContext?
     private let pairingContext: AtlasVaultTrustedPairingContext?
     private let savedSearchHandoffCoordinator:
         (any AtlasVaultSavedSearchPublicHandoffCoordinating)?
@@ -573,6 +574,7 @@ public final class AtlasVaultProductionCompositionHarness:
         recoveryImportContext: AtlasVaultRecoveryImportContext? = nil,
         savedSearchContext: AtlasVaultSavedSearchContext? = nil,
         pairingContext: AtlasVaultTrustedPairingContext? = nil,
+        recordsContext: AtlasVaultRecordsContext? = nil,
         savedSearchHandoffCoordinator:
             (any AtlasVaultSavedSearchPublicHandoffCoordinating)? = nil
     ) {
@@ -583,6 +585,7 @@ public final class AtlasVaultProductionCompositionHarness:
         self.recoveryExportContext = recoveryExportContext
         self.recoveryImportContext = recoveryImportContext
         self.savedSearchContext = savedSearchContext
+        self.recordsContext = recordsContext
         self.pairingContext = pairingContext
         self.savedSearchHandoffCoordinator =
             savedSearchHandoffCoordinator
@@ -735,6 +738,7 @@ public final class AtlasVaultProductionCompositionHarness:
         let savedSearchHandoffCoordinator =
             savedSearchHandoffCoordinator
         savedSearchOwner?.hidePrivatePresentation()
+        recordsContext?.owner.hidePrivatePresentation()
         let task = Task {
             async let hostState = host.stop()
             async let lifecycleStop: Void = lifecycleForwarder.stop()
@@ -781,7 +785,8 @@ public final class AtlasVaultProductionCompositionHarness:
             recoveryExportContext: recoveryExportContext,
             recoveryImportContext: recoveryImportContext,
             savedSearchContext: savedSearchContext,
-            pairingContext: pairingContext
+            pairingContext: pairingContext,
+            recordsContext: recordsContext
         )
     }
 
@@ -818,6 +823,8 @@ public final class AtlasVaultProductionCompositionHarness:
     {
         savedSearchContext
     }
+
+    var recordsContextForTesting: AtlasVaultRecordsContext? { recordsContext }
 
     var pairingContextForTesting: AtlasVaultTrustedPairingContext? {
         pairingContext
@@ -1145,7 +1152,12 @@ public enum AtlasVaultProductionCompositionFactory {
             AtlasVaultSavedSearchPublicHandoffCoordinator(
                 host: savedSearchHandoffReservationHost
             )
-        guard privateSessionBridge.attach(savedSearchOwner) else {
+        let recordsOwner = AtlasVaultRecordsOwner(
+            read: { try await runtime.privateState().state },
+            apply: { await privateMutationHost.applyPrivateMutation($0) },
+            contain: { await privateMutationContainmentHost.containCommittedPrivateMutationFailure() })
+        let recordsContext = AtlasVaultRecordsContext(owner: recordsOwner)
+        guard privateSessionBridge.attach(AtlasVaultCombinedPrivateBoundary(searches: savedSearchOwner, records: recordsOwner)) else {
             throw AtlasVaultProductionCompositionError
                 .privateFeatureUnavailable
         }
@@ -1717,6 +1729,7 @@ public enum AtlasVaultProductionCompositionFactory {
             eventObserver: { event in
                 switch event {
                 case .willTerminate:
+                    await recordsOwner.stopAndDrainPrivateSession()
                     await pairingOwner.stopAndDrain()
                     await savedSearchHandoffCoordinator.stop()
                     await savedSearchOwner
@@ -1726,6 +1739,7 @@ public enum AtlasVaultProductionCompositionFactory {
                 case .willResignActive,
                      .didEnterBackground,
                      .protectedDataBecameUnavailable:
+                    await recordsOwner.hidePrivatePresentation()
                     await pairingOwner.clearSensitiveInput()
                     await savedSearchOwner
                         .hidePrivatePresentation()
@@ -1749,6 +1763,7 @@ public enum AtlasVaultProductionCompositionFactory {
             recoveryImportContext: recoveryImportContext,
             savedSearchContext: savedSearchContext,
             pairingContext: pairingContext,
+            recordsContext: recordsContext,
             savedSearchHandoffCoordinator:
                 savedSearchHandoffCoordinator
         )

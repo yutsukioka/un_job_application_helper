@@ -323,6 +323,13 @@ public final class AtlasVaultGuardedSyncState {
     }
   }
 
+  func runtimeSigningPublicKey() throws -> Data {
+    try run {
+      if let proof = try bridge(load()).last { return try bridgePublic(proof) }
+      return publicKey
+    }
+  }
+
   public func ingest(
     view raw: [String: Any], registry: [[String: Any]], collection rawCollection: [String: Any],
     opaqueState: Data

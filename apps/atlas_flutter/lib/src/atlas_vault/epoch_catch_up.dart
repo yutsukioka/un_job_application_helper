@@ -389,6 +389,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     if ([
       ...await outbox.pendingOperations(),
       ...inbox.pending,
+      ...(await _replica(s)._load()).operations,
     ].any((op) => !retainEpochs.contains(op.envelope.keyEpoch))) {
       _epochFail('ATLAS_CLEANUP_PENDING');
     }

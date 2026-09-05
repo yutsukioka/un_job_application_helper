@@ -456,7 +456,7 @@ public struct AtlasVaultPresentationAdapter:
             .unsupportedVersion
         case .cancelled:
             .cancelled
-        case .invalidVaultID, .vaultUnavailable, .activationInProgress, .alreadyUnlocked:
+        case .invalidVaultID, .vaultUnavailable, .migrationRequired, .activationInProgress, .alreadyUnlocked:
             .failed
         }
     }

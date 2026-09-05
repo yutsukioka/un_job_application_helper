@@ -11,6 +11,7 @@ public struct AtlasVaultProductionRootView: View {
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
     private let savedSearchContext: AtlasVaultSavedSearchContext?
     private let pairingContext: AtlasVaultTrustedPairingContext?
+    private let recordsContext: AtlasVaultRecordsContext?
 
     public init(
         owner: AtlasVaultProductionPresentationOwner,
@@ -25,6 +26,7 @@ public struct AtlasVaultProductionRootView: View {
         recoveryImportContext = nil
         savedSearchContext = nil
         pairingContext = nil
+        recordsContext = nil
     }
 
     public init(
@@ -41,6 +43,7 @@ public struct AtlasVaultProductionRootView: View {
         recoveryImportContext = nil
         savedSearchContext = nil
         pairingContext = nil
+        recordsContext = nil
     }
 
     public init(
@@ -57,6 +60,7 @@ public struct AtlasVaultProductionRootView: View {
         recoveryImportContext = nil
         savedSearchContext = nil
         pairingContext = nil
+        recordsContext = nil
     }
 
     public init(
@@ -74,6 +78,7 @@ public struct AtlasVaultProductionRootView: View {
         recoveryImportContext = nil
         savedSearchContext = nil
         pairingContext = nil
+        recordsContext = nil
     }
 
     public init(
@@ -84,7 +89,8 @@ public struct AtlasVaultProductionRootView: View {
         recoveryExportContext: AtlasVaultRecoveryExportContext?,
         recoveryImportContext: AtlasVaultRecoveryImportContext?,
         savedSearchContext: AtlasVaultSavedSearchContext? = nil,
-        pairingContext: AtlasVaultTrustedPairingContext? = nil
+        pairingContext: AtlasVaultTrustedPairingContext? = nil,
+        recordsContext: AtlasVaultRecordsContext? = nil
     ) {
         self.owner = owner
         self.publicShellActions = publicShellActions
@@ -94,6 +100,7 @@ public struct AtlasVaultProductionRootView: View {
         self.recoveryImportContext = recoveryImportContext
         self.savedSearchContext = savedSearchContext
         self.pairingContext = pairingContext
+        self.recordsContext = recordsContext
     }
 
     public var body: some View {
@@ -105,7 +112,8 @@ public struct AtlasVaultProductionRootView: View {
             recoveryExportContext: recoveryExportContext,
             recoveryImportContext: recoveryImportContext,
             savedSearchContext: savedSearchContext,
-            pairingContext: pairingContext
+            pairingContext: pairingContext,
+            recordsContext: recordsContext
         )
     }
 }
@@ -120,9 +128,29 @@ private struct AtlasVaultProductionRootContent: View {
     let recoveryImportContext: AtlasVaultRecoveryImportContext?
     let savedSearchContext: AtlasVaultSavedSearchContext?
     let pairingContext: AtlasVaultTrustedPairingContext?
+    let recordsContext: AtlasVaultRecordsContext?
+    @State private var recordsPresented = false
+
+    var body: some View {
+        pairedFlow
+            .safeAreaInset(edge: .top) {
+                if state.mode == .unlockedTransition, recordsContext != nil {
+                    HStack {
+                        Spacer()
+                        Button { recordsPresented = true } label: { Label("Private Records", systemImage: "tray.full") }
+                    }.padding(10).background(.bar)
+                }
+            }
+            .sheet(isPresented: Binding(get: { recordsPresented && state.mode == .unlockedTransition }, set: { recordsPresented = $0 })) {
+                if let recordsContext { AtlasVaultRecordsView(owner: recordsContext.owner) }
+            }
+            .onChange(of: state.mode) { _, mode in
+                if mode != .unlockedTransition { recordsPresented = false }
+            }
+    }
 
     @ViewBuilder
-    var body: some View {
+    private var pairedFlow: some View {
         if let pairingContext {
             AtlasVaultPairingEnabledRoot(
                 flowState: state,

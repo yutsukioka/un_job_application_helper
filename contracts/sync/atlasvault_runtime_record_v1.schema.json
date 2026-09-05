@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtlasVault Runtime Record v1 (encrypted client-side only)",
+  "description": "This payload exists only inside the existing signed epoch ciphertext. It is not an API request body or a server-readable record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "operation_id", "author_device_id", "author_sequence", "lamport", "object_id", "revision", "parent_revision", "tombstone", "payload"],
+  "properties": {
+    "format": {"const": "atlasvault-runtime-record"},
+    "version": {"const": 1, "type": "integer"},
+    "operation_id": {"type": "string", "format": "uuid"},
+    "author_device_id": {"type": "string", "pattern": "^[A-Za-z0-9._~-]{1,128}$"},
+    "author_sequence": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "lamport": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "object_id": {"type": "string", "pattern": "^[A-Za-z0-9._~-]{1,128}$"},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "parent_revision": {"type": ["string", "null"], "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "tombstone": {"type": "boolean"},
+    "payload": {"type": ["object", "null"]}
+  },
+  "allOf": [{
+    "if": {"properties": {"tombstone": {"const": true}}},
+    "then": {"properties": {"payload": {"type": "null"}}},
+    "else": {"properties": {"payload": {"type": "object"}}}
+  }]
+}

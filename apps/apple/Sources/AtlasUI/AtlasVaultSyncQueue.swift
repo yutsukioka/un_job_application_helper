@@ -1105,7 +1105,7 @@ private func snapshotDominates(
 }
 
 public final class AtlasVaultDurableEncryptedConvergentReplica {
-    private let store: EncryptedQueueFile
+    var store: EncryptedQueueFile
     private let authenticationKey: Data
     private let collectionID: String
 

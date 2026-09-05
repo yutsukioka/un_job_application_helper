@@ -7,6 +7,8 @@ import '../../atlas.dart';
 import '../../atlas_vault.dart' as vault;
 import 'android_storage.dart';
 import 'local_store_io.dart';
+import 'sync_queue.dart' as sync;
+import 'epoch_rotation.dart' show AtlasVaultRotationException;
 
 enum AtlasVaultActivationResult { activated, migrationRequired, failed }
 
@@ -100,6 +102,7 @@ final class AtlasVaultPrivateStateRuntime
     DateTime Function()? now,
     String Function()? uuidProvider,
     Uint8List Function()? nonceProvider,
+    Future<sync.AtlasVaultRuntimeSession> Function(String)? epochSessionFactory,
   }) : // Keep public constructor parameter names stable.
        // ignore: prefer_initializing_formals
        _secureKeyStore = secureKeyStore,
@@ -107,7 +110,9 @@ final class AtlasVaultPrivateStateRuntime
        _localStoreIO = localStoreIO,
        _now = now ?? DateTime.now,
        _uuidProvider = uuidProvider ?? _secureUuidV4,
-       _nonceProvider = nonceProvider ?? _secureNonce;
+       _nonceProvider = nonceProvider ?? _secureNonce,
+       // ignore: prefer_initializing_formals
+       _epochSessionFactory = epochSessionFactory;
 
   static const _recordKeyId = 'primary-android-local-key-v1';
 
@@ -116,6 +121,11 @@ final class AtlasVaultPrivateStateRuntime
   final DateTime Function() _now;
   final String Function() _uuidProvider;
   final Uint8List Function() _nonceProvider;
+  final Future<sync.AtlasVaultRuntimeSession> Function(String)?
+  _epochSessionFactory;
+  sync.AtlasVaultRuntimeSession? _epochSession;
+  String _runtimeState = 'LOCKED';
+  String get runtimeState => _runtimeState;
 
   bool _active = false;
   bool _activating = false;
@@ -139,7 +149,10 @@ final class AtlasVaultPrivateStateRuntime
   Future<void>? _interoperabilityOperation;
 
   @override
-  bool get isActive => _active && !_deactivating;
+  bool get isActive =>
+      _active &&
+      !_deactivating &&
+      (_epochSessionFactory == null || _runtimeState == 'ACTIVE');
 
   bool isActiveVault(String vaultId) {
     return isActive && _vaultId == vaultId;
@@ -171,6 +184,45 @@ final class AtlasVaultPrivateStateRuntime
     Uint8List? candidateKey;
     try {
       validateAtlasVaultAndroidVaultIdInternal(vaultId);
+      if (_epochSessionFactory != null) {
+        final candidate = await _epochSessionFactory(vaultId);
+        try {
+          _requireCurrentActivation(activationGeneration);
+        } catch (_) {
+          candidate.close();
+          rethrow;
+        }
+        _epochSession = candidate;
+        final legacy = await _localStoreIO.read(vaultId);
+        _requireCurrentActivation(activationGeneration);
+        if (legacy != null && legacy.records.isNotEmpty) {
+          candidateKey = await _secureKeyStore.loadVaultKey(vaultId);
+          _requireCurrentActivation(activationGeneration);
+          if (candidateKey == null || candidateKey.length != 32) {
+            _clearSession();
+            return AtlasVaultActivationResult.migrationRequired;
+          }
+          try {
+            await candidate.importLegacy(store: legacy, vaultKey: candidateKey);
+            final confirmed = await _localStoreIO.read(vaultId);
+            if (confirmed == null ||
+                !_sameJson(confirmed.toJson(), legacy.toJson())) {
+              throw const AtlasVaultPrivateStateException();
+            }
+          } catch (_) {
+            _clearSession();
+            return AtlasVaultActivationResult.migrationRequired;
+          }
+        }
+        final projected = await _readEpochSnapshot();
+        _requireCurrentActivation(activationGeneration);
+        _generation += 1;
+        _vaultId = vaultId;
+        _snapshot = projected;
+        _runtimeState = 'ACTIVE';
+        _active = true;
+        return AtlasVaultActivationResult.activated;
+      }
       candidateKey = await _secureKeyStore.loadVaultKey(vaultId);
       _requireCurrentActivation(activationGeneration);
       if (candidateKey == null || candidateKey.length != 32) {
@@ -210,11 +262,42 @@ final class AtlasVaultPrivateStateRuntime
   @override
   Future<AtlasVaultPrivateStateSnapshot> read() async {
     _requireActive();
+    if (_epochSession != null) {
+      final generation = _generation, session = _epochSession;
+      final snapshot = await _readEpochSnapshot();
+      if (!isActive ||
+          generation != _generation ||
+          !identical(session, _epochSession)) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      _snapshot = snapshot;
+    }
     return _copySnapshot(_snapshot);
   }
 
   @override
   Future<AtlasVaultPrivateStateSnapshot> saveSearch(AtlasSavedSearch value) {
+    if (_epochSession != null) {
+      return _enqueueEpochMutation(() async {
+        _snapshot = await _readEpochSnapshot();
+        final existing = _snapshot.records
+            .where(
+              (r) =>
+                  r.envelope.payload is vault.AtlasSavedSearchPayload &&
+                  (r.envelope.payload as vault.AtlasSavedSearchPayload).name ==
+                      value.name,
+            )
+            .firstOrNull;
+        return _commitEpochPayload(
+          _savedSearchEnvelope(
+            value,
+            timestamp: _utcSeconds(_now()),
+            existing: null,
+          ),
+          existing,
+        );
+      });
+    }
     return _enqueueMutation(
       (_MutationSession session) => _saveSearch(session, value),
     );
@@ -224,6 +307,27 @@ final class AtlasVaultPrivateStateRuntime
   Future<AtlasVaultPrivateStateSnapshot> saveTrackerRecord(
     AtlasApplicationRecord value,
   ) {
+    if (_epochSession != null) {
+      return _enqueueEpochMutation(() async {
+        _snapshot = await _readEpochSnapshot();
+        final existing = _snapshot.records
+            .where(
+              (r) =>
+                  r.envelope.payload is vault.AtlasSavedJobPayload &&
+                  (r.envelope.payload as vault.AtlasSavedJobPayload).jobKey ==
+                      value.jobKey,
+            )
+            .firstOrNull;
+        return _commitEpochPayload(
+          _savedJobEnvelope(
+            value,
+            timestamp: _utcSeconds(_now()),
+            existing: null,
+          ),
+          existing,
+        );
+      });
+    }
     return _enqueueMutation(
       (_MutationSession session) => _saveTrackerRecord(session, value),
     );
@@ -232,6 +336,9 @@ final class AtlasVaultPrivateStateRuntime
   Future<AtlasVaultPrivateStateSnapshot> createRecord(
     vault.AtlasVaultPayloadEnvelope envelope,
   ) {
+    if (_epochSession != null) {
+      return _enqueueEpochMutation(() => _commitEpochPayload(envelope, null));
+    }
     return _enqueueMutation(
       (session) => _commitMutation(
         session,
@@ -249,6 +356,15 @@ final class AtlasVaultPrivateStateRuntime
     required String currentRevision,
     required vault.AtlasVaultPayloadEnvelope envelope,
   }) {
+    if (_epochSession != null) {
+      return _enqueueEpochMutation(
+        () => _commitEpochRecord(
+          envelope: envelope,
+          recordId: recordId,
+          expectedRevision: currentRevision,
+        ),
+      );
+    }
     final existing = _recordMetadata[recordId];
     if (existing == null || existing.record.revision != currentRevision) {
       return Future<AtlasVaultPrivateStateSnapshot>.error(
@@ -272,6 +388,15 @@ final class AtlasVaultPrivateStateRuntime
     required String recordId,
     required String currentRevision,
   }) {
+    if (_epochSession != null) {
+      return _enqueueEpochMutation(
+        () => _commitEpochRecord(
+          envelope: null,
+          recordId: recordId,
+          expectedRevision: currentRevision,
+        ),
+      );
+    }
     final existing = _recordMetadata[recordId];
     if (existing == null || existing.record.revision != currentRevision) {
       return Future<AtlasVaultPrivateStateSnapshot>.error(
@@ -296,6 +421,10 @@ final class AtlasVaultPrivateStateRuntime
   Future<T> withInteroperabilitySession<T>(
     Future<T> Function(AtlasVaultInteroperabilitySession session) operation,
   ) {
+    // Legacy backup transport cannot export a stale pre-P5 projection as current.
+    if (_epochSession != null) {
+      return Future<T>.error(const AtlasVaultPrivateStateException());
+    }
     final generation = _generation;
     final vaultId = _vaultId;
     final key = _vaultKey;
@@ -384,6 +513,30 @@ final class AtlasVaultPrivateStateRuntime
       _clearSession();
       _deactivating = false;
     }
+  }
+
+  Future<AtlasVaultPrivateStateSnapshot> _enqueueEpochMutation(
+    Future<AtlasVaultPrivateStateSnapshot> Function() operation,
+  ) {
+    final generation = _generation;
+    if (!isActive || _epochSession == null) {
+      return Future.error(const AtlasVaultPrivateStateException());
+    }
+    _pendingMutationCount++;
+    final result = _mutationTail.then((_) async {
+      if (!isActive || _generation != generation) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      final value = await operation();
+      if (!isActive || _generation != generation) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      return value;
+    });
+    _mutationTail = result
+        .then<void>((_) {}, onError: (Object _) {})
+        .whenComplete(() => _pendingMutationCount--);
+    return result;
   }
 
   Future<AtlasVaultPrivateStateSnapshot> _enqueueMutation(
@@ -839,7 +992,127 @@ final class AtlasVaultPrivateStateRuntime
     _recordMetadata = hydrated.recordMetadata;
   }
 
+  Future<AtlasVaultPrivateStateSnapshot> _commitEpochPayload(
+    vault.AtlasVaultPayloadEnvelope envelope,
+    AtlasVaultPrivateRecord? existing,
+  ) => _commitEpochRecord(
+    envelope: existing == null
+        ? envelope
+        : vault.AtlasVaultPayloadEnvelope.fromJson({
+            ...envelope.toJson(),
+            'client_created_at': existing.envelope.clientCreatedAt,
+          }),
+    recordId: existing?.recordId ?? _uuidProvider(),
+    expectedRevision: existing?.revision,
+  );
+
+  Future<AtlasVaultPrivateStateSnapshot> _commitEpochRecord({
+    required vault.AtlasVaultPayloadEnvelope? envelope,
+    required String recordId,
+    String? expectedRevision,
+  }) async {
+    _requireActive();
+    final generation = _generation, session = _epochSession;
+    try {
+      if (session == null) throw const AtlasVaultPrivateStateException();
+      await session.commit(
+        payload: envelope,
+        objectID: recordId,
+        expectedRevision: expectedRevision,
+      );
+      _snapshot = await _readEpochSnapshot();
+      return _copySnapshot(_snapshot);
+    } catch (error) {
+      if (_generation == generation && identical(session, _epochSession)) {
+        _recordEpochFailure(error);
+      }
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
+
+  Future<AtlasVaultPrivateStateSnapshot> _readEpochSnapshot() async {
+    final generation = _generation, session = _epochSession;
+    try {
+      if (session == null) throw const AtlasVaultPrivateStateException();
+      final rows = await session.read();
+      final records = <AtlasVaultPrivateRecord>[],
+          tombstones = <AtlasVaultPrivateTombstone>[];
+      final searches = <AtlasSavedSearch>[], jobs = <AtlasApplicationRecord>[];
+      for (final row in rows) {
+        final e = row.operation.envelope, payload = row.payload;
+        if (payload == null) {
+          tombstones.add(
+            AtlasVaultPrivateTombstone(
+              recordId: e.objectId,
+              revision: e.revision,
+              parentRevision: e.parentRevision,
+              keyId: 'epoch-${e.keyEpoch}',
+            ),
+          );
+          continue;
+        }
+        records.add(
+          AtlasVaultPrivateRecord(
+            recordId: e.objectId,
+            revision: e.revision,
+            parentRevision: e.parentRevision,
+            keyId: 'epoch-${e.keyEpoch}',
+            envelope: payload,
+          ),
+        );
+        final value = payload.payload;
+        if (value is vault.AtlasSavedSearchPayload) {
+          searches.add(
+            AtlasSavedSearch(
+              name: value.name,
+              description: value.description,
+              request: AtlasSearchRequest.fromJson(value.request.toJson()),
+              createdAt: value.createdAt,
+              updatedAt: value.updatedAt,
+            ),
+          );
+        } else if (value is vault.AtlasSavedJobPayload) {
+          jobs.add(
+            AtlasApplicationRecord(
+              id: value.id ?? '',
+              jobKey: value.jobKey,
+              status: value.status,
+              notes: value.notes,
+              appliedAt: value.appliedAt,
+              updatedAt: value.updatedAt,
+            ),
+          );
+        }
+      }
+      return AtlasVaultPrivateStateSnapshot(
+        savedSearches: searches,
+        trackerRecords: jobs,
+        records: records,
+        tombstones: tombstones,
+      );
+    } catch (error) {
+      if (_generation == generation && identical(session, _epochSession)) {
+        _recordEpochFailure(error);
+      }
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
+
+  void _recordEpochFailure(Object error) {
+    final code = error is AtlasVaultRotationException ? error.code : '';
+    _runtimeState = switch (code) {
+      'ATLAS_ACTIVATION_PENDING' => 'ACTIVATION_PENDING',
+      'ATLAS_CATCH_UP_PENDING' => 'CATCH_UP_PENDING',
+      'ATLAS_CLEANUP_PENDING' => 'CLEANUP_PENDING',
+      'ATLAS_DEVICE_REVOKED' => 'REVOKED',
+      _ => 'RECOVERY_PENDING',
+    };
+  }
+
   void _clearSession() {
+    _epochSession?.close();
+    _epochSession = null;
+    _runtimeState = 'LOCKED';
     _active = false;
     _vaultId = null;
     _wipe(_vaultKey);
@@ -854,7 +1127,9 @@ final class AtlasVaultPrivateStateRuntime
   }
 
   void _requireActive() {
-    if (!isActive || _vaultId == null || _vaultKey == null) {
+    if (!isActive ||
+        _vaultId == null ||
+        (_vaultKey == null && _epochSession == null)) {
       throw const AtlasVaultPrivateStateException();
     }
   }

@@ -36,7 +36,10 @@ public enum AtlasVaultRuntimeFactory {
             ),
             localStoreMerger: AtlasVaultLocalStoreMerger(),
             recordSaver: AtlasVaultRecordSaver(),
-            recordHydrator: AtlasVaultRecordHydrator()
+            recordHydrator: AtlasVaultRecordHydrator(),
+            runtimeBindingLoader: { vaultID in
+                try AtlasKeychainRuntimeBindingStore(client: keychainClient).load(for: vaultID)
+            }
         )
     }
 
@@ -51,11 +54,13 @@ public enum AtlasVaultRuntimeFactory {
         atomicStoreWriter: any AtlasVaultAtomicStoreWriting,
         localStoreMerger: any AtlasVaultLocalStoreMerging,
         recordSaver: any AtlasVaultRecordSaving,
-        recordHydrator: any AtlasVaultRecordHydrating
+        recordHydrator: any AtlasVaultRecordHydrating,
+        runtimeBindingLoader: (@Sendable (String) throws -> AtlasVaultRuntimeBinding?)? = nil
     ) -> AtlasVaultRuntimeServices<DirectoryPreparer, LocalStoreIO> {
         AtlasVaultRuntimeServices(
             rootDirectoryProvider: rootDirectoryProvider,
             keyStore: keyStore,
+            runtimeBindingLoader: runtimeBindingLoader,
             perVaultFactory: AtlasVaultPerVaultServiceFactory(
                 directoryPreparer: directoryPreparer,
                 localStoreIO: localStoreIO,
@@ -74,15 +79,18 @@ public struct AtlasVaultRuntimeServices<
 >: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let rootDirectoryProvider: any AtlasVaultRootDirectoryProviding
     public let keyStore: any AtlasVaultKeyStore
+    let runtimeBindingLoader: (@Sendable (String) throws -> AtlasVaultRuntimeBinding?)?
     public let perVaultFactory: AtlasVaultPerVaultServiceFactory<DirectoryPreparer, LocalStoreIO>
 
     init(
         rootDirectoryProvider: any AtlasVaultRootDirectoryProviding,
         keyStore: any AtlasVaultKeyStore,
+        runtimeBindingLoader: (@Sendable (String) throws -> AtlasVaultRuntimeBinding?)? = nil,
         perVaultFactory: AtlasVaultPerVaultServiceFactory<DirectoryPreparer, LocalStoreIO>
     ) {
         self.rootDirectoryProvider = rootDirectoryProvider
         self.keyStore = keyStore
+        self.runtimeBindingLoader = runtimeBindingLoader
         self.perVaultFactory = perVaultFactory
     }
 

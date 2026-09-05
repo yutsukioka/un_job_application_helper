@@ -13,6 +13,7 @@ public enum AtlasVaultActivationFailure:
     case invalidVaultKey
     case vaultUnavailable
     case storeMissing
+    case migrationRequired
     case authenticationFailed
     case corruptStore
     case unsupportedVersion
@@ -28,6 +29,7 @@ public enum AtlasVaultActivationFailure:
         case .invalidVaultKey: "invalidVaultKey"
         case .vaultUnavailable: "vaultUnavailable"
         case .storeMissing: "storeMissing"
+        case .migrationRequired: "migrationRequired"
         case .authenticationFailed: "authenticationFailed"
         case .corruptStore: "corruptStore"
         case .unsupportedVersion: "unsupportedVersion"
@@ -117,6 +119,7 @@ public struct AtlasVaultActivationScope:
             AtlasVaultMutationSet,
             AtlasVaultUnlockedSession
         ) throws -> AtlasVaultAtomicWriteResult
+    let liveState: (@Sendable (AtlasVaultUnlockedSession) throws -> AtlasVaultHydratedState)?
 
     public init(
         vaultID: String,
@@ -150,12 +153,14 @@ public struct AtlasVaultActivationScope:
         saveMutations: @escaping @Sendable (
             AtlasVaultMutationSet,
             AtlasVaultUnlockedSession
-        ) throws -> AtlasVaultAtomicWriteResult
+        ) throws -> AtlasVaultAtomicWriteResult,
+        liveState: (@Sendable (AtlasVaultUnlockedSession) throws -> AtlasVaultHydratedState)? = nil
     ) throws {
         self.boundVaultID = try AtlasInjectedRootVaultPathLocator.validatedVaultID(vaultID)
         self.encryptedStoreLoader = loadEncryptedStore
         self.recordHydrator = hydrateRecords
         self.mutationSaver = saveMutations
+        self.liveState = liveState
     }
 
     func isBound(to vaultID: String) -> Bool {
@@ -262,6 +267,60 @@ public extension AtlasVaultActivationEnvironment {
                     rootURL: rootURL,
                     vaultID: vaultID
                 )
+                if let loader = services.runtimeBindingLoader {
+                    let binding = try loader(vaultID)
+                    if binding != nil {
+                        let legacyURL = try perVaultServices.pathLocator.localStoreURL(vaultID: vaultID)
+                        let directory = try perVaultServices.pathLocator.localStoreURL(vaultID: vaultID)
+                            .deletingLastPathComponent().appendingPathComponent("epoch", isDirectory: true)
+                        let read: @Sendable (AtlasVaultUnlockedSession) throws -> AtlasVaultHydratedState = { session in
+                            guard let binding = try loader(vaultID) else { throw AtlasVaultRuntimeBindingError.unavailable }
+                            return try binding.open(directory: directory, session: session).runtimeState()
+                        }
+                        return try AtlasVaultActivationScope(vaultID: vaultID,
+                            loadEncryptedStore: { session in
+                                if FileManager.default.fileExists(atPath: legacyURL.path) {
+                                    guard let binding = try loader(vaultID) else { throw AtlasVaultRuntimeBindingError.unavailable }
+                                    let epoch = try binding.open(directory: directory, session: session)
+                                    let legacy = try perVaultServices.localStoreIO.read(from: legacyURL)
+                                    _ = try epoch.importLegacyRuntime(legacy, session: session, signingKey: binding.signingKey())
+                                }
+                                _ = try read(session)
+                                return AtlasVaultLocalStoreEnvelope(storeID: "runtime", createdAt: "runtime",
+                                    updatedAt: "runtime", vaultMetadata: [:], records: [])
+                            }, hydrateRecords: { _, session in try read(session) },
+                            saveMutations: { mutations, session in
+                                guard let binding = try loader(vaultID) else { throw AtlasVaultRuntimeBindingError.unavailable }
+                                let epoch = try binding.open(directory: directory, session: session)
+                                return try epoch.commitRuntimeMutations(mutations, signingKey: binding.signingKey())
+                            }, liveState: read)
+                    }
+                    let epochDirectory = try perVaultServices.pathLocator.localStoreURL(vaultID: vaultID)
+                        .deletingLastPathComponent().appendingPathComponent("epoch", isDirectory: true)
+                    let requirePreEnrollment: @Sendable () throws -> Void = {
+                        guard try loader(vaultID) == nil,
+                              !FileManager.default.fileExists(atPath: epochDirectory.path) else {
+                            throw AtlasVaultRuntimeBindingError.unavailable
+                        }
+                    }
+                    try requirePreEnrollment()
+                    let readLegacy: @Sendable (AtlasVaultUnlockedSession) throws -> AtlasVaultHydratedState = { session in
+                        try requirePreEnrollment()
+                        guard let store = try perVaultServices.persistenceCoordinator.loadEncryptedStore(for: session) else {
+                            throw AtlasVaultActivationFailure.storeMissing
+                        }
+                        var state = try perVaultServices.recordHydrator.hydrate(records: store.records, session: session)
+                        state.isReadOnly = true
+                        return state
+                    }
+                    // Only genuine pre-enrollment data may use the legacy read-only path.
+                    return try AtlasVaultActivationScope(vaultID: vaultID,
+                        loadEncryptedStore: {
+                            try requirePreEnrollment()
+                            return try perVaultServices.persistenceCoordinator.loadEncryptedStore(for: $0)
+                        }, hydrateRecords: { _, session in try readLegacy(session) },
+                        saveMutations: { _, _ in throw AtlasVaultActivatedOperationError.saveUnavailable }, liveState: readLegacy)
+                }
                 return try AtlasVaultActivationScope(
                     vaultID: perVaultServices.vaultID,
                     loadEncryptedStore: { session in
@@ -569,8 +628,16 @@ public actor AtlasVaultActivationController:
 
     func privateStateSnapshot() async throws -> AtlasVaultHydratedState {
         guard state == .unlocked,
-              let generation = activeSession?.privateStateGeneration else {
+              let installed = activeSession else {
             throw AtlasVaultPrivateStateStoreError.unavailable
+        }
+        let generation = installed.privateStateGeneration
+        if let read = installed.scope.liveState {
+            do { return try installed.keyOwner.withUnlockedSession(read) }
+            catch {
+                await lock()
+                throw AtlasVaultActivatedOperationError.locked
+            }
         }
         let snapshot = try await privateStateStore.snapshot(generation: generation)
         guard state == .unlocked,
@@ -607,6 +674,18 @@ public actor AtlasVaultActivationController:
             }
         } catch let error as AtlasVaultActivatedOperationError {
             throw error
+        } catch let error as AtlasVaultRuntimeSaveFailure {
+            await lock()
+            throw error
+        } catch is AtlasVaultRuntimeBindingError {
+            await lock()
+            throw AtlasVaultActivatedOperationError.locked
+        } catch let error as AtlasVaultRotationError {
+            if error != .write {
+                await lock()
+                throw AtlasVaultActivatedOperationError.locked
+            }
+            throw AtlasVaultActivatedOperationError.saveFailed
         } catch {
             throw AtlasVaultActivatedOperationError.saveFailed
         }

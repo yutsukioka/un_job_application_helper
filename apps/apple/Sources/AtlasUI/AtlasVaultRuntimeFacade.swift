@@ -439,6 +439,9 @@ public actor AtlasVaultRuntimeFacade:
         let state: AtlasVaultHydratedState
         do {
             state = try await environment.privateState()
+        } catch AtlasVaultActivatedOperationError.locked {
+            if operationEpoch == epoch { await lock() }
+            throw AtlasVaultRuntimeFacadeError.privateStateUnavailable
         } catch is CancellationError {
             throw AtlasVaultRuntimeFacadeError.cancelled
         } catch {

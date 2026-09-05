@@ -310,6 +310,9 @@ extension AtlasVaultEpochVault {
       let available = Set(keys.keys.compactMap(Int.init))
       guard retainEpochs.contains(try R.integer(s["epoch"])), retainEpochs.isSubset(of: available)
       else { throw AtlasVaultRotationError.rejected }
+      guard try runtimeRequiredEpochs(s).isSubset(of: retainEpochs) else {
+        throw AtlasVaultRotationError.cleanupPending
+      }
       let inbox = try AtlasVaultDurableEncryptedInbox(fileURL: file.fileURL, encryptionKey: key)
       inbox.store = try componentFile("inbox")
       guard
