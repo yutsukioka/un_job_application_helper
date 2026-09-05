@@ -134,8 +134,11 @@ public final class AtlasVaultGuardedSyncState {
     var s = try load()
     try active(s)
     let records = try EpochCatchUp.records(s)
+    let rootField =
+      proof["format"] as? String == "atlasvault-enrollment-bridge" ? "enrollment" : "plan"
     guard records.count < 32, let views = s["views"] as? [[String: Any]],
-      views.last?["root"] as? String == (proof["plan"] as? [String: Any])?["state_root"] as? String
+      views.last?["root"] as? String == (proof[rootField] as? [String: Any])?["state_root"]
+        as? String
     else { throw AtlasVaultSyncRecoveryError.pending }
     if records.isEmpty {
       s["epoch_bridge"] = proof

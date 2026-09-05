@@ -90,14 +90,21 @@ final class AtlasVaultRuntimeEnrollmentTests: XCTestCase {
       (published["view"] as! [String: Any])["registry_root"] as? String,
       proof["resulting_registry_root"] as? String)
     XCTAssertEqual(try owner(0).observation()["key_epoch"] as? Int, 4)
-    let packet = try AtlasVaultDeviceDelivery.create(record, recipientDeviceID: ids[0],
+    let packet = try AtlasVaultDeviceDelivery.create(
+      record, recipientDeviceID: ids[0],
       issuerDeviceID: ids[0], signingKey: signer, currentRegistry: clients[0].enrollmentRegistry(),
       recoveryPending: false)
-    XCTAssertTrue(try clients[0].catchUp([packet], currentActivationID: record["transition_id"] as! String,
-      agreementPrivateKey: Data(repeating: 20, count: 32)))
-    XCTAssertFalse(try clients[0].catchUp([packet], currentActivationID: record["transition_id"] as! String,
-      agreementPrivateKey: Data(repeating: 20, count: 32)))
-    XCTAssertEqual(try owner(0).observation()["registry_root"] as? String, proof["resulting_registry_root"] as? String)
+    XCTAssertTrue(
+      try clients[0].catchUp(
+        [packet], currentActivationID: record["transition_id"] as! String,
+        agreementPrivateKey: Data(repeating: 20, count: 32)))
+    XCTAssertFalse(
+      try clients[0].catchUp(
+        [packet], currentActivationID: record["transition_id"] as! String,
+        agreementPrivateKey: Data(repeating: 20, count: 32)))
+    XCTAssertEqual(
+      try owner(0).observation()["registry_root"] as? String,
+      proof["resulting_registry_root"] as? String)
     XCTAssertEqual(try owner(0).enrollmentContext()["registry_generation"] as? Int, 5)
   }
 }

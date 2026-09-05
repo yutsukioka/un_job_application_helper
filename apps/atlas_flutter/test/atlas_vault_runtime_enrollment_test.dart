@@ -97,18 +97,40 @@ void main() {
         proof['resulting_registry_root'],
       );
       expect(jsonEncode(f.record), jsonEncode(RuntimeFixture().record));
-      final packet = await AtlasVaultDeviceDelivery.create(f.record,
-        recipientDeviceID: f.deviceID(0), issuerDeviceID: f.deviceID(0),
-        signingKey: await f.signer(), currentRegistry: await clients[0].enrollmentRegistry(),
-        recoveryPending: false);
-      expect(await clients[0].catchUp([packet],
-        currentActivationID: f.record['transition_id'] as String,
-        agreementPrivateKey: runtimeTestKey(20)), isTrue);
-      expect(await clients[0].catchUp([packet],
-        currentActivationID: f.record['transition_id'] as String,
-        agreementPrivateKey: runtimeTestKey(20)), isFalse);
-      expect((await clients[0].observation())['registry_root'], proof['resulting_registry_root']);
-      expect((await f.owner(Directory('${root.path}/a')).enrollmentContext())['registry_generation'], 5);
+      final packet = await AtlasVaultDeviceDelivery.create(
+        f.record,
+        recipientDeviceID: f.deviceID(0),
+        issuerDeviceID: f.deviceID(0),
+        signingKey: await f.signer(),
+        currentRegistry: await clients[0].enrollmentRegistry(),
+        recoveryPending: false,
+      );
+      expect(
+        await clients[0].catchUp(
+          [packet],
+          currentActivationID: f.record['transition_id'] as String,
+          agreementPrivateKey: runtimeTestKey(20),
+        ),
+        isTrue,
+      );
+      expect(
+        await clients[0].catchUp(
+          [packet],
+          currentActivationID: f.record['transition_id'] as String,
+          agreementPrivateKey: runtimeTestKey(20),
+        ),
+        isFalse,
+      );
+      expect(
+        (await clients[0].observation())['registry_root'],
+        proof['resulting_registry_root'],
+      );
+      expect(
+        (await f
+            .owner(Directory('${root.path}/a'))
+            .enrollmentContext())['registry_generation'],
+        5,
+      );
     },
   );
 }

@@ -50,6 +50,7 @@ from atlasvault_api.commitments import (
 )
 from atlasvault_api.activations import EpochRotationProof
 from atlasvault_api.delivery import ActivationReceipt, DeviceDeliveryPacket
+from atlasvault_api.enrollments import DeviceEnrollmentProof, EnrollmentReceipt
 from atlasvault_api.commitments import ActivationUnavailable
 from atlasvault_api.controls import (
     AbuseControlPolicy,
@@ -518,7 +519,8 @@ class AtlasVaultBackend:
     def _vault_session(self, token, vault_id, epoch=None):
         session = self._authorize_token(token)
         record = self.commitments.activation(session.account_id, vault_id)
-        if record and session.device_id not in record["proof"]["plan"]["recipients"]:
+        members = self.commitments.enrollment_membership(session.account_id, vault_id)["registry"] if record else []
+        if record and not any(e["device_id"] == session.device_id and e["state"] == "ACTIVE" for e in members):
             raise HTTPException(status_code=403, detail="ATLAS_DEVICE_REVOKED")
         self.commitments.require_active_epoch(
             session.account_id, vault_id, epoch, session.device_id
@@ -582,6 +584,13 @@ class AtlasVaultBackend:
                 )
             return packet
 
+    def accept_enrollment(self, token, vault_id, proof):
+        with self._lock:
+            session = self._vault_session(token, vault_id, proof["key_epoch"])
+            return self.commitments.accept_enrollment(
+                session.account_id, vault_id, proof, session.device_id
+            )
+
     def publish_delivery(self, token, vault_id, epoch, packet):
         with self._lock:
             session = self._vault_session(token, vault_id)
@@ -607,8 +616,10 @@ class AtlasVaultBackend:
             ]
             signer = devices[session.device_id].verified().descriptor
             activation = self.commitments.activation(session.account_id, vault_id)
+            from vaultsync.revocation import registry_root as membership_root
+
             active_registry = (
-                activation["proof"]["plan"]["resulting_registry_root"]
+                membership_root(self.commitments.enrollment_membership(session.account_id, vault_id)["registry"])
                 if activation
                 else registry_root(entries)
             )
@@ -1582,6 +1593,33 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="Device delivery conflict."
             ) from None
+
+    @app.post(
+        "/v1/vaults/{vault_id}/enrollments",
+        response_model=EnrollmentReceipt,
+        operation_id="acceptDeviceEnrollment",
+        responses=_STORAGE_WRITE_OPENAPI_RESPONSES,
+    )
+    def accept_device_enrollment(
+        vault_id: VaultPath,
+        request: DeviceEnrollmentProof,
+        authorization: BearerAuthorization = None,
+    ) -> EnrollmentReceipt:
+        _authorized_storage_account(service, authorization)
+        try:
+            appended = service.accept_enrollment(
+                _credential_token(authorization), vault_id, request.model_dump()
+            )
+            return EnrollmentReceipt(
+                root=request.root, registry_generation=request.next_registry_generation,
+                key_epoch=request.key_epoch, appended=appended,
+            )
+        except AuthorizationFailed:
+            raise _bearer_authorization_error() from None
+        except ActivationUnavailable:
+            raise HTTPException(status_code=503, detail="ATLAS_ACTIVATION_STORAGE_UNAVAILABLE") from None
+        except CommitmentConflict:
+            raise HTTPException(status_code=409, detail="Enrollment conflict.") from None
 
     served_schema = app.openapi()
     policy = service.abuse_policy

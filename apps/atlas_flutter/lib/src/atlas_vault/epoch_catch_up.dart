@@ -19,8 +19,54 @@ Future<List<Map<String, Object?>>> _verifyEpochBridges(
   Map<String, Object?> context,
 ) async {
   var epoch = context['key_epoch'] as int;
+  var generation = epoch;
+  String? activationID, authority;
   final result = <Map<String, Object?>>[];
   for (final raw in records) {
+    if (raw['format'] == 'atlasvault-enrollment-bridge') {
+      _exact(raw, {'format', 'version', 'enrollment'});
+      if (raw['version'] is! int ||
+          raw['version'] != 1 ||
+          activationID == null) {
+        _epochFail();
+      }
+      final p = _object(raw['enrollment']);
+      final after = await enrollment.AtlasVaultDeviceEnrollment.verify(
+        p,
+        registry: registry,
+        context: {
+          'account_id': context['account_id'],
+          'vault_id': context['vault_id'],
+          'key_epoch': epoch,
+          'registry_generation': generation,
+          'activation_id': activationID,
+          'state_root': p['state_root'],
+        },
+        confirmedTranscript: p['transcript_sha256'] as String,
+        status: 'ACTIVE',
+      );
+      // Historical attestation is verified here; live admission also requires
+      // the local ceremony's independently retained confirmed transcript.
+      result.add({
+        'plan': {
+          'previous_epoch': epoch,
+          'new_epoch': epoch,
+          'state_root': p['state_root'],
+          'resulting_registry_root': p['resulting_registry_root'],
+          'recipients':
+              after
+                  .where((d) => d['state'] == 'ACTIVE')
+                  .map((d) => d['device_id'] as String)
+                  .toList()
+                ..sort(),
+        },
+        'registry': registry,
+        'rotation_signer_device_id': authority,
+      });
+      registry = after;
+      generation = p['next_registry_generation'] as int;
+      continue;
+    }
     final selective = raw.containsKey('wrapper'),
         p = raw.containsKey('wrapper') ? _object(raw['proof']) : raw;
     final plan = _object(p['plan']);
@@ -50,6 +96,9 @@ Future<List<Map<String, Object?>>> _verifyEpochBridges(
     });
     registry = _epochRows(verified['registry']);
     epoch = verified['new_epoch'] as int;
+    generation = epoch;
+    activationID = (selective ? p['activation_id'] : p['root']) as String;
+    authority = p['rotation_signer_device_id'] as String;
   }
   return result;
 }
@@ -219,7 +268,12 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
           plan = _object(p['plan']);
       final sameEpoch = plan['new_epoch'] == epoch;
       var verifyRegistry = registry, previousEpoch = epoch;
+      final enrollments = <Map<String, Object?>>[];
       if (sameEpoch) {
+        while (bridges.isNotEmpty &&
+            bridges.last['format'] == 'atlasvault-enrollment-bridge') {
+          enrollments.insert(0, bridges.removeLast());
+        }
         if (bridges.isEmpty) _epochFail();
         final old = bridges.last.containsKey('wrapper')
             ? _object(bridges.last['proof'])
@@ -308,9 +362,10 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
         opened.vaultKey,
       );
       bridges.add(_epochCopy(packet));
+      bridges.addAll(enrollments);
       stage.state.remove('epoch_bridge');
       stage.state['epoch_bridges'] = bridges;
-      registry = _epochRows(verified['registry']);
+      if (enrollments.isEmpty) registry = _epochRows(verified['registry']);
       epoch = verified['new_epoch'] as int;
       await checkpoint?.call('verified_epoch');
     }
@@ -326,7 +381,12 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     staged.addAll({
       'epoch': epoch,
       'registry': registry,
-      'recipients': verified['recipients'],
+      'recipients':
+          registry
+              .where((d) => d['state'] == 'ACTIVE')
+              .map((d) => d['device_id'] as String)
+              .toList()
+            ..sort(),
       'generation': (s['generation'] as int) + 1,
       'status': 'ACTIVE',
       'journal': {

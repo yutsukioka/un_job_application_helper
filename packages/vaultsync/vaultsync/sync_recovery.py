@@ -172,11 +172,12 @@ class GuardedSyncState:
         s = self._load()
         self._active(s)
         records = bridge_records(s)
-        if (
-            len(records) >= 32
-            or not s["views"]
-            or s["views"][-1]["root"] != proof["plan"]["state_root"]
-        ):
+        root = (
+            proof["enrollment"]["state_root"]
+            if proof.get("format") == "atlasvault-enrollment-bridge"
+            else proof["plan"]["state_root"]
+        )
+        if len(records) >= 32 or not s["views"] or s["views"][-1]["root"] != root:
             _reject(_PENDING)
         if records:
             s.pop("epoch_bridge", None)

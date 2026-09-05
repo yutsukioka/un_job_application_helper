@@ -202,9 +202,12 @@ final class AtlasVaultEpochVault {
               _object(_object(s['components'])['history']),
             ),
             bridges = await _verifyEpochBridges(records, _registry, _context);
-        if (records.isEmpty ||
+        final rotations = records
+            .where((r) => r['format'] != 'atlasvault-enrollment-bridge')
+            .toList();
+        if (rotations.isEmpty ||
             bridges.isEmpty ||
-            jsonEncode(_canonicalValue(_bridgeProof(records.last))) !=
+            jsonEncode(_canonicalValue(_bridgeProof(rotations.last))) !=
                 jsonEncode(_canonicalValue(proof))) {
           _epochFail();
         }
@@ -226,7 +229,7 @@ final class AtlasVaultEpochVault {
             _epochFail();
           }
         }
-        final plan = _object(proof['plan']);
+        final plan = _object(bridges.last['plan']);
         if (s['epoch'] != plan['new_epoch'] ||
             AtlasVaultRevocation.registryRoot(_epochRows(s['registry'])) !=
                 plan['resulting_registry_root'] ||
@@ -799,6 +802,7 @@ final class AtlasVaultEpochVault {
       await _verifyEpochBridges(records, _registry, _context);
       Map<String, Object?>? found;
       for (final record in records) {
+        if (record['format'] == 'atlasvault-enrollment-bridge') continue;
         final candidate = _bridgeProof(record),
             plan = _object(candidate['plan']);
         if (plan['previous_epoch'] == envelope.keyEpoch) {

@@ -79,6 +79,19 @@ class CommitmentLog:
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS prepared_device_deliveries (account TEXT NOT NULL, vault TEXT NOT NULL, transition TEXT NOT NULL, epoch INTEGER NOT NULL, recipient TEXT NOT NULL, issuer TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,vault,transition,recipient))"
         )
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS enrollments (account TEXT NOT NULL, vault TEXT NOT NULL, activation TEXT NOT NULL, generation INTEGER NOT NULL, root TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(account,vault,activation,generation), UNIQUE(account,vault,root))"
+        )
+
+    def enrollment_membership(self, account_id, vault_id):
+        from .enrollments import membership
+
+        return membership(self, account_id, vault_id)
+
+    def accept_enrollment(self, account_id, vault_id, proof, issuer_id):
+        from .enrollments import accept
+
+        return accept(self, account_id, vault_id, proof, issuer_id)
 
     def activation_at(self, account_id, vault_id, epoch):
         with self._lock:
@@ -304,11 +317,7 @@ class CommitmentLog:
                 prior_registry = registry
                 epoch = last["key_epoch"]
                 if current:
-                    from vaultsync.revocation import verify_transition
-
-                    prior_registry = verify_transition(
-                        current["proof"]["revocation"], current["proof"]["registry"]
-                    )
+                    prior_registry = self.enrollment_membership(account_id, vault_id)["registry"]
                     epoch = current["proof"]["plan"]["new_epoch"]
                 result = verify_epoch_rotation(
                     proof,
@@ -404,8 +413,11 @@ class CommitmentLog:
         record = self.activation(account_id, vault_id)
         if record:
             plan = record["proof"]["plan"]
+            members = self.enrollment_membership(account_id, vault_id)["registry"]
             if (epoch is not None and epoch != plan["new_epoch"]) or (
-                device_id is not None and device_id not in plan["recipients"]
+                device_id is not None and not any(
+                    e["device_id"] == device_id and e["state"] == "ACTIVE" for e in members
+                )
             ):
                 raise CommitmentConflict()
 

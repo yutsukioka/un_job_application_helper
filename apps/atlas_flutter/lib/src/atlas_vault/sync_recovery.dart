@@ -129,7 +129,11 @@ final class AtlasVaultGuardedSyncState {
     if (records.length >= 32 ||
         _views(s['views']).isEmpty ||
         _views(s['views']).last['root'] !=
-            _object(proof['plan'])['state_root']) {
+            _object(
+              proof[proof['format'] == 'atlasvault-enrollment-bridge'
+                  ? 'enrollment'
+                  : 'plan'],
+            )['state_root']) {
       _viewFail('ATLAS_RECOVERY_PENDING');
     }
     if (records.isEmpty) {

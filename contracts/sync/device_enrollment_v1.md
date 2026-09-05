@@ -45,9 +45,35 @@ use re-verification against a substituted older registry to bypass replay
 protection. A record is not a backend acceptance receipt or a key-delivery
 artifact. Possessing it alone does not initialize a production runtime.
 
-The signature primitive is implemented and vector-tested. Production epoch
-publication, bootstrap, and UI admission must be verified separately; these
-primitives alone do not establish completion of C30/T75.
+## Durable Current-Registry Admission
+
+An already provisioned epoch owner appends an `atlasvault-enrollment-bridge`
+version 1 object containing the unchanged signed `enrollment` record to its
+encrypted accepted history. One existing atomic owner publication updates that
+history, registry, recipient list, and local generation. Epoch keys and the
+original activation record are not changed. Exact retry does not write again.
+The bridge retains the existing collection-signing authority; admitting a device
+does not make that device the publisher of arbitrary collection commitments.
+
+The bridge state root must occur in accepted history, at or after the preceding
+bridge root. Subsequent commitments use the resulting registry. An existing
+D089 same-epoch proof upgrade preserves and revalidates trailing enrollment
+bridges rather than restoring an older registry. Existing aggregate v1 and
+per-device v2 verification remain unchanged.
+
+`POST /v1/vaults/{vault_id}/enrollments` accepts the closed signed record from an
+authenticated ACTIVE issuer. Its SQLite transaction compares the current epoch,
+activation, registry generation, registry root, and accepted state root before
+inserting one bounded addition. Conflicting same-generation requests cannot both
+succeed. An exact retry returns `appended: false`. Rejected requests leave the
+activation, history, and membership unchanged. This is a single-instance boundary,
+not multi-replica coordination. Account session authentication remains separate.
+
+This admission does not deliver keys, expose another recipient's wrapper, enroll
+a revoked identity, or authorize a backend-generated signature. D100 authorizes
+the current-view-required retained key subset for a separate new-recipient HPKE
+bootstrap. That bootstrap and production device-management UX remain incomplete;
+current-registry admission alone does not complete C30/T75.
 
 No plaintext records, private keys, vault keys, wrappers, tokens, passphrases,
 or displayed comparison values belong in this record or diagnostics. Existing

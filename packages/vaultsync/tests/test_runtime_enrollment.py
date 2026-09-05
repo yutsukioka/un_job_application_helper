@@ -3,8 +3,8 @@
 import copy
 import hashlib
 import json
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from test_epoch_activation import accept, backend_accept, device, initialize
@@ -133,13 +133,50 @@ def test_backend_enrollment_cas_and_exact_retry_preserve_activation(tmp_path):
     assert sorted(r.json()["appended"] for r in replies) == [False, True]
     assert backend.commitments.activation(proof["account_id"], "vault-c26") == record
     before = backend.commitments.read(proof["account_id"], "vault-c26")
-    for field in ("key_epoch", "activation_id", "state_root", "prior_registry_root", "issuer_device_id"):
+    for field in (
+        "key_epoch",
+        "activation_id",
+        "state_root",
+        "prior_registry_root",
+        "issuer_device_id",
+    ):
         bad = dict(proof, **{field: 3 if field == "key_epoch" else "bad"})
         assert http.post(path, json=bad, headers=env[3][0]).status_code in (409, 422)
     assert backend.commitments.read(proof["account_id"], "vault-c26") == before
     from atlasvault_api.commitments import CommitmentLog
+
     reopened = CommitmentLog(tmp_path / "backend.sqlite")
     membership = reopened.enrollment_membership(proof["account_id"], "vault-c26")
     assert membership["context"]["registry_generation"] == 5
     assert registry_root(membership["registry"]) == proof["resulting_registry_root"]
     reopened.require_active_epoch(proof["account_id"], "vault-c26", 4, proof["target_device_id"])
+
+
+def test_backend_conflicting_signed_enrollments_have_one_winner(tmp_path):
+    (owner, _, _), env = initialize(tmp_path)
+    accept(owner, 0, env[4], backend_accept(env))
+    first = enrollment(owner, env[2][0])
+    unsigned = {k: v for k, v in first.items() if k not in ("root", "signature_b64")}
+    unsigned["transcript_sha256"] = "a1" * 32
+    second = create_enrollment(
+        unsigned,
+        registry=owner.enrollment_registry(),
+        context=owner.enrollment_context(),
+        confirmed_transcript=unsigned["transcript_sha256"],
+        status="ACTIVE",
+        signing_key=env[2][0],
+    )
+    backend, http = env[:2]
+    path = "/v1/vaults/vault-c26/enrollments"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(
+            pool.map(lambda proof: http.post(path, json=proof, headers=env[3][0]), [first, second])
+        )
+    assert sorted(r.status_code for r in replies) == [200, 409]
+    membership = backend.commitments.enrollment_membership(first["account_id"], "vault-c26")
+    assert len(membership["records"]) == 1
+    accepted = next(
+        proof for proof, reply in zip([first, second], replies) if reply.status_code == 200
+    )
+    assert membership["records"] == [accepted]
+    assert http.post(path, json=accepted, headers=env[3][0]).json()["appended"] is False

@@ -11,6 +11,7 @@ import '../cache_file_replacement.dart';
 import 'epoch_rotation.dart' as rotation;
 import 'key_epochs.dart';
 import 'device_delivery.dart' as delivery;
+import 'device_enrollment.dart' as enrollment;
 import 'payloads.dart';
 import 'models.dart' as legacy;
 import 'crypto.dart' as record_crypto;
@@ -22,6 +23,7 @@ part 'epoch_vault.dart';
 part 'epoch_catch_up.dart';
 part 'runtime_records.dart';
 part 'runtime_binding.dart';
+part 'epoch_enrollment.dart';
 
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';

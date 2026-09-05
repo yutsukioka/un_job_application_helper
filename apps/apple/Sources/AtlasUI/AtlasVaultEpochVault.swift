@@ -51,7 +51,7 @@ public final class AtlasVaultEpochVault {
   private func bridgeProof(_ record: [String: Any]) throws -> [String: Any] {
     record["wrapper"] == nil ? record : try map(record["proof"])
   }
-  private func stateRoot(_ state: [String: Any]) throws -> String {
+  func stateRoot(_ state: [String: Any]) throws -> String {
     let views = try rows(map(map(state["components"])["history"])["views"])
     guard let root = views.last?["root"] as? String, root.utf8.count == 64 else {
       throw AtlasVaultRotationError.rejected
@@ -142,7 +142,7 @@ public final class AtlasVaultEpochVault {
       if j["phase"] as? String == "ACTIVE" {
         let records = try EpochCatchUp.records(map(map(s["components"])["history"]))
         let bridges = try EpochCatchUp.verify(records, registry: registry, context: context)
-        guard let latest = records.last, !bridges.isEmpty,
+        guard let latest = records.last(where: { $0["format"] as? String != "atlasvault-enrollment-bridge" }), !bridges.isEmpty,
           try R.canonical(bridgeProof(latest)) == R.canonical(proof)
         else { throw AtlasVaultRotationError.rejected }
         if let value = j["record"] as? [String: Any] {
@@ -154,7 +154,7 @@ public final class AtlasVaultEpochVault {
             try R.canonical(map(value["proof"])) == R.canonical(proof)
           else { throw AtlasVaultRotationError.rejected }
         }
-        let plan = try map(proof["plan"])
+        let plan = try map(bridges.last?["plan"])
         guard try R.integer(s["epoch"]) == R.integer(plan["new_epoch"]),
           try AtlasVaultRevocation.registryRoot(rows(s["registry"]))
             == plan["resulting_registry_root"] as? String,
@@ -605,7 +605,8 @@ public final class AtlasVaultEpochVault {
         _ = try EpochCatchUp.verify(records, registry: registry, context: context)
         guard
           let found = try records.first(where: {
-            try R.integer(map(bridgeProof($0)["plan"])["previous_epoch"])
+            if $0["format"] as? String == "atlasvault-enrollment-bridge" { return false }
+            return try R.integer(map(bridgeProof($0)["plan"])["previous_epoch"])
               == envelope.keyEpoch
           })
         else { throw AtlasVaultRotationError.rejected }

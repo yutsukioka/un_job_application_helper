@@ -24,8 +24,48 @@ def bridge_records(state):
 
 def verify_bridges(records, registry, context):
     epoch = context["key_epoch"]
+    generation, activation_id, authority = epoch, None, None
     result = []
     for raw in records:
+        if raw.get("format") == "atlasvault-enrollment-bridge":
+            from .device_enrollment import verify_enrollment
+            from .revocation import _exact
+
+            _exact(raw, {"format", "version", "enrollment"})
+            if type(raw["version"]) is not int or raw["version"] != 1 or activation_id is None:
+                _reject()
+            p = raw["enrollment"]
+            after = verify_enrollment(
+                p,
+                registry=registry,
+                context={
+                    "account_id": context["account_id"],
+                    "vault_id": context["vault_id"],
+                    "key_epoch": epoch,
+                    "registry_generation": generation,
+                    "activation_id": activation_id,
+                    "state_root": p["state_root"],
+                },
+                confirmed_transcript=p["transcript_sha256"],
+                status="ACTIVE",
+            )
+            # Historical verification trusts the active issuer's signed ceremony
+            # attestation. Live admission separately checks local confirmation.
+            result.append(
+                {
+                    "plan": {
+                        "previous_epoch": epoch,
+                        "new_epoch": epoch,
+                        "state_root": p["state_root"],
+                        "resulting_registry_root": p["resulting_registry_root"],
+                        "recipients": sorted(e["device_id"] for e in after if e["state"] == "ACTIVE"),
+                    },
+                    "registry": registry,
+                    "rotation_signer_device_id": authority,
+                }
+            )
+            registry, generation = after, p["next_registry_generation"]
+            continue
         packet = "wrapper" in raw
         p = raw["proof"] if packet else raw
         args = dict(
@@ -53,6 +93,9 @@ def verify_bridges(records, registry, context):
             )
         )
         registry, epoch = verified["registry"], verified["new_epoch"]
+        generation = epoch
+        activation_id = p["activation_id"] if packet else p["root"]
+        authority = p["rotation_signer_device_id"]
     return result
 
 
@@ -178,7 +221,10 @@ def catch_up(
         p = packet["proof"]
         same_epoch = p["plan"]["new_epoch"] == epoch
         verify_registry, previous_epoch = registry, epoch
+        enrollments = []
         if same_epoch:
+            while bridges and bridges[-1].get("format") == "atlasvault-enrollment-bridge":
+                enrollments.insert(0, bridges.pop())
             if not bridges:
                 _reject()
             old = bridges[-1].get("proof", bridges[-1])
@@ -242,9 +288,12 @@ def catch_up(
             _reject()
         staged["keys"][str(opened.key_epoch)] = base64.b64encode(opened.vault_key).decode()
         bridges.append(copy.deepcopy(packet))
+        bridges.extend(enrollments)
         stage.state.pop("epoch_bridge", None)
         stage.state["epoch_bridges"] = bridges
-        registry, epoch = verified["registry"], verified["new_epoch"]
+        if not enrollments:
+            registry = verified["registry"]
+        epoch = verified["new_epoch"]
         checkpoint("verified_epoch")
     if packets[-1]["proof"]["activation_id"] != current_activation_id:
         _reject("ATLAS_EPOCH_CONFLICT")
@@ -255,7 +304,7 @@ def catch_up(
     staged.update(
         epoch=epoch,
         registry=registry,
-        recipients=verified["recipients"],
+        recipients=sorted(e["device_id"] for e in registry if e["state"] == "ACTIVE"),
         generation=s["generation"] + 1,
         status="ACTIVE",
     )

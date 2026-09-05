@@ -206,9 +206,12 @@ class EpochVault:
                 _reject()
             if journal["phase"] == "ACTIVE":
                 records, bridges = self._bridges(s)
+                rotations = [
+                    r for r in records if r.get("format") != "atlasvault-enrollment-bridge"
+                ]
                 if (
-                    not records
-                    or self._bridge_proof(records[-1]) != journal["proof"]
+                    not rotations
+                    or self._bridge_proof(rotations[-1]) != journal["proof"]
                     or not bridges
                 ):
                     _reject()
@@ -224,7 +227,7 @@ class EpochVault:
                         or record["proof"] != journal["proof"]
                     ):
                         _reject()
-                plan = journal["proof"]["plan"]
+                plan = bridges[-1]["plan"]
                 if (
                     s["epoch"] != plan["new_epoch"]
                     or registry_root(s["registry"]) != plan["resulting_registry_root"]
@@ -238,6 +241,29 @@ class EpochVault:
                     if journal["record"]["proof"] != journal["proof"]:
                         _reject()
         return s
+
+    @_checked
+    def enrollment_context(self):
+        from .epoch_enrollment import current_context
+
+        with self._lock:
+            s = self._load()
+            self._active(s)
+            return current_context(self, s)
+
+    @_checked
+    def enrollment_registry(self):
+        with self._lock:
+            s = self._load()
+            self._active(s)
+            return copy.deepcopy(s["registry"])
+
+    @_checked
+    def accept_enrollment(self, proof, *, confirmed_transcript):
+        from .epoch_enrollment import accept_enrollment
+
+        with self._lock:
+            return accept_enrollment(self, proof, confirmed_transcript)
 
     def _ring(self, s):
         if type(s["keys"]) is not dict or not 1 <= len(s["keys"]) <= 32:
@@ -714,7 +740,8 @@ class EpochVault:
                     (
                         self._bridge_proof(record)["registry"]
                         for record in records
-                        if self._bridge_proof(record)["plan"]["previous_epoch"]
+                        if record.get("format") != "atlasvault-enrollment-bridge"
+                        and self._bridge_proof(record)["plan"]["previous_epoch"]
                         == envelope.key_epoch
                     ),
                     None,
