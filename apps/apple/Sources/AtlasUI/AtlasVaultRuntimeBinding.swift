@@ -28,13 +28,23 @@ public struct AtlasVaultRuntimeBinding: Sendable, CustomStringConvertible,
       value,
       Set(
         ["format", "version", "context", "registry", "history_context", "storage_key_ref"]
-          + (value["history_registry"] == nil ? [] : ["history_registry"])))
+          + (value["history_registry"] == nil ? [] : ["history_registry"])
+          + (value["history_origin"] == nil ? [] : ["history_origin"])))
     if let original = value["history_registry"] {
       _ = try AtlasVaultAuthenticatedStateView.registryRoot(AtlasVaultDeviceDelivery.rows(original))
     }
     let c = try AtlasVaultDeviceDelivery.map(value["context"])
     try R.exact(
-      c, ["account_id", "vault_id", "device_id", "key_epoch", "state_root", "registry_root"])
+      c,
+      Set(
+        ["account_id", "vault_id", "device_id", "key_epoch", "state_root", "registry_root"]
+          + (value["history_origin"] == nil ? [] : ["history_origin_sha256"])))
+    if let origin = value["history_origin"] {
+      guard value["history_registry"] == nil,
+        try R.digest(R.canonical(AtlasVaultDeviceDelivery.map(origin))) == c[
+          "history_origin_sha256"] as? String
+      else { throw AtlasVaultRuntimeBindingError.invalid }
+    }
     let registry = try AtlasVaultDeviceDelivery.rows(value["registry"])
     let h = try AtlasVaultDeviceDelivery.map(value["history_context"])
     try R.exact(h, ["account_id", "vault_id", "collection_id", "key_epoch", "signing_public_b64"])
@@ -73,7 +83,7 @@ public struct AtlasVaultRuntimeBinding: Sendable, CustomStringConvertible,
         stateRoot: c["state_root"] as? String ?? "",
         authenticatedHistoryRegistry: value["history_registry"].map {
           try AtlasVaultDeviceDelivery.rows($0)
-        })
+        }, historyOrigin: value["history_origin"].map { try AtlasVaultDeviceDelivery.map($0) })
     }
     let s = try epoch.load()
     let history = try epoch.history(s).load()
@@ -146,7 +156,12 @@ public struct AtlasKeychainRuntimeBindingStore<Client: AtlasKeychainClient>: Sen
         "registry": epoch.registry, "history_context": history["context"]!,
         "storage_key_ref": epoch.context["vault_id"]!,
       ]
-      if try EpochCatchUp.records(history).isEmpty {
+      if let origin = epoch.historyOrigin {
+        guard authenticatedHistoryRegistry == nil else {
+          throw AtlasVaultRuntimeBindingError.invalid
+        }
+        value["history_origin"] = origin
+      } else if try EpochCatchUp.records(history).isEmpty {
         guard let authenticatedHistoryRegistry,
           try AtlasVaultAuthenticatedStateView.registryRoot(authenticatedHistoryRegistry)
             == epoch.rows(history["views"]).last?["registry_root"] as? String

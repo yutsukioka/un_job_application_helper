@@ -908,7 +908,7 @@ final class AtlasVaultTrustedPairingCoordinator
           );
         }
         identity = await _requireIdentity();
-        return await _runtime.withInteroperabilitySession((session) async {
+        return await _runtime.withEnrollmentContext(identity, (context) async {
           final issued = _now().toUtc();
           final issuedAt = _utc(issued);
           final expires = issued.add(const Duration(minutes: 10));
@@ -931,8 +931,8 @@ final class AtlasVaultTrustedPairingCoordinator
             localDeviceId: identity.deviceId,
             createdAt: issuedAt,
             offerSha256: await atlasVaultSha256Hex(artifact.canonicalBytes()),
-            vaultId: session.vaultId,
-            keyEpoch: _initialVaultKeyEpoch,
+            vaultId: context['vault_id']! as String,
+            keyEpoch: context['key_epoch']! as int,
             stagedArtifacts: <AtlasVaultPairingArtifact>[artifact],
           );
           _authorizeSensitiveMutation();

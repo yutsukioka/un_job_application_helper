@@ -10,6 +10,9 @@ from .epoch_rotation import _canonical, _reject
 def current_context(owner, state):
     records = bridge_records(state["components"]["history"])
     activation_id, generation = None, state["epoch"]
+    if owner._history_origin is not None:
+        base = owner._history(state)._bridge_context()
+        activation_id, generation = base["activation_id"], base["registry_generation"]
     for raw in records:
         if raw.get("format") == "atlasvault-enrollment-bridge":
             generation = raw["enrollment"]["next_registry_generation"]

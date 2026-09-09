@@ -73,6 +73,47 @@ void main() {
       expect((await open('A').checkpoint())['sequence'], 3);
     },
   );
+  test(
+    'C30 epoch owner preserves its immutable signed origin on reopen',
+    () async {
+      final history = open('source');
+      await history.bootstrap(copy(args));
+      final origin = await history.publicationOrigin();
+      AtlasVaultEpochVault owner({bool anchored = true}) =>
+          AtlasVaultEpochVault(
+            Directory('${directory.path}/runtime'),
+            storageKey: Uint8List.fromList(List.filled(32, 97)),
+            deviceID: v['recipient_device_id']! as String,
+            registry: (v['registry']! as List).map(object).toList(),
+            accountID: c['account_id']! as String,
+            vaultID: c['vault_id']! as String,
+            keyEpoch: c['key_epoch']! as int,
+            stateRoot: c['state_root']! as String,
+            historyOrigin: anchored ? origin : null,
+          );
+      await owner().initialize({
+        4: Uint8List.fromList(List.filled(32, 98)),
+      }, history: history);
+      final before = await owner().observation();
+      expect(before['sequence'], 2);
+      expect(await owner().observation(), before);
+      expect(await owner().enrollmentContext(), args['current_context']);
+      await expectLater(owner(anchored: false).observation(), throwsException);
+      expect(await owner().observation(), before);
+      final next = object(object(v['packets'])['next']);
+      expect(
+        await owner().ingestRuntimePage(
+          view: object(next['view']),
+          registry: (next['registry']! as List).map(object).toList(),
+          collection: object(next['collection']),
+          opaqueState: base64Decode(next['opaque_b64']! as String),
+          operations: [],
+        ),
+        0,
+      );
+      expect((await owner().observation())['sequence'], 3);
+    },
+  );
   for (final attack in ['sub_anchor', 'non_chaining']) {
     test(
       'D105 anchored $attack rejects and remains fenced after reopen',

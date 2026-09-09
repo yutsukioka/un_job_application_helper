@@ -43,7 +43,11 @@ final class AtlasVaultEpochVault {
     required String vaultID,
     required int keyEpoch,
     required String stateRoot,
+    Map<String, Object?>? historyOrigin,
   }) : _key = Uint8List.fromList(storageKey),
+       _historyOrigin = historyOrigin == null
+           ? null
+           : _epochCopy(historyOrigin),
        _registry = _epochRows(jsonDecode(jsonEncode(registry))),
        _context = {
          'account_id': _commitmentIdentifier(accountID),
@@ -52,6 +56,10 @@ final class AtlasVaultEpochVault {
          'key_epoch': _commitmentSequence(keyEpoch),
          'state_root': _commitmentHex(stateRoot),
          'registry_root': AtlasVaultRevocation.registryRoot(registry),
+         if (historyOrigin != null)
+           'history_origin_sha256': _sha256Hex(
+             _canonicalJsonBytes(historyOrigin),
+           ),
        },
        _file = _EpochPublication(
          File('${directory.path}/activation'),
@@ -62,6 +70,17 @@ final class AtlasVaultEpochVault {
   final Uint8List _key;
   final List<Map<String, Object?>> _registry;
   final Map<String, Object?> _context;
+  final Map<String, Object?>? _historyOrigin;
+  Map<String, Object?> _bridgeContext() => {
+    ..._context,
+    if (_historyOrigin != null)
+      for (final k in [
+        'registry_generation',
+        'activation_id',
+        'issuer_device_id',
+      ])
+        k: _object(_object(_historyOrigin['anchor'])['checkpoint'])[k],
+  };
   final _EpochPublication _file;
   List<Map<String, Object?>>? _runtimePublicationRegistry;
   bool _busy = false;
@@ -170,7 +189,7 @@ final class AtlasVaultEpochVault {
       final bridges = await _verifyEpochBridges(
         _epochBridgeRecords(_object(_object(s['components'])['history'])),
         _registry,
-        _context,
+        _bridgeContext(),
       );
       if (j['phase'] == 'ACTIVE') {
         if (bridges.isEmpty) _epochFail();
@@ -201,7 +220,11 @@ final class AtlasVaultEpochVault {
         final records = _epochBridgeRecords(
               _object(_object(s['components'])['history']),
             ),
-            bridges = await _verifyEpochBridges(records, _registry, _context);
+            bridges = await _verifyEpochBridges(
+              records,
+              _registry,
+              _bridgeContext(),
+            );
         final rotations = records
             .where((r) => r['format'] != 'atlasvault-enrollment-bridge')
             .toList();
@@ -251,6 +274,7 @@ final class AtlasVaultEpochVault {
   }
 
   AtlasVaultGuardedSyncState _history(Map<String, Object?> s) {
+    if (_historyOrigin != null) return _anchoredPublicationHistory(this);
     final c = _object(_object(_object(s['components'])['history'])['context']);
     if ([
       'account_id',
@@ -294,6 +318,17 @@ final class AtlasVaultEpochVault {
     if (await _file.file.exists()) _epochFail();
     final h = await history._load(),
         views = _epochRows((await history._load())['views']);
+    if (_historyOrigin != null) {
+      if (history is! AtlasVaultAnchoredSyncState ||
+          !_anchorEqual(await history.publicationOrigin(), _historyOrigin)) {
+        _bootstrapFail();
+      }
+      await _anchoredPublicationHistory(
+        this,
+      )._verifyAnchor(_object(_historyOrigin['anchor']));
+    } else if (history._origin != null) {
+      _bootstrapFail();
+    }
     if (h['status'] != 'ACTIVE' ||
         views.isEmpty ||
         views.last['root'] != _context['state_root'] ||
@@ -583,6 +618,17 @@ final class AtlasVaultEpochVault {
   ) async {
     final history = _history(s),
         bridges = await history._bridge(await history._load());
+    if (bridges.isEmpty && _historyOrigin != null) {
+      if (supplied != null && !_anchorEqual(supplied, _registry)) {
+        _bootstrapFail();
+      }
+      final prior = (await history.exportEvidence()).last;
+      if (AtlasVaultRevocation.registryRoot(_registry) !=
+          prior['registry_root']) {
+        _bootstrapFail();
+      }
+      return _epochRows(jsonDecode(jsonEncode(_registry)));
+    }
     if (bridges.isEmpty) {
       final registry = supplied ?? _runtimePublicationRegistry;
       if (registry == null) _epochFail('ATLAS_RUNTIME_PROVISIONING_REQUIRED');
@@ -799,7 +845,7 @@ final class AtlasVaultEpochVault {
       final records = _epochBridgeRecords(
         _object(_object(s['components'])['history']),
       );
-      await _verifyEpochBridges(records, _registry, _context);
+      await _verifyEpochBridges(records, _registry, _bridgeContext());
       Map<String, Object?>? found;
       for (final record in records) {
         if (record['format'] == 'atlasvault-enrollment-bridge') continue;

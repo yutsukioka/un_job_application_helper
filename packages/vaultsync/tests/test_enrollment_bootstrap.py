@@ -158,3 +158,37 @@ def test_preexisting_fork_evidence_is_not_cleared_by_bootstrap(tmp_path):
         client.bootstrap(**args)
     assert hashlib.sha256(client._store.path.read_bytes()).hexdigest() == before
     assert client.recovery()["status"] == "RECOVERY_PENDING"
+
+
+def test_production_epoch_owner_retains_anchor_on_initialization_and_reopen(tmp_path):
+    from vaultsync.epoch_rotation import RotationError
+    from vaultsync.epoch_vault import EpochVault
+
+    _, _, env, args, fresh = scenario(tmp_path)
+    history = fresh()
+    history.bootstrap(**args)
+    directory = tmp_path / "recipient-runtime"
+    opening = {
+        "storage_key": bytes([97]) * 32,
+        "device_id": args["recipient_device_id"],
+        "registry": args["registry"],
+        "account_id": args["checkpoint"]["account_id"],
+        "vault_id": args["checkpoint"]["vault_id"],
+        "key_epoch": args["checkpoint"]["key_epoch"],
+        "state_root": args["view"]["root"],
+        "history_origin": history.publication_origin(),
+    }
+    owner = EpochVault(directory, **opening)
+    owner.initialize({4: bytes([98]) * 32}, history=history)
+    before = owner.observation()
+    assert before["key_epoch"] == 4
+    assert owner._history(owner._load()).checkpoint() == history.checkpoint()
+    assert EpochVault(directory, **opening).observation() == before
+    assert owner.enrollment_context() == args["current_context"]
+    # The origin is a creation-time pin, not an optional reader fallback.
+    with pytest.raises(RotationError):
+        EpochVault(
+            directory, **{k: v for k, v in opening.items() if k != "history_origin"}
+        ).observation()
+    assert EpochVault(directory, **opening).observation() == before
+    assert env[2][0].device_id != args["recipient_device_id"]

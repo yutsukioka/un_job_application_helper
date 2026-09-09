@@ -107,13 +107,16 @@ class GuardedSyncState:
     def _origin_offset(self):
         return self._origin["sequence"] - 1 if self._origin is not None else 0
 
+    def _bridge_context(self):
+        return self._context
+
     def _bridge(self, state):
         from .epoch_catch_up import bridge_records, verify_bridges
 
         records = bridge_records(state)
         if records and self._rotation_registry is None:
             _reject()
-        proofs = verify_bridges(records, self._rotation_registry, self._context)
+        proofs = verify_bridges(records, self._rotation_registry, self._bridge_context())
         roots = [v["root"] for v in state["views"]]
         position = -1
         for proof in proofs:

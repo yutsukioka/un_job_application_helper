@@ -20,9 +20,9 @@ enum EpochCatchUp {
   {
     var registry = registry
     var epoch = try R.integer(context["key_epoch"])
-    var generation = epoch
-    var activationID: String?
-    var authority: String?
+    var generation = try context["registry_generation"].map { try R.integer($0) } ?? epoch
+    var activationID = context["activation_id"] as? String
+    var authority = context["issuer_device_id"] as? String
     var result = [[String: Any]]()
     for raw in records {
       if raw["format"] as? String == "atlasvault-enrollment-bridge" {

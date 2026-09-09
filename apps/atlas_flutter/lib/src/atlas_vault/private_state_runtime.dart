@@ -418,6 +418,60 @@ final class AtlasVaultPrivateStateRuntime
     );
   }
 
+  /// Epoch-only ceremony metadata. This boundary cannot export any key or record.
+  Future<T> withEnrollmentContext<T>(
+    vault.AtlasVaultDeviceIdentity identity,
+    Future<T> Function(Map<String, Object?> context) operation,
+  ) {
+    final session = _epochSession, generation = _generation;
+    if (!isActive ||
+        session == null ||
+        _pendingMutationCount != 0 ||
+        _interoperabilityOperation != null) {
+      return Future.error(const AtlasVaultPrivateStateException());
+    }
+    Future<Map<String, Object?>> current() async {
+      if (!isActive ||
+          _generation != generation ||
+          !identical(session, _epochSession)) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      final context = await session.enrollmentContext(
+        deviceID: identity.deviceId,
+        signingPublicKey: identity.signingPublicKey,
+        agreementPublicKey: identity.agreementPublicKey,
+      );
+      if (!isActive ||
+          _generation != generation ||
+          !identical(session, _epochSession) ||
+          context['vault_id'] != _vaultId) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      return context;
+    }
+
+    final completer = Completer<T>();
+    late final Future<void> retained;
+    retained = Future<void>.microtask(() async {
+      try {
+        final before = await current();
+        final value = await operation(Map.unmodifiable(before));
+        if (jsonEncode(before) != jsonEncode(await current())) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        completer.complete(value);
+      } catch (_) {
+        completer.completeError(const AtlasVaultPrivateStateException());
+      } finally {
+        if (identical(_interoperabilityOperation, retained)) {
+          _interoperabilityOperation = null;
+        }
+      }
+    });
+    _interoperabilityOperation = retained;
+    return completer.future;
+  }
+
   Future<T> withInteroperabilitySession<T>(
     Future<T> Function(AtlasVaultInteroperabilitySession session) operation,
   ) {
@@ -519,7 +573,9 @@ final class AtlasVaultPrivateStateRuntime
     Future<AtlasVaultPrivateStateSnapshot> Function() operation,
   ) {
     final generation = _generation;
-    if (!isActive || _epochSession == null) {
+    if (!isActive ||
+        _epochSession == null ||
+        _interoperabilityOperation != null) {
       return Future.error(const AtlasVaultPrivateStateException());
     }
     _pendingMutationCount++;

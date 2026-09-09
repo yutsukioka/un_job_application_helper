@@ -82,6 +82,7 @@ final class AtlasVaultGuardedSyncState {
   Map<String, Object?>? _origin;
   int get _originOffset =>
       _origin == null ? 0 : (_origin!['sequence']! as int) - 1;
+  Map<String, Object?> _bridgeContext() => _context;
   bool _busy = false;
   Future<T> _run<T>(Future<T> Function() operation) async {
     if (_busy) _viewFail();
@@ -140,7 +141,7 @@ final class AtlasVaultGuardedSyncState {
     final proofs = await _verifyEpochBridges(
       records,
       _rotationRegistry ?? [],
-      _context,
+      _bridgeContext(),
     );
     final roots = _views(state['views']).map((v) => v['root']).toList();
     var position = -1;

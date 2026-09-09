@@ -15,6 +15,65 @@ public final class AtlasVaultAnchoredSyncState {
   private var anchor: [String: Any]?
   private let publicKey: Data
 
+  public func publicationOrigin() throws -> [String: Any] {
+    try core.run {
+      try core.active(core.load())
+      guard let anchor else { throw AtlasVaultBootstrapError.rejected }
+      return [
+        "format": "atlasvault-anchored-publication-origin", "version": 1,
+        "context": [
+          "account_id": trust["account_id"]!, "vault_id": trust["vault_id"]!,
+          "collection_id": trust["collection_id"]!, "key_epoch": trust["key_epoch"]!,
+          "signing_public_b64": publicKey.base64EncodedString(),
+        ],
+        "pins": trust.filter {
+          ["anchor_root", "recipient_device_id", "confirmed_transcript", "current_context"]
+            .contains($0.key)
+        },
+        "registry": trust["registry"]!, "anchor": anchor,
+      ]
+    }
+  }
+
+  static func publicationReader(_ owner: AtlasVaultEpochVault) throws -> AtlasVaultGuardedSyncState
+  {
+    guard let o = owner.historyOrigin else { throw AtlasVaultBootstrapError.rejected }
+    try R.exact(o, ["format", "version", "context", "pins", "registry", "anchor"])
+    guard o["format"] as? String == "atlasvault-anchored-publication-origin",
+      try E.integer(o["version"]) == 1
+    else { throw AtlasVaultBootstrapError.rejected }
+    let c = try AtlasVaultDeviceDelivery.map(o["context"])
+    let pins = try AtlasVaultDeviceDelivery.map(o["pins"])
+    try R.exact(c, ["account_id", "vault_id", "collection_id", "key_epoch", "signing_public_b64"])
+    try R.exact(
+      pins, ["anchor_root", "recipient_device_id", "confirmed_transcript", "current_context"])
+    let a = try AtlasVaultDeviceDelivery.map(o["anchor"])
+    let v = try AtlasVaultDeviceDelivery.map(a["view"])
+    guard
+      ["account_id", "vault_id"].allSatisfy({ c[$0] as? String == owner.context[$0] as? String }),
+      try E.integer(c["key_epoch"]) == E.integer(owner.context["key_epoch"]),
+      pins["recipient_device_id"] as? String == owner.context["device_id"] as? String,
+      v["root"] as? String == owner.context["state_root"] as? String,
+      try R.canonical(["registry": o["registry"]!]) == R.canonical(["registry": owner.registry])
+    else { throw AtlasVaultBootstrapError.rejected }
+    var trust = c.filter {
+      ["account_id", "vault_id", "collection_id", "key_epoch"].contains($0.key)
+    }
+    trust["trusted_signer_b64"] = c["signing_public_b64"]
+    trust["registry"] = o["registry"]
+    trust.merge(pins) { _, rhs in rhs }
+    let reader = try AtlasVaultAnchoredSyncState(
+      fileURL: owner.file.fileURL, encryptionKey: owner.key, trust: trust)
+    try reader.verifyAnchor(a)
+    reader.core.store = try owner.componentFile("history")
+    return reader.core
+  }
+
+  func publicationState() throws -> AtlasVaultGuardedSyncState {
+    try core.active(core.load())
+    return core
+  }
+
   public init(fileURL: URL, encryptionKey: Data, trust: [String: Any]) throws {
     try R.exact(
       trust,
@@ -136,6 +195,9 @@ public final class AtlasVaultAnchoredSyncState {
       try E.integer(p["key_epoch"]) == E.integer(trust["key_epoch"])
     else { throw AtlasVaultBootstrapError.rejected }
     core.historyOrigin = v
+    core.anchorBridgeContext = p.filter {
+      ["registry_generation", "activation_id", "issuer_device_id"].contains($0.key)
+    }
   }
 
   public func bootstrap(_ packet: [String: Any]) throws -> Bool {

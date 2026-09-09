@@ -98,4 +98,55 @@ final class AtlasVaultAnchoredHistoryTests: XCTestCase {
       }
     }
   }
+  func testEpochOwnerRetainsImmutableAnchorAfterReopen() throws {
+    try exercise { v, args, open in
+      let history = try open("source")
+      _ = try history.bootstrap(args)
+      let origin = try history.publicationOrigin()
+      let c = v["checkpoint"] as! [String: Any]
+      let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: dir) }
+      func owner(_ anchored: Bool = true) throws -> AtlasVaultEpochVault {
+        try AtlasVaultEpochVault(
+          directory: dir, storageKey: Data(repeating: 97, count: 32),
+          deviceID: v["recipient_device_id"] as! String,
+          registry: v["registry"] as! [[String: Any]],
+          accountID: c["account_id"] as! String, vaultID: c["vault_id"] as! String,
+          keyEpoch: c["key_epoch"] as! Int, stateRoot: c["state_root"] as! String,
+          historyOrigin: anchored ? origin : nil)
+      }
+      try owner().initialize(keys: [4: Data(repeating: 98, count: 32)], history: history)
+      let before = try owner().observation()
+      XCTAssertEqual(before["sequence"] as? Int, 2)
+      XCTAssertTrue(NSDictionary(dictionary: try owner().observation()).isEqual(to: before))
+      XCTAssertTrue(
+        NSDictionary(dictionary: try owner().enrollmentContext())
+          .isEqual(to: args["current_context"] as! [String: Any]))
+      XCTAssertThrowsError(try owner(false).observation())
+      XCTAssertTrue(NSDictionary(dictionary: try owner().observation()).isEqual(to: before))
+    }
+  }
+  func testPublicationOriginRejectsAdditionalContextFields() throws {
+    try exercise { v, args, open in
+      let history = try open("source")
+      _ = try history.bootstrap(args)
+      var origin = try history.publicationOrigin()
+      var context = origin["context"] as! [String: Any]
+      context["unexpected"] = true
+      origin["context"] = context
+      let c = v["checkpoint"] as! [String: Any]
+      let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let owner = try AtlasVaultEpochVault(
+        directory: directory,
+        storageKey: Data(repeating: 97, count: 32),
+        deviceID: v["recipient_device_id"] as! String,
+        registry: v["registry"] as! [[String: Any]],
+        accountID: c["account_id"] as! String, vaultID: c["vault_id"] as! String,
+        keyEpoch: c["key_epoch"] as! Int, stateRoot: c["state_root"] as! String,
+        historyOrigin: origin)
+      XCTAssertThrowsError(try AtlasVaultAnchoredSyncState.publicationReader(owner))
+    }
+  }
 }

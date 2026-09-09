@@ -24,7 +24,9 @@ def bridge_records(state):
 
 def verify_bridges(records, registry, context):
     epoch = context["key_epoch"]
-    generation, activation_id, authority = epoch, None, None
+    generation = context.get("registry_generation", epoch)
+    activation_id = context.get("activation_id")
+    authority = context.get("issuer_device_id")
     result = []
     for raw in records:
         if raw.get("format") == "atlasvault-enrollment-bridge":
@@ -58,7 +60,9 @@ def verify_bridges(records, registry, context):
                         "new_epoch": epoch,
                         "state_root": p["state_root"],
                         "resulting_registry_root": p["resulting_registry_root"],
-                        "recipients": sorted(e["device_id"] for e in after if e["state"] == "ACTIVE"),
+                        "recipients": sorted(
+                            e["device_id"] for e in after if e["state"] == "ACTIVE"
+                        ),
                     },
                     "registry": registry,
                     "rotation_signer_device_id": authority,
@@ -300,7 +304,7 @@ def catch_up(
     if update_index != len(history_updates):
         _reject("ATLAS_HISTORY_CHAIN_REQUIRED")
     staged["components"]["history"] = stage.state
-    verify_bridges(bridges, owner._registry, owner._context)
+    verify_bridges(bridges, owner._registry, owner._history(staged)._bridge_context())
     staged.update(
         epoch=epoch,
         registry=registry,

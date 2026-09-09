@@ -87,6 +87,36 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
     );
   }
   final Map<String, Object?> _trust;
+  Map<String, Object?>? _publicationAnchor;
+  Future<Map<String, Object?>> publicationOrigin() => _run(() async {
+    await _active(await _load());
+    return _anchorCopy({
+      'format': 'atlasvault-anchored-publication-origin',
+      'version': 1,
+      'context': _context,
+      'pins': {
+        for (final k in [
+          'anchor_root',
+          'recipient_device_id',
+          'confirmed_transcript',
+          'current_context',
+        ])
+          k: _trust[k],
+      },
+      'registry': _rotationRegistry,
+      'anchor': _publicationAnchor,
+    });
+  });
+  @override
+  Map<String, Object?> _bridgeContext() => {
+    ..._context,
+    for (final k in [
+      'registry_generation',
+      'activation_id',
+      'issuer_device_id',
+    ])
+      k: _object(_publicationAnchor!['checkpoint'])[k],
+  };
   @override
   Future<void> initialize() async => _bootstrapFail();
 
@@ -218,6 +248,7 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
       _bootstrapFail();
     }
     _origin = _anchorCopy(view);
+    _publicationAnchor = _anchorCopy(anchor);
   }
 
   Future<bool> bootstrap(Map<String, Object?> packet) async {
@@ -331,4 +362,66 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
     String localRoot,
     String peerRoot,
   ) async => _viewFail('ATLAS_RECOVERY_PENDING');
+}
+
+final class _AnchoredEpochComponent extends _EpochComponentFile {
+  _AnchoredEpochComponent(AtlasVaultEpochVault owner, this.reader)
+    : super(owner, 'history');
+  final AtlasVaultAnchoredSyncState reader;
+  @override
+  Future<Map<String, Object?>> read(Map<String, Object?> fallback) async {
+    await reader._verifyAnchor(_object(owner._historyOrigin!['anchor']));
+    return super.read(fallback);
+  }
+}
+
+AtlasVaultAnchoredSyncState _anchoredPublicationHistory(
+  AtlasVaultEpochVault owner,
+) {
+  final o = owner._historyOrigin!;
+  _exact(o, {'format', 'version', 'context', 'pins', 'registry', 'anchor'});
+  if (o['format'] != 'atlasvault-anchored-publication-origin' ||
+      o['version'] is! int ||
+      o['version'] != 1) {
+    _bootstrapFail();
+  }
+  final c = _object(o['context']), pins = _object(o['pins']);
+  _exact(c, {
+    'account_id',
+    'vault_id',
+    'collection_id',
+    'key_epoch',
+    'signing_public_b64',
+  });
+  _exact(pins, {
+    'anchor_root',
+    'recipient_device_id',
+    'confirmed_transcript',
+    'current_context',
+  });
+  if ([
+        'account_id',
+        'vault_id',
+        'key_epoch',
+      ].any((k) => c[k] != owner._context[k]) ||
+      pins['recipient_device_id'] != owner._context['device_id'] ||
+      _object(_object(o['anchor'])['view'])['root'] !=
+          owner._context['state_root'] ||
+      !_anchorEqual(o['registry'], owner._registry)) {
+    _bootstrapFail();
+  }
+  final reader = AtlasVaultAnchoredSyncState(
+    file: owner._file.file,
+    encryptionKey: owner._key,
+    trust: {
+      for (final k in ['account_id', 'vault_id', 'collection_id', 'key_epoch'])
+        k: c[k],
+      'trusted_signer_b64': c['signing_public_b64'],
+      'registry': o['registry'],
+      ...pins,
+    },
+  );
+  if (!_anchorEqual(reader._context, c)) _bootstrapFail();
+  reader._store = _AnchoredEpochComponent(owner, reader);
+  return reader;
 }

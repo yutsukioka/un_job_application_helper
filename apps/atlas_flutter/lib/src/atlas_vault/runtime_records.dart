@@ -326,8 +326,9 @@ extension AtlasVaultRuntimeRecords on AtlasVaultEpochVault {
   }) => _run(() async {
     final s = await _load();
     await _active(s);
-    final history = _history(s)
-      .._store = _RuntimeStagedFile(this, s, 'history');
+    final history = _history(s);
+    await history._load();
+    history._store = _RuntimeStagedFile(this, s, 'history');
     try {
       await history.ingest(view, registry, collection, opaqueState);
       final payload = _object(jsonDecode(utf8.decode(opaqueState)));

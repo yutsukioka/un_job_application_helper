@@ -5,6 +5,11 @@ extension AtlasVaultEpochVault {
     let records = try EpochCatchUp.records(map(map(s["components"])["history"]))
     var activationID: String?
     var generation = try R.integer(s["epoch"])
+    if historyOrigin != nil {
+      let base = try bridgeContext()
+      activationID = base["activation_id"] as? String
+      generation = try R.integer(base["registry_generation"])
+    }
     for raw in records {
       if raw["format"] as? String == "atlasvault-enrollment-bridge" {
         generation = try R.integer(map(raw["enrollment"])["next_registry_generation"])

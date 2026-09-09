@@ -19,8 +19,9 @@ Future<List<Map<String, Object?>>> _verifyEpochBridges(
   Map<String, Object?> context,
 ) async {
   var epoch = context['key_epoch'] as int;
-  var generation = epoch;
-  String? activationID, authority;
+  var generation = (context['registry_generation'] ?? epoch) as int;
+  String? activationID = context['activation_id'] as String?,
+      authority = context['issuer_device_id'] as String?;
   final result = <Map<String, Object?>>[];
   for (final raw in records) {
     if (raw['format'] == 'atlasvault-enrollment-bridge') {
@@ -256,7 +257,9 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
     var registry = _epochRows(s['registry']), epoch = s['epoch'] as int;
     final bridges = _epochBridgeRecords(h),
         stage = _CatchUpHistoryFile(this, h);
-    final validator = _history(staged).._store = stage;
+    final validator = _history(staged);
+    await validator._load();
+    validator._store = stage;
     var updateIndex = 0;
     Map<String, Object?> verified = {};
     for (final packet in packets) {
@@ -377,7 +380,7 @@ extension AtlasVaultEpochCatchUp on AtlasVaultEpochVault {
       _epochFail('ATLAS_HISTORY_CHAIN_REQUIRED');
     }
     (staged['components'] as Map)['history'] = stage.state;
-    await _verifyEpochBridges(bridges, _registry, _context);
+    await _verifyEpochBridges(bridges, _registry, _bridgeContext());
     staged.addAll({
       'epoch': epoch,
       'registry': registry,

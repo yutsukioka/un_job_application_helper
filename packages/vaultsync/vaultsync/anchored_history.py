@@ -1,5 +1,6 @@
 """D102/D104 recipient-pinned origin; admission remains the shared P6 validator."""
 
+import base64
 import copy
 import hashlib
 
@@ -89,6 +90,30 @@ class AnchoredSyncState(GuardedSyncState):
     def initialize(self):
         reject("ATLAS_BOOTSTRAP_REQUIRED")
 
+    def publication_origin(self):
+        """Public creation-time pins for the enclosing protected epoch publication."""
+        with self._lock:
+            self._active(self._load())
+            return copy.deepcopy(
+                {
+                    "format": "atlasvault-anchored-publication-origin",
+                    "version": 1,
+                    "context": self._context,
+                    "pins": self._pins,
+                    "registry": self._rotation_registry,
+                    "anchor": self._anchor,
+                }
+            )
+
+    def _bridge_context(self):
+        return dict(
+            self._context,
+            **{
+                k: self._anchor["checkpoint"][k]
+                for k in ("registry_generation", "activation_id", "issuer_device_id")
+            },
+        )
+
     def _verify(self, anchor):
         if set(anchor) != {"checkpoint", "enrollment", "view"}:
             reject()
@@ -109,6 +134,7 @@ class AnchoredSyncState(GuardedSyncState):
         ):
             reject()
         self._origin = copy.deepcopy(anchor["view"])
+        self._anchor = copy.deepcopy(anchor)
 
     def _chain(self, raw, proof=None):
         if not isinstance(raw, list) or len(raw) > LIMIT:
@@ -168,3 +194,52 @@ def bootstrap_history(history, **args):
     if not isinstance(history, AnchoredSyncState):
         reject("ATLAS_BOOTSTRAP_EXISTING_HISTORY")
     return history.bootstrap(**args)
+
+
+def publication_history(owner, component):
+    """Revalidate the immutable signed origin before exposing a component reader."""
+    origin = owner._history_origin
+    if (
+        set(origin) != {"format", "version", "context", "pins", "registry", "anchor"}
+        or origin["format"] != "atlasvault-anchored-publication-origin"
+        or type(origin["version"]) is not int
+        or origin["version"] != 1
+    ):
+        reject()
+    c, pins = origin["context"], origin["pins"]
+    if set(c) != {
+        "account_id",
+        "vault_id",
+        "collection_id",
+        "key_epoch",
+        "signing_public_b64",
+    } or set(pins) != {
+        "anchor_root",
+        "recipient_device_id",
+        "confirmed_transcript",
+        "current_context",
+    }:
+        reject()
+    if (
+        any(c[k] != owner._context[k] for k in ("account_id", "vault_id", "key_epoch"))
+        or pins["recipient_device_id"] != owner._context["device_id"]
+        or origin["anchor"]["view"]["root"] != owner._context["state_root"]
+        or origin["registry"] != owner._registry
+    ):
+        reject()
+    history = AnchoredSyncState(
+        owner._file.path,
+        encryption_key=owner._key,
+        account_id=c["account_id"],
+        vault_id=c["vault_id"],
+        collection_id=c["collection_id"],
+        key_epoch=c["key_epoch"],
+        trusted_signer=base64.b64decode(c["signing_public_b64"], validate=True),
+        rotation_registry=origin["registry"],
+        **pins,
+    )
+    if history._context != c:
+        reject()
+    history._verify(origin["anchor"])
+    history._store = component
+    return history

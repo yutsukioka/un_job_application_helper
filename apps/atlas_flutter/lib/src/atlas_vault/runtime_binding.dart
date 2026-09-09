@@ -38,7 +38,8 @@ final class AtlasVaultRuntimeBinding {
     );
     final history = owner._history(s);
     final originalRegistry =
-        (await history._bridge(await history._load())).isEmpty
+        owner._historyOrigin == null &&
+            (await history._bridge(await history._load())).isEmpty
         ? publicationRegistry
         : null;
     final slot = _slot(vaultID, 'binding');
@@ -78,6 +79,7 @@ final class AtlasVaultRuntimeBinding {
         'context': owner._context,
         'registry': owner._registry,
         'history_registry': ?originalRegistry,
+        'history_origin': ?owner._historyOrigin,
       });
     } finally {
       for (final value in [existingStorage, existingSigning, bindingKey]) {
@@ -108,6 +110,7 @@ final class AtlasVaultRuntimeBinding {
         'context',
         'registry',
         if (record.containsKey('history_registry')) 'history_registry',
+        if (record.containsKey('history_origin')) 'history_origin',
       });
       final c = _object(record['context']);
       _exact(c, {
@@ -117,8 +120,11 @@ final class AtlasVaultRuntimeBinding {
         'key_epoch',
         'state_root',
         'registry_root',
+        if (record.containsKey('history_origin')) 'history_origin_sha256',
       });
       if (record['format'] != 'atlasvault-runtime-binding' ||
+          (record.containsKey('history_origin') &&
+              record.containsKey('history_registry')) ||
           record['version'] is! int ||
           record['version'] != 1 ||
           c['vault_id'] != vaultID ||
@@ -137,7 +143,13 @@ final class AtlasVaultRuntimeBinding {
         vaultID: vaultID,
         keyEpoch: c['key_epoch']! as int,
         stateRoot: c['state_root']! as String,
+        historyOrigin: record['history_origin'] == null
+            ? null
+            : _object(record['history_origin']),
       );
+      if (!_anchorEqual(owner._context, c)) {
+        _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+      }
       final s = await owner._run(() => owner._load());
       if (record.containsKey('history_registry')) {
         owner._runtimePublicationRegistry = _epochRows(
@@ -193,6 +205,28 @@ final class AtlasVaultRuntimeSession {
   final AtlasVaultEpochVault owner;
   final Uint8List _seed;
   bool _closed = false;
+  Future<Map<String, Object?>> enrollmentContext({
+    required String deviceID,
+    required Uint8List signingPublicKey,
+    required Uint8List agreementPublicKey,
+  }) => owner._run(() async {
+    if (_closed || deviceID != owner._context['device_id']) {
+      _epochFail('ATLAS_RUNTIME_LOCKED');
+    }
+    final s = await owner._load();
+    await owner._active(s);
+    if (_closed ||
+        !_epochRows(s['registry']).any(
+          (r) =>
+              r['device_id'] == deviceID &&
+              r['state'] == 'ACTIVE' &&
+              r['signing_public_b64'] == base64Encode(signingPublicKey) &&
+              r['agreement_public_b64'] == base64Encode(agreementPublicKey),
+        )) {
+      _epochFail('ATLAS_DEVICE_REVOKED');
+    }
+    return owner._enrollmentContext(s);
+  });
   Future<List<AtlasVaultRuntimeRecord>> read() {
     if (_closed) _epochFail('ATLAS_RUNTIME_LOCKED');
     return owner.runtimeRecords();

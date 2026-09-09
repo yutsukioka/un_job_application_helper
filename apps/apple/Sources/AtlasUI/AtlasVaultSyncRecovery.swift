@@ -30,6 +30,7 @@ public final class AtlasVaultGuardedSyncState {
   private let context: [String: Any]
   private let lock = NSRecursiveLock()
   var historyOrigin: [String: Any]?
+  var anchorBridgeContext: [String: Any]?
   private var originOffset: Int { (historyOrigin?["sequence"] as? Int).map { $0 - 1 } ?? 0 }
 
   public init(
@@ -136,7 +137,8 @@ public final class AtlasVaultGuardedSyncState {
       throw AtlasVaultSyncRecoveryError.rejected
     }
     let proofs = try EpochCatchUp.verify(
-      records, registry: rotationRegistry ?? [], context: context)
+      records, registry: rotationRegistry ?? [],
+      context: context.merging(anchorBridgeContext ?? [:]) { _, rhs in rhs })
     let roots = try AtlasVaultDeviceDelivery.rows(state["views"]).map { $0["root"] as? String }
     var position = -1
     for proof in proofs {

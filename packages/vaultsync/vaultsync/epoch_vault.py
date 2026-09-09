@@ -78,9 +78,11 @@ class EpochVault:
         vault_id,
         key_epoch,
         state_root,
+        history_origin=None,
     ):
         self._key = bytes(storage_key)
         self._registry = copy.deepcopy(registry)
+        self._history_origin = copy.deepcopy(history_origin)
         self._context = dict(
             account_id=_identifier(account_id),
             vault_id=_identifier(vault_id),
@@ -89,6 +91,10 @@ class EpochVault:
             state_root=state_root,
             registry_root=registry_root(registry),
         )
+        if history_origin is not None:
+            self._context["history_origin_sha256"] = hashlib.sha256(
+                _canonical(history_origin)
+            ).hexdigest()
         if (
             device_id not in [e["device_id"] for e in registry]
             or type(key_epoch) is not int
@@ -114,7 +120,12 @@ class EpochVault:
         from .epoch_catch_up import bridge_records, verify_bridges
 
         records = bridge_records(state["components"]["history"])
-        return records, verify_bridges(records, self._registry, self._context)
+        context = (
+            self._history(state)._bridge_context()
+            if self._history_origin is not None
+            else self._context
+        )
+        return records, verify_bridges(records, self._registry, context)
 
     def _state_root(self, state):
         views = state["components"]["history"].get("views")
@@ -274,6 +285,10 @@ class EpochVault:
         return VaultKeyEpochRing.from_entries(current_key_epoch=s["epoch"], keys=keys)
 
     def _history(self, s):
+        if self._history_origin is not None:
+            from .anchored_history import publication_history
+
+            return publication_history(self, _EpochComponent(self, "history"))
         context = s["components"]["history"]["context"]
         if any(context[k] != self._context[k] for k in ("account_id", "vault_id", "key_epoch")):
             _reject()
@@ -306,6 +321,14 @@ class EpochVault:
             if self._file.path.exists():
                 _reject()
             h = history._load()
+            if self._history_origin is not None:
+                if history.publication_origin() != self._history_origin:
+                    _reject("ATLAS_BOOTSTRAP_REJECTED")
+                from .anchored_history import publication_history
+
+                publication_history(self, _EpochComponent(self, "history"))
+            elif history._origin is not None:
+                _reject("ATLAS_BOOTSTRAP_REQUIRED")
             if (
                 h["status"] != "ACTIVE"
                 or not h["views"]

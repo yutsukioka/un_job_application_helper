@@ -5,6 +5,11 @@ extension AtlasVaultEpochEnrollment on AtlasVaultEpochVault {
     final history = _object(_object(s['components'])['history']);
     String? activationID;
     var generation = s['epoch'] as int;
+    if (_historyOrigin != null) {
+      final base = _bridgeContext();
+      activationID = base['activation_id'] as String;
+      generation = base['registry_generation'] as int;
+    }
     for (final raw in _epochBridgeRecords(history)) {
       if (raw['format'] == 'atlasvault-enrollment-bridge') {
         generation =
