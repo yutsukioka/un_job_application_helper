@@ -3544,14 +3544,38 @@ Future<sync.AtlasVaultRuntimeSession> _openProductionEpochSession(
   AtlasVaultSecureKeyStore keyStore,
   String vaultID,
 ) async {
+  return (await _productionEpochBinding(keyStore)).open(vaultID);
+}
+
+Future<sync.AtlasVaultRuntimeBinding> _productionEpochBinding(
+  AtlasVaultSecureKeyStore keyStore,
+) async {
   final support = await getApplicationSupportDirectory();
-  final binding = sync.AtlasVaultRuntimeBinding(
+  return sync.AtlasVaultRuntimeBinding(
     root: Directory('${support.path}/atlasvault-runtime-v1'),
     loadKey: keyStore.loadVaultKey,
     createKey: keyStore.createVaultKey,
   );
-  return binding.open(vaultID);
 }
+
+AtlasVaultEpochEnrollmentInstaller _productionEpochInstaller(
+  AtlasVaultSecureKeyStore keyStore,
+) =>
+    (
+      packet, {
+      required pins,
+      required trustedSigner,
+      required recipient,
+      beforePublish,
+    }) async {
+      await (await _productionEpochBinding(keyStore)).installEnrollment(
+        packet,
+        pins: pins,
+        trustedSigner: trustedSigner,
+        recipient: recipient,
+        beforePublish: beforePublish,
+      );
+    };
 
 _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   if (Platform.isWindows) {
@@ -3580,6 +3604,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       epochSessionFactory: (id) => _openProductionEpochSession(keyStore, id),
+      epochEnrollmentInstaller: _productionEpochInstaller(keyStore),
     );
     late final AtlasAppController controller;
     controller = AtlasAppController(
@@ -3649,6 +3674,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       epochSessionFactory: (id) => _openProductionEpochSession(keyStore, id),
+      epochEnrollmentInstaller: _productionEpochInstaller(keyStore),
     );
     const authorityAdmission = _AtlasFailClosedPlaintextAuthorityAdmission();
     final controller = AtlasAppController(
@@ -3695,6 +3721,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     secureKeyStore: keyStore,
     localStoreIO: localStore,
     epochSessionFactory: (id) => _openProductionEpochSession(keyStore, id),
+    epochEnrollmentInstaller: _productionEpochInstaller(keyStore),
   );
   final controller = AtlasAppController(
     localCacheStoreFactory: _noPersistentPlaintextCache,

@@ -21,6 +21,59 @@ private final class AtlasRuntimeComponents {
 }
 
 extension AtlasVaultEpochVault {
+  func stageEnrollmentRuntime(_ initial: [String: Any], projection: Data) throws -> [String: Any] {
+    guard let historyOrigin else { throw AtlasVaultBootstrapError.rejected }
+    let checkpoint = try map(map(historyOrigin["anchor"])["checkpoint"])
+    guard R.digest(projection) == checkpoint["collection_sha256"] as? String else {
+      throw AtlasVaultBootstrapError.rejected
+    }
+    let payload = try map(JSONSerialization.jsonObject(with: projection))
+    let staged = AtlasRuntimeComponents(try map(initial["components"]))
+    let replica = try runtimeReplica(staged)
+    for raw in try rows(payload["records"]) {
+      let envelope = try AtlasVaultOpaqueCiphertextEnvelope(jsonObject: raw)
+      var clear = try open(envelope)
+      defer { clear.resetBytes(in: 0..<clear.count) }
+      let body = try map(JSONSerialization.jsonObject(with: clear))
+      var operation = body.filter {
+        ["operation_id", "author_device_id", "author_sequence", "lamport"].contains($0.key)
+      }
+      operation["format"] = "atlasvault-encrypted-patch-operation"
+      operation["version"] = 1
+      operation["operation_type"] = envelope.tombstone ? "delete" : "upsert"
+      operation["envelope"] = raw
+      let op = try AtlasVaultEncryptedPatchOperation(jsonObject: operation)
+      _ = try runtimeBody(op)
+      _ = try replica.ingestRemote(op)
+    }
+    guard
+      try R.canonical(["records": replica.currentRecords().map(\.jsonObject)])
+        == R.canonical(["records": payload["records"]!])
+    else {
+      throw AtlasVaultBootstrapError.rejected
+    }
+    var result = initial
+    result["components"] = staged.values
+    return result
+  }
+
+  func verifyEnrollmentRuntime(_ projection: Data) throws {
+    try run {
+      let s = try load()
+      try active(s)
+      guard historyOrigin != nil else { throw AtlasVaultBootstrapError.rejected }
+      let (_, replica) = try checkedRuntime(s)
+      let body = try map(JSONSerialization.jsonObject(with: projection))
+      guard
+        try R.canonical(["records": replica.currentRecords().map(\.jsonObject)])
+          == R.canonical(["records": body["records"]!])
+      else {
+        throw AtlasVaultBootstrapError.rejected
+      }
+      _ = try runtimeState()
+    }
+  }
+
   private func runtimeReplica(_ staged: AtlasRuntimeComponents) throws
     -> AtlasVaultDurableEncryptedConvergentReplica
   {

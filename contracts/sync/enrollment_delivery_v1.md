@@ -54,11 +54,45 @@ transaction; Dart and Swift use an encrypted receipt and OS file lock. Keys are
 never stored in the receipt. Temporary mutable buffers are cleared where the
 runtime permits; immutable/runtime copies are not claimed physically erased.
 
-## Current Evidence Boundary
+## Production Ceremony Binding
 
-The shared vectors prove recipient HPKE agreement, protected epoch-owner
-installation, exact retry/reopen, and both retained-author cases. They do not
-prove production coordinator wiring, native secure-custody provisioning, P5
-runtime projection installation, or a completed user-mediated pairing ceremony.
-Those remain mandatory before T74/Gate B can be claimed. No C31 authorization is
-implied by a successful primitive installation.
+The epoch-backed coordinator uses the existing signed offer, acceptance, SAS
+comparison and transcript proofs. It never enters the legacy-session export
+path. The protected offer journal pins the original enrollment context before
+authorization. The signer revalidates that exact target, context and monotonic
+deadline immediately before atomically publishing enrollment plus its cached
+recipient packet. A retry cannot substitute the newly observed context for the
+original journal pin. Missing historical preimages remain a hard failure.
+
+The manual artifact retains `atlasvault-pairing-artifact` version 1 and adds a
+delivery payload variant containing exactly `enrollment_delivery` and
+`inviter_proof`. Recipient trust comes from the independently SAS-confirmed
+signed offer identity and transcript, not a signing key carried by the packet.
+Only after verifying that peer's packet signature may its current-context
+attestation supply D102 pins. Full D102/D106 and HPKE verification remains required.
+
+Native custody is provisioned before the final runtime binding. The protected
+owner publishes the verified key ring, anchored history and authenticated P5
+current projection together. The P5 replica ingests these as remote operations;
+it has no synthetic local outbox writes and retains terminal tombstones. The
+small runtime binding is published last. An interrupted install with no binding
+is unavailable, not an empty ACTIVE replica. Exact receipt retry can finish the
+same installation; it cannot overwrite an established history.
+
+The acknowledgement artifact contains exactly `enrollment_acknowledgement`.
+Its [schema](atlasvault_enrollment_acknowledgement_v1.schema.json) binds the exact
+canonical delivery-artifact SHA-256, anchor root, transcript and recipient.
+Ed25519 signs `atlasvault-enrollment-acknowledgement-v1\0` followed by canonical
+unsigned acknowledgement JSON. The recipient emits it only after protected
+installation and runtime activation. The sender verifies it against the signed
+acceptance identity and persisted delivery hash before consuming the replay
+receipt. Persisted acknowledgement bytes are reused on retry. As in the existing
+[identity contract](device_identity.md), CryptoKit signatures may be randomized;
+unsigned bytes and verification agree across languages, not newly generated
+signature bytes.
+
+The synthetic production vector covers nonempty retained ACTIVE-author and
+revoked-historical-author records plus a terminal tombstone. Gate B additionally
+requires production coordinator, native custody, adversarial, real termination,
+P6 and security regression evidence. Helper or vector success alone does not
+complete T74, T75 or authorize C31.

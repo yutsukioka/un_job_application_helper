@@ -40,9 +40,61 @@ public enum AtlasVaultEnrollmentDelivery {
       + Data(SHA256.hash(data: try R.canonical(unsigned(p).filter { $0.key != "deliveries" })))
   }
 
+  private static func receiptBody(_ packet: [String: Any], _ digest: String) throws -> [String: Any]
+  {
+    let p = try map(map(packet["anchor"])["checkpoint"])
+    guard let root = p["root"] as? String, let transcript = p["transcript_sha256"] as? String,
+      let device = p["recipient_device_id"] as? String
+    else {
+      throw AtlasVaultEnrollmentDeliveryError.rejected
+    }
+    return [
+      "format": "atlasvault-enrollment-acknowledgement", "version": 1,
+      "delivery_sha256": digest, "anchor_root": root,
+      "transcript_sha256": transcript, "recipient_device_id": device,
+    ]
+  }
+
+  private static func receiptMessage(_ receipt: [String: Any]) throws -> Data {
+    Data("atlasvault-enrollment-acknowledgement-v1\0".utf8)
+      + (try R.canonical(receipt.filter { $0.key != "signature_b64" }))
+  }
+
+  public static func acknowledge(
+    _ packet: [String: Any], deliveryHash: String,
+    recipient: AtlasVaultDeviceIdentity
+  ) throws -> [String: Any] {
+    var receipt = try receiptBody(packet, deliveryHash)
+    guard receipt["recipient_device_id"] as? String == recipient.deviceID else {
+      throw AtlasVaultEnrollmentDeliveryError.rejected
+    }
+    receipt["signature_b64"] = try recipient.sign(receiptMessage(receipt)).base64EncodedString()
+    return receipt
+  }
+
+  public static func verifyAcknowledgement(
+    _ packet: [String: Any], deliveryHash: String,
+    receipt: [String: Any], recipient: AtlasVaultDeviceDescriptor
+  ) throws {
+    do {
+      guard
+        try R.canonical(receipt.filter { $0.key != "signature_b64" })
+          == R.canonical(receiptBody(packet, deliveryHash)),
+        receipt["recipient_device_id"] as? String == recipient.deviceID,
+        let text = receipt["signature_b64"] as? String, let signature = Data(base64Encoded: text),
+        signature.count == 64, signature.base64EncodedString() == text,
+        try Curve25519.Signing.PublicKey(rawRepresentation: recipient.signingPublicKey)
+          .isValidSignature(signature, for: receiptMessage(receipt))
+      else {
+        throw AtlasVaultEnrollmentDeliveryError.rejected
+      }
+    } catch { throw AtlasVaultEnrollmentDeliveryError.rejected }
+  }
+
   public static func install(
     directory: URL, packet: [String: Any], pins: [String: Any], trustedSigner: Data,
-    recipient: AtlasVaultDeviceIdentity, agreementPrivateKey: Data, storageKey: Data
+    recipient: AtlasVaultDeviceIdentity, agreementPrivateKey: Data, storageKey: Data,
+    requireRuntimeProjection: Bool = false, beforePublish: (() throws -> Void)? = nil
   ) throws -> AtlasVaultEpochVault {
     var keys = [Int64: Data]()
     defer {
@@ -194,9 +246,24 @@ public enum AtlasVaultEnrollmentDelivery {
           throw AtlasVaultEnrollmentDeliveryError.rejected
         }
       } else {
-        try owner.initialize(keys: keys, history: history)
+        try owner.initialize(
+          keys: keys, history: history,
+          enrollmentProjection: requireRuntimeProjection ? bytes : nil, beforePublish: beforePublish
+        )
       }
+      if requireRuntimeProjection { try owner.verifyEnrollmentRuntime(bytes) }
       return owner
     } catch { throw AtlasVaultEnrollmentDeliveryError.rejected }
+  }
+
+  public static func installRuntime(
+    directory: URL, packet: [String: Any], pins: [String: Any], trustedSigner: Data,
+    recipient: AtlasVaultDeviceIdentity, agreementPrivateKey: Data, storageKey: Data,
+    beforePublish: (() throws -> Void)? = nil
+  ) throws -> AtlasVaultEpochVault {
+    try install(
+      directory: directory, packet: packet, pins: pins, trustedSigner: trustedSigner,
+      recipient: recipient, agreementPrivateKey: agreementPrivateKey, storageKey: storageKey,
+      requireRuntimeProjection: true, beforePublish: beforePublish)
   }
 }

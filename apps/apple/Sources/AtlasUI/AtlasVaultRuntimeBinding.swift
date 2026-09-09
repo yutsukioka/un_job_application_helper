@@ -144,9 +144,9 @@ public struct AtlasKeychainRuntimeBindingStore<Client: AtlasKeychainClient>: Sen
 
   /// Call only at the authenticated enrollment boundary with its already trusted P7 owner.
   /// Existing pins are not overwritten, and unlock never calls this method.
-  public func createAuthenticatedBinding(
+  private func authenticatedBindingData(
     from epoch: AtlasVaultEpochVault, authenticatedHistoryRegistry: [[String: Any]]? = nil
-  ) throws {
+  ) throws -> Data {
     let value = try epoch.run { () throws -> [String: Any] in
       let s = try epoch.load()
       try epoch.active(s)
@@ -184,6 +184,15 @@ public struct AtlasKeychainRuntimeBindingStore<Client: AtlasKeychainClient>: Sen
       encoded: data,
       identity: AtlasVaultDeviceIdentitySecret.decodeStrict(secret).loadIdentity(),
       vaultID: vaultID, storageKey: epoch.key)
+    return data
+  }
+
+  public func createAuthenticatedBinding(
+    from epoch: AtlasVaultEpochVault, authenticatedHistoryRegistry: [[String: Any]]? = nil
+  ) throws {
+    let data = try authenticatedBindingData(
+      from: epoch, authenticatedHistoryRegistry: authenticatedHistoryRegistry)
+    let vaultID = epoch.context["vault_id"] as! String
     guard
       client.copyMatching(.init(service: Self.service, account: vaultID)).status
         == errSecItemNotFound,
@@ -203,5 +212,78 @@ public struct AtlasKeychainRuntimeBindingStore<Client: AtlasKeychainClient>: Sen
       _ = client.delete(.init(service: Self.storageKeyService, account: vaultID))
       throw AtlasVaultRuntimeBindingError.unavailable
     }
+  }
+
+  /// Native custody precedes owner publication; the authenticated binding is published last.
+  /// An interrupted install retains its secure slot and permits only the exact receipt retry.
+  public func installEnrollment(
+    directory: URL, packet: [String: Any], pins: [String: Any],
+    trustedSigner: Data, beforePublish: (() throws -> Void)? = nil
+  ) throws -> AtlasVaultEpochVault {
+    typealias R = AtlasVaultEpochRotation
+    let p = try AtlasVaultDeviceDelivery.map(
+      AtlasVaultDeviceDelivery.map(packet["anchor"])["checkpoint"])
+    let vaultID = try AtlasInjectedRootVaultPathLocator.validatedVaultID(
+      viewIdentifier(p["vault_id"]))
+    guard
+      var encodedIdentity = try AtlasKeychainDeviceIdentityStore(client: client)
+        .loadPrimaryIdentity()
+    else {
+      throw AtlasVaultRuntimeBindingError.unavailable
+    }
+    defer { encodedIdentity.resetBytes(in: 0..<encodedIdentity.count) }
+    let identity = try AtlasVaultDeviceIdentitySecret.decodeStrict(encodedIdentity).loadIdentity()
+    var agreement = try R.bytes(
+      AtlasVaultDeviceDelivery.map(JSONSerialization.jsonObject(with: encodedIdentity))[
+        "agreement_private_key"], 32)
+    defer { agreement.resetBytes(in: 0..<agreement.count) }
+    let query = AtlasKeychainQuery(service: Self.storageKeyService, account: vaultID)
+    let prior = client.copyMatching(query)
+    var storage = Data()
+    defer { storage.resetBytes(in: 0..<storage.count) }
+    if prior.status == errSecItemNotFound {
+      guard !FileManager.default.fileExists(atPath: directory.path) else {
+        throw AtlasVaultRuntimeBindingError.invalid
+      }
+      storage = Data(count: 32)
+      let status = storage.withUnsafeMutableBytes {
+        SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!)
+      }
+      guard status == errSecSuccess,
+        client.add(
+          .init(
+            service: query.service, account: vaultID, valueData: storage,
+            accessibility: .afterFirstUnlockThisDeviceOnly)) == errSecSuccess
+      else {
+        throw AtlasVaultRuntimeBindingError.unavailable
+      }
+    } else {
+      guard prior.status == errSecSuccess, let value = prior.valueData, value.count == 32 else {
+        throw AtlasVaultRuntimeBindingError.unavailable
+      }
+      storage = value
+    }
+    let owner = try AtlasVaultEnrollmentDelivery.installRuntime(
+      directory: directory, packet: packet, pins: pins,
+      trustedSigner: trustedSigner, recipient: identity, agreementPrivateKey: agreement,
+      storageKey: storage, beforePublish: beforePublish)
+    let encoded = try authenticatedBindingData(from: owner)
+    let active = client.copyMatching(.init(service: Self.service, account: vaultID))
+    if active.status == errSecItemNotFound {
+      try beforePublish?()
+      guard
+        client.add(
+          .init(
+            service: Self.service, account: vaultID, valueData: encoded,
+            accessibility: .afterFirstUnlockThisDeviceOnly)) == errSecSuccess
+      else {
+        throw AtlasVaultRuntimeBindingError.unavailable
+      }
+    } else {
+      guard active.status == errSecSuccess, active.valueData == encoded else {
+        throw AtlasVaultRuntimeBindingError.invalid
+      }
+    }
+    return owner
   }
 }

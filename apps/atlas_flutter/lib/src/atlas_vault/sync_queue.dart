@@ -22,6 +22,7 @@ part 'sync_recovery.dart';
 part 'anchored_history.dart';
 part 'historical_authority.dart';
 part 'enrollment_delivery.dart';
+part 'runtime_enrollment.dart';
 part 'revocation.dart';
 part 'epoch_vault.dart';
 part 'epoch_catch_up.dart';

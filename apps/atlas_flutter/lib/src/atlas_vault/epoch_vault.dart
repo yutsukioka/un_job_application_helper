@@ -15,20 +15,29 @@ final class _EpochComponentFile extends _EncryptedQueueFile {
   @override
   Future<Map<String, Object?>> read(Map<String, Object?> fallback) async =>
       _epochCopy(
-        _object(_object((await owner._load())['components'])[name] ?? fallback),
+        _object(
+          _object(
+                (owner._enrollmentStaging ?? await owner._load())['components'],
+              )[name] ??
+              fallback,
+        ),
       );
   @override
   Future<void> write(
     Map<String, Object?> value, {
     FutureOr<void> Function()? beforeReplace,
   }) async {
-    final s = await owner._load();
+    final s = owner._enrollmentStaging ?? await owner._load();
     _object(s['components']);
     (s['components']! as Map)[name] = _epochCopy(value);
     if (name == 'history' && value['status'] != 'ACTIVE') {
       s['status'] = 'RECOVERY_PENDING';
     }
-    await owner._file.write(s, beforeReplace: beforeReplace);
+    if (owner._enrollmentStaging != null) {
+      await beforeReplace?.call();
+    } else {
+      await owner._file.write(s, beforeReplace: beforeReplace);
+    }
   }
 }
 
@@ -83,6 +92,8 @@ final class AtlasVaultEpochVault {
   };
   final _EpochPublication _file;
   List<Map<String, Object?>>? _runtimePublicationRegistry;
+  // Only used while the existing owner lock builds one enrollment publication.
+  Map<String, Object?>? _enrollmentStaging;
   bool _busy = false;
   Future<T> _run<T>(Future<T> Function() action) async {
     if (_busy) _epochFail();
@@ -182,6 +193,7 @@ final class AtlasVaultEpochVault {
       'outbox',
       'inbox',
       if (components.containsKey('runtime')) 'runtime',
+      if (components.containsKey('enrollment_delivery')) 'enrollment_delivery',
     });
     if (s['journal'] != null && _object(s['journal'])['kind'] == 'CATCH_UP') {
       final j = _object(s['journal']);
@@ -314,6 +326,8 @@ final class AtlasVaultEpochVault {
     required AtlasVaultGuardedSyncState history,
     AtlasVaultDurableEncryptedOutbox? outbox,
     AtlasVaultDurableEncryptedInbox? inbox,
+    Uint8List? anchoredRuntimeProjection,
+    Future<void> Function()? beforePublish,
   }) => _run(() async {
     if (await _file.file.exists()) _epochFail();
     final h = await history._load(),
@@ -345,7 +359,7 @@ final class AtlasVaultEpochVault {
     );
     await outbox?.pendingOperations();
     await inbox?.pendingOperations();
-    await _file.write({
+    final initial = <String, Object?>{
       'context': _context,
       'status': 'ACTIVE',
       'epoch': _context['key_epoch'],
@@ -365,7 +379,17 @@ final class AtlasVaultEpochVault {
       },
       'journal': null,
       'generation': 1,
-    });
+    };
+    if (anchoredRuntimeProjection != null) {
+      if (_historyOrigin == null) _bootstrapFail();
+      _enrollmentStaging = initial;
+      try {
+        await _stageEnrollmentRuntime(initial, anchoredRuntimeProjection);
+      } finally {
+        _enrollmentStaging = null;
+      }
+    }
+    await _file.write(initial, beforeReplace: beforePublish);
   });
   Future<Map<String, Object?>> observation() => _run(() async {
     final s = await _load(), h = await _history(await _load()).checkpoint();

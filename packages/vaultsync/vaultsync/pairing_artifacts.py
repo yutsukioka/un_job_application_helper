@@ -144,10 +144,42 @@ class PairingArtifact:
             _decode_base64(payload.get("invitee_proof"), PAIRING_PROOF_BYTES)
             return
         if kind is PairingArtifactKind.delivery:
+            if "enrollment_delivery" in payload:
+                _exact_keys(payload, {"enrollment_delivery", "inviter_proof"})
+                packet = _mapping(payload["enrollment_delivery"])
+                if (
+                    packet.get("format") != "atlasvault-enrollment-delivery"
+                    or _integer(packet.get("version")) != 1
+                ):
+                    raise _invalid_artifact()
+                _decode_base64(payload.get("inviter_proof"), PAIRING_PROOF_BYTES)
+                return
             _exact_keys(payload, {"signed_delivery", "bootstrap", "inviter_proof"})
             SignedVaultKeyDelivery.from_dict(_mapping(payload.get("signed_delivery")))
             PairingBootstrap.from_dict(_mapping(payload.get("bootstrap")))
             _decode_base64(payload.get("inviter_proof"), PAIRING_PROOF_BYTES)
+            return
+        if "enrollment_acknowledgement" in payload:
+            _exact_keys(payload, {"enrollment_acknowledgement"})
+            receipt = _mapping(payload["enrollment_acknowledgement"])
+            _exact_keys(
+                receipt,
+                {
+                    "format",
+                    "version",
+                    "delivery_sha256",
+                    "anchor_root",
+                    "transcript_sha256",
+                    "recipient_device_id",
+                    "signature_b64",
+                },
+            )
+            if (
+                receipt["format"] != "atlasvault-enrollment-acknowledgement"
+                or _integer(receipt["version"]) != 1
+            ):
+                raise _invalid_artifact()
+            _decode_base64(receipt["signature_b64"], 64)
             return
         _exact_keys(payload, {"signed_acknowledgement"})
         SignedPairingAcknowledgement.from_dict(_mapping(payload.get("signed_acknowledgement")))

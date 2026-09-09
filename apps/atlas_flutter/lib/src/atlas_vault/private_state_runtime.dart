@@ -94,6 +94,15 @@ abstract interface class AtlasVaultPrivateStatePersistence {
   Future<void> deactivate();
 }
 
+typedef AtlasVaultEpochEnrollmentInstaller =
+    Future<void> Function(
+      Map<String, Object?> packet, {
+      required Map<String, Object?> pins,
+      required Uint8List trustedSigner,
+      required vault.AtlasVaultDeviceIdentity recipient,
+      Future<void> Function()? beforePublish,
+    });
+
 final class AtlasVaultPrivateStateRuntime
     implements AtlasVaultPrivateStatePersistence {
   AtlasVaultPrivateStateRuntime({
@@ -103,6 +112,7 @@ final class AtlasVaultPrivateStateRuntime
     String Function()? uuidProvider,
     Uint8List Function()? nonceProvider,
     Future<sync.AtlasVaultRuntimeSession> Function(String)? epochSessionFactory,
+    AtlasVaultEpochEnrollmentInstaller? epochEnrollmentInstaller,
   }) : // Keep public constructor parameter names stable.
        // ignore: prefer_initializing_formals
        _secureKeyStore = secureKeyStore,
@@ -112,7 +122,9 @@ final class AtlasVaultPrivateStateRuntime
        _uuidProvider = uuidProvider ?? _secureUuidV4,
        _nonceProvider = nonceProvider ?? _secureNonce,
        // ignore: prefer_initializing_formals
-       _epochSessionFactory = epochSessionFactory;
+       _epochSessionFactory = epochSessionFactory,
+       // ignore: prefer_initializing_formals
+       _epochEnrollmentInstaller = epochEnrollmentInstaller;
 
   static const _recordKeyId = 'primary-android-local-key-v1';
 
@@ -123,6 +135,7 @@ final class AtlasVaultPrivateStateRuntime
   final Uint8List Function() _nonceProvider;
   final Future<sync.AtlasVaultRuntimeSession> Function(String)?
   _epochSessionFactory;
+  final AtlasVaultEpochEnrollmentInstaller? _epochEnrollmentInstaller;
   sync.AtlasVaultRuntimeSession? _epochSession;
   String _runtimeState = 'LOCKED';
   String get runtimeState => _runtimeState;
@@ -416,6 +429,112 @@ final class AtlasVaultPrivateStateRuntime
             currentRevision,
       ),
     );
+  }
+
+  bool get usesEpochComposition => _epochSessionFactory != null;
+
+  Future<void> installPairingEnrollment(
+    Map<String, Object?> packet, {
+    required Map<String, Object?> pins,
+    required Uint8List trustedSigner,
+    required vault.AtlasVaultDeviceIdentity recipient,
+    required Future<void> Function() beforePublish,
+  }) async {
+    final install = _epochEnrollmentInstaller, generation = _generation;
+    if (!usesEpochComposition ||
+        install == null ||
+        isActive ||
+        _activating ||
+        _deactivating ||
+        _interoperabilityOperation != null ||
+        _pendingMutationCount != 0) {
+      throw const AtlasVaultPrivateStateException();
+    }
+    _runtimeState = 'ACTIVATION_PENDING';
+    late final Future<void> pending;
+    pending = Future<void>.microtask(
+      () => install(
+        packet,
+        pins: pins,
+        trustedSigner: trustedSigner,
+        recipient: recipient,
+        beforePublish: () async {
+          if (_generation != generation || _deactivating || isActive) {
+            throw const AtlasVaultPrivateStateException();
+          }
+          await beforePublish();
+        },
+      ),
+    );
+    _interoperabilityOperation = pending;
+    try {
+      await pending;
+    } finally {
+      if (identical(_interoperabilityOperation, pending)) {
+        _interoperabilityOperation = null;
+      }
+    }
+  }
+
+  Future<Map<String, Object?>> preparePairingEnrollment({
+    required vault.AtlasVaultDeviceIdentity issuer,
+    required vault.AtlasVaultSignedDeviceDescriptor target,
+    required String confirmedTranscript,
+    required Map<String, Object?> expectedContext,
+    required List<Map<String, Object?>> signedDescriptors,
+    required Future<void> Function() authorize,
+    required Future<void> Function() beforePublish,
+  }) {
+    final session = _epochSession, generation = _generation;
+    if (!isActive ||
+        session == null ||
+        _pendingMutationCount != 0 ||
+        _interoperabilityOperation != null) {
+      return Future.error(const AtlasVaultPrivateStateException());
+    }
+    void live() {
+      if (!isActive ||
+          generation != _generation ||
+          !identical(session, _epochSession)) {
+        throw const AtlasVaultPrivateStateException();
+      }
+    }
+
+    final completer = Completer<Map<String, Object?>>();
+    late final Future<void> retained;
+    retained = Future<void>.microtask(() async {
+      try {
+        await session.enrollmentContext(
+          deviceID: issuer.deviceId,
+          signingPublicKey: issuer.signingPublicKey,
+          agreementPublicKey: issuer.agreementPublicKey,
+        );
+        live();
+        await authorize();
+        live();
+        final packet = await session.owner.prepareRuntimeEnrollment(
+          issuer: issuer,
+          target: target,
+          confirmedTranscript: confirmedTranscript,
+          expectedContext: expectedContext,
+          signedDescriptors: signedDescriptors,
+          beforePublish: () async {
+            live();
+            await beforePublish();
+            live();
+          },
+        );
+        completer.complete(packet);
+      } catch (_) {
+        completer.completeError(const AtlasVaultPrivateStateException());
+      } finally {
+        if (identical(_interoperabilityOperation, retained)) {
+          _interoperabilityOperation = null;
+        }
+      }
+    });
+    _interoperabilityOperation = retained;
+    return completer.future;
   }
 
   /// Epoch-only ceremony metadata. This boundary cannot export any key or record.

@@ -68,6 +68,52 @@ def _context(packet):
     return b"atlasvault-enrollment-delivery-hpke-v1\0" + hashlib.sha256(_canonical(body)).digest()
 
 
+def _receipt_body(packet, delivery_hash):
+    p = packet["anchor"]["checkpoint"]
+    return {
+        "format": "atlasvault-enrollment-acknowledgement",
+        "version": 1,
+        "delivery_sha256": delivery_hash,
+        "anchor_root": p["root"],
+        "transcript_sha256": p["transcript_sha256"],
+        "recipient_device_id": p["recipient_device_id"],
+    }
+
+
+def _receipt_message(receipt):
+    body = {k: v for k, v in receipt.items() if k != "signature_b64"}
+    return b"atlasvault-enrollment-acknowledgement-v1\0" + _canonical(body)
+
+
+def acknowledge_enrollment(packet, delivery_hash, recipient):
+    """Recipient signs only after protected installation and runtime activation."""
+    try:
+        receipt = _receipt_body(packet, delivery_hash)
+        if receipt["recipient_device_id"] != recipient.device_id:
+            reject()
+        receipt["signature_b64"] = base64.b64encode(
+            recipient.sign(_receipt_message(receipt))
+        ).decode()
+        return receipt
+    except Exception:  # noqa: BLE001 - never expose ceremony artifacts.
+        reject()
+
+
+def verify_enrollment_acknowledgement(packet, delivery_hash, receipt, recipient):
+    try:
+        body = {k: v for k, v in receipt.items() if k != "signature_b64"}
+        if (
+            _canonical(body) != _canonical(_receipt_body(packet, delivery_hash))
+            or body["recipient_device_id"] != recipient.device_id
+        ):
+            reject()
+        Ed25519PublicKey.from_public_bytes(recipient.signing_public_key).verify(
+            _decode(receipt["signature_b64"], 64), _receipt_message(receipt)
+        )
+    except Exception:  # noqa: BLE001 - stable public rejection only.
+        reject()
+
+
 def _validate_view(packet, pins, trusted_signer, recipient_id, recipient_public):
     anchor, registry = packet["anchor"], packet["registry"]
     _exact(anchor, {"checkpoint", "enrollment", "view"})
@@ -178,7 +224,14 @@ def create_enrollment_delivery(
 
 
 def install_enrollment_delivery(
-    directory, packet, *, pins, trusted_signer, recipient_identity, storage_key
+    directory,
+    packet,
+    *,
+    pins,
+    trusted_signer,
+    recipient_identity,
+    storage_key,
+    require_runtime_projection=False,
 ):
     """Verify before filesystem writes; publish one complete protected P7 owner.
 
@@ -297,7 +350,18 @@ def install_enrollment_delivery(
                 if state["context"] != owner._context:
                     reject()
             else:
-                owner.initialize(keys, history=history)
+                owner.initialize(
+                    keys,
+                    history=history,
+                    enrollment_projection=opaque if require_runtime_projection else None,
+                )
+            if require_runtime_projection:
+                from .enrollment_runtime import runtime_projection
+
+                if _canonical([r.to_dict() for r in runtime_projection(owner)]) != _canonical(
+                    json.loads(opaque)["records"]
+                ):
+                    reject()
             receipt.commit()
             return owner
     except Exception:  # noqa: BLE001 - fixed boundary: never expose key-provider or input errors.

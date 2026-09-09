@@ -17,6 +17,9 @@ import 'private_state_runtime.dart';
 import 'protected_state_bounds.dart';
 import 'strict_values.dart';
 import 'trusted_devices.dart';
+import 'sync_queue.dart' as sync;
+
+part 'pairing_enrollment_transaction.dart';
 
 const _transactionFormat = 'atlasvault-pairing-transaction';
 const _transactionVersion = 1;
@@ -184,6 +187,7 @@ final class AtlasVaultPairingTransaction {
     required this.bootstrapSha256,
     required this.vaultId,
     required this.keyEpoch,
+    this.enrollmentContext,
     required Uint8List? ephemeralPrivateKey,
     required this.storeSha256,
     required this.vaultKeySha256,
@@ -214,6 +218,7 @@ final class AtlasVaultPairingTransaction {
   final String? bootstrapSha256;
   final String? vaultId;
   final int? keyEpoch;
+  final Map<String, Object?>? enrollmentContext;
   final Uint8List? _ephemeralPrivateKey;
   final String? storeSha256;
   final String? vaultKeySha256;
@@ -257,6 +262,7 @@ final class AtlasVaultPairingTransaction {
           'selection_committed',
           'staged_artifacts',
         },
+        optionalKeys: const {'enrollment_context'},
         context: 'Pairing transaction',
       );
       if (value['format'] != _transactionFormat ||
@@ -364,6 +370,9 @@ final class AtlasVaultPairingTransaction {
             ? null
             : requireAtlasVaultVaultId(value['vault_id']),
         keyEpoch: keyEpoch,
+        enrollmentContext: value['enrollment_context'] == null
+            ? null
+            : _pairingEnrollmentContext(value['enrollment_context']),
         ephemeralPrivateKey: ephemeralPrivateKey,
         storeSha256: _optionalSha256(value['store_sha256']),
         vaultKeySha256: _optionalSha256(value['vault_key_sha256']),
@@ -432,6 +441,7 @@ final class AtlasVaultPairingTransaction {
     'bootstrap_sha256': bootstrapSha256,
     'vault_id': vaultId,
     'key_epoch': keyEpoch,
+    'enrollment_context': ?enrollmentContext,
     'ephemeral_private_key': _ephemeralPrivateKey == null
         ? null
         : base64Encode(_ephemeralPrivateKey),
@@ -933,6 +943,7 @@ final class AtlasVaultTrustedPairingCoordinator
             offerSha256: await atlasVaultSha256Hex(artifact.canonicalBytes()),
             vaultId: context['vault_id']! as String,
             keyEpoch: context['key_epoch']! as int,
+            enrollmentContext: context,
             stagedArtifacts: <AtlasVaultPairingArtifact>[artifact],
           );
           _authorizeSensitiveMutation();
@@ -1250,6 +1261,9 @@ final class AtlasVaultTrustedPairingCoordinator
         return _fixed(AtlasVaultTrustedPairingDisposition.failed);
       }
       await _requireLivePairingDeadlineFor(transaction);
+      if (_runtime.usesEpochComposition) {
+        return await _createEpochDelivery(transaction, identity);
+      }
       return await _runtime.withInteroperabilitySession((vaultSession) async {
         Uint8List? vaultKey;
         try {
@@ -1372,6 +1386,92 @@ final class AtlasVaultTrustedPairingCoordinator
     ),
   );
 
+  Future<AtlasVaultTrustedPairingResult> _createEpochDelivery(
+    AtlasVaultPairingTransaction transaction,
+    AtlasVaultDeviceIdentity identity,
+  ) async {
+    final acceptance = await _requireStaged(
+      AtlasVaultPairingArtifactKind.acceptance,
+      transaction,
+    );
+    final request = _keyRequest(acceptance);
+    final target = _signedAcceptance(acceptance).acceptance.invitee;
+    final transcript = _requiredHex(transaction.transcriptSha256);
+    Future<void> revalidate() async {
+      _authorizeSensitiveMutation();
+      await _requireLivePairingDeadlineFor(transaction);
+      await verifyAtlasVaultPairingKeyRequest(
+        request,
+        transcriptSha256: transcript,
+        inviterDeviceId: identity.deviceId,
+        inviteeDeviceId: transaction.peerDeviceId!,
+        currentTime: _utc(_now()),
+      );
+      if (target.descriptor.deviceId != transaction.peerDeviceId) {
+        throw const AtlasVaultPairingTransactionException();
+      }
+    }
+
+    await revalidate();
+    final registry = await _registryStore.read();
+    final packet = await _runtime.preparePairingEnrollment(
+      issuer: identity,
+      target: target,
+      confirmedTranscript: transaction.transcriptSha256!,
+      expectedContext:
+          transaction.enrollmentContext ??
+          (throw const AtlasVaultPairingTransactionException()),
+      signedDescriptors: [
+        (await identity.signDescriptor()).toJson(),
+        for (final peer in registry?.devices ?? <AtlasVaultTrustedDevicePeer>[])
+          peer.peerDescriptor.toJson(),
+      ],
+      authorize: () async {
+        if (!await _authorizeKeyRelease(transaction.vaultId!)) {
+          throw const AtlasVaultPairingTransactionException();
+        }
+        await revalidate();
+      },
+      beforePublish: revalidate,
+    );
+    final sessionKey = await _sessionKeyFor(transaction, identity);
+    late AtlasVaultPairingProofs proofs;
+    try {
+      proofs = await deriveAtlasVaultPairingProofs(
+        sessionKey: sessionKey,
+        transcriptSha256: transcript,
+      );
+    } finally {
+      sessionKey.fillRange(0, sessionKey.length, 0);
+    }
+    final artifact = _artifact(AtlasVaultPairingArtifactKind.delivery, {
+      'enrollment_delivery': packet,
+      'inviter_proof': base64Encode(proofs.inviter),
+    });
+    final confirmed = await _advance(
+      transaction,
+      AtlasVaultPairingStage.sasConfirmed,
+    );
+    final intent = await _advance(confirmed, confirmed.stage, {
+      'delivery_sha256': await atlasVaultSha256Hex(artifact.canonicalBytes()),
+      'bootstrap_sha256': (packet['anchor']! as Map)['checkpoint']['root'],
+      'staged_artifacts': await _mergedStagedJson(confirmed, artifact),
+    });
+    await _createStaged(artifact);
+    final created = await _advance(
+      intent,
+      AtlasVaultPairingStage.deliveryCreated,
+    );
+    return _result(
+      AtlasVaultTrustedPairingDisposition.deliveryReady,
+      created,
+      local: identity,
+      peerDeviceId: created.peerDeviceId,
+      sas: await _sasFor(created, identity),
+      expiresAt: request.request.expiresAt,
+    );
+  }
+
   @override
   Future<AtlasVaultTrustedPairingResult> importKeyDelivery() => _run(
     () => _transactionAdmission.runTrustedPairingTransaction(() async {
@@ -1393,6 +1493,9 @@ final class AtlasVaultTrustedPairingCoordinator
         if (transaction.deliverySha256 != null &&
             transaction.deliverySha256 != artifactHash) {
           throw const AtlasVaultPairingTransactionException();
+        }
+        if (_isEpochDelivery(artifact)) {
+          return await _importEpochDelivery(transaction, artifact);
         }
         await _preflightInviteeDelivery(transaction, artifact);
         final intent = await _advance(
@@ -1450,52 +1553,77 @@ final class AtlasVaultTrustedPairingCoordinator
       });
 
   @override
-  Future<AtlasVaultTrustedPairingResult> importPairingAcknowledgement() =>
-      _run(() async {
-        AtlasVaultDeviceIdentity? identity;
-        try {
-          final transaction = await _requireStage(
-            AtlasVaultPairingRole.inviter,
-            AtlasVaultPairingStage.deliverySaved,
-          );
-          identity = await _requireIdentity();
-          final artifact = await _artifactTransport.pick();
-          if (artifact == null) {
-            return _fixed(AtlasVaultTrustedPairingDisposition.cancelled);
-          }
-          if (artifact.kind != AtlasVaultPairingArtifactKind.acknowledgement) {
-            throw const AtlasVaultPairingTransactionException();
-          }
-          await _verifyInviterAcknowledgement(
-            transaction,
-            identity,
-            acknowledgementArtifact: artifact,
-          );
-          final intent =
-              await _advance(transaction, transaction.stage, <String, Object?>{
-                'acknowledgement_sha256': await atlasVaultSha256Hex(
-                  artifact.canonicalBytes(),
-                ),
-                'staged_artifacts': await _mergedStagedJson(
-                  transaction,
-                  artifact,
-                ),
-              });
-          await _createStaged(artifact);
-          final imported = await _advance(
-            intent,
-            AtlasVaultPairingStage.acknowledgementImported,
-          );
-          return _completeInviterAcknowledgement(imported, identity);
-        } catch (_) {
-          return _fixed(
-            AtlasVaultTrustedPairingDisposition.recoveryRequired,
-            pending: true,
-          );
-        } finally {
-          identity?.destroy();
+  Future<AtlasVaultTrustedPairingResult> importPairingAcknowledgement() => _run(
+    () async {
+      AtlasVaultDeviceIdentity? identity;
+      try {
+        final transaction = await _requireStage(
+          AtlasVaultPairingRole.inviter,
+          AtlasVaultPairingStage.deliverySaved,
+        );
+        identity = await _requireIdentity();
+        final artifact = await _artifactTransport.pick();
+        if (artifact == null) {
+          return _fixed(AtlasVaultTrustedPairingDisposition.cancelled);
         }
-      });
+        if (artifact.kind != AtlasVaultPairingArtifactKind.acknowledgement) {
+          throw const AtlasVaultPairingTransactionException();
+        }
+        final stagedDelivery = await _requireStaged(
+          AtlasVaultPairingArtifactKind.delivery,
+          transaction,
+        );
+        if (_isEpochDelivery(stagedDelivery)) {
+          await _verifyEpochAcknowledgement(
+            transaction,
+            stagedDelivery,
+            artifact,
+          );
+          final intent = await _advance(transaction, transaction.stage, {
+            'acknowledgement_sha256': await atlasVaultSha256Hex(
+              artifact.canonicalBytes(),
+            ),
+            'staged_artifacts': await _mergedStagedJson(transaction, artifact),
+          });
+          await _createStaged(artifact);
+          return await _completeEpochAcknowledgement(
+            await _advance(
+              intent,
+              AtlasVaultPairingStage.acknowledgementImported,
+            ),
+          );
+        }
+        await _verifyInviterAcknowledgement(
+          transaction,
+          identity,
+          acknowledgementArtifact: artifact,
+        );
+        final intent = await _advance(
+          transaction,
+          transaction.stage,
+          <String, Object?>{
+            'acknowledgement_sha256': await atlasVaultSha256Hex(
+              artifact.canonicalBytes(),
+            ),
+            'staged_artifacts': await _mergedStagedJson(transaction, artifact),
+          },
+        );
+        await _createStaged(artifact);
+        final imported = await _advance(
+          intent,
+          AtlasVaultPairingStage.acknowledgementImported,
+        );
+        return _completeInviterAcknowledgement(imported, identity);
+      } catch (_) {
+        return _fixed(
+          AtlasVaultTrustedPairingDisposition.recoveryRequired,
+          pending: true,
+        );
+      } finally {
+        identity?.destroy();
+      }
+    },
+  );
 
   @override
   Future<AtlasVaultTrustedPairingResult> resumePairing() => _run(
@@ -1686,6 +1814,11 @@ final class AtlasVaultTrustedPairingCoordinator
   Future<AtlasVaultTrustedPairingResult> _installInvitee(
     AtlasVaultPairingTransaction starting,
   ) async {
+    if (_isEpochDelivery(
+      await _requireStaged(AtlasVaultPairingArtifactKind.delivery, starting),
+    )) {
+      return _installEpochInvitee(starting);
+    }
     AtlasVaultDeviceIdentity? identity;
     Uint8List? vaultKey;
     Uint8List? loadedKey;
@@ -2138,6 +2271,9 @@ final class AtlasVaultTrustedPairingCoordinator
     AtlasVaultPairingTransaction transaction,
     AtlasVaultDeviceIdentity identity,
   ) async {
+    if (_runtime.usesEpochComposition) {
+      return _createEpochDelivery(transaction, identity);
+    }
     final artifact = await _stageStore.read(
       AtlasVaultPairingArtifactKind.delivery,
     );
@@ -2237,6 +2373,11 @@ final class AtlasVaultTrustedPairingCoordinator
     AtlasVaultPairingTransaction starting,
     AtlasVaultDeviceIdentity identity,
   ) async {
+    if (_isEpochDelivery(
+      await _requireStaged(AtlasVaultPairingArtifactKind.delivery, starting),
+    )) {
+      return _completeEpochAcknowledgement(starting);
+    }
     var transaction = starting;
     final verified = await _verifyInviterAcknowledgement(transaction, identity);
     final acknowledgement = verified.acknowledgement;
@@ -2451,6 +2592,7 @@ final class AtlasVaultTrustedPairingCoordinator
     String? bootstrapSha256,
     String? vaultId,
     int? keyEpoch,
+    Map<String, Object?>? enrollmentContext,
     Uint8List? ephemeralPrivateKey,
     String? storeSha256,
     String? vaultKeySha256,
@@ -2477,6 +2619,7 @@ final class AtlasVaultTrustedPairingCoordinator
     'bootstrap_sha256': bootstrapSha256,
     'vault_id': vaultId,
     'key_epoch': keyEpoch,
+    'enrollment_context': ?enrollmentContext,
     'ephemeral_private_key': ephemeralPrivateKey == null
         ? null
         : base64Encode(ephemeralPrivateKey),
@@ -2596,7 +2739,7 @@ final class AtlasVaultTrustedPairingCoordinator
         throw const AtlasVaultPairingTransactionException();
       }
       final artifact = await _requireStaged(kind, transaction);
-      _requireCurrentDeliveryForSave(kind, artifact);
+      await _requireCurrentDeliveryForSave(kind, artifact, transaction);
       if (sideEffectIntentStage != null && transaction.stage == expectedStage) {
         final prior = transaction;
         transaction = await _advance(prior, sideEffectIntentStage);
@@ -2609,7 +2752,7 @@ final class AtlasVaultTrustedPairingCoordinator
           pending: true,
         );
       }
-      _requireCurrentDeliveryForSave(kind, artifact);
+      await _requireCurrentDeliveryForSave(kind, artifact, transaction);
       final updated = await _advance(transaction, savedStage);
       identity = await _loadIdentity();
       if (savedStage == AtlasVaultPairingStage.acceptanceSaved) {
@@ -2631,11 +2774,16 @@ final class AtlasVaultTrustedPairingCoordinator
     }
   }
 
-  void _requireCurrentDeliveryForSave(
+  Future<void> _requireCurrentDeliveryForSave(
     AtlasVaultPairingArtifactKind kind,
     AtlasVaultPairingArtifact artifact,
-  ) {
+    AtlasVaultPairingTransaction transaction,
+  ) async {
     if (kind != AtlasVaultPairingArtifactKind.delivery) {
+      return;
+    }
+    if (_isEpochDelivery(artifact)) {
+      await _requireLivePairingDeadlineFor(transaction);
       return;
     }
     final expiresAt = _delivery(artifact).delivery.expiresAt;

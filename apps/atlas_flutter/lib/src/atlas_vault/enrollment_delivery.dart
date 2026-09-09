@@ -40,6 +40,8 @@ abstract final class AtlasVaultEnrollmentDelivery {
     required identity.AtlasVaultDeviceIdentity recipient,
     required Uint8List agreementPrivateKey,
     required Uint8List storageKey,
+    bool requireRuntimeProjection = false,
+    Future<void> Function()? beforePublish,
   }) async {
     final keys = <int, Uint8List>{},
         private = Uint8List.fromList(agreementPrivateKey);
@@ -252,8 +254,14 @@ abstract final class AtlasVaultEnrollmentDelivery {
         await owner._active(state);
         if (!_anchorEqual(state['context'], owner._context)) _reject();
       } else {
-        await owner.initialize(keys, history: history);
+        await owner.initialize(
+          keys,
+          history: history,
+          anchoredRuntimeProjection: requireRuntimeProjection ? bytes : null,
+          beforePublish: beforePublish,
+        );
       }
+      if (requireRuntimeProjection) await owner.verifyEnrollmentRuntime(bytes);
       return owner;
     } catch (_) {
       _reject();
@@ -271,6 +279,126 @@ abstract final class AtlasVaultEnrollmentDelivery {
         }
       }
       if (claimed) _installing.remove(path);
+    }
+  }
+
+  static Future<AtlasVaultEpochVault> installRuntime(
+    Directory directory,
+    Map<String, Object?> packet, {
+    required Map<String, Object?> pins,
+    required Uint8List trustedSigner,
+    required identity.AtlasVaultDeviceIdentity recipient,
+    required Uint8List agreementPrivateKey,
+    required Uint8List storageKey,
+    Future<void> Function()? beforePublish,
+  }) => install(
+    directory,
+    packet,
+    pins: pins,
+    trustedSigner: trustedSigner,
+    recipient: recipient,
+    agreementPrivateKey: agreementPrivateKey,
+    storageKey: storageKey,
+    requireRuntimeProjection: true,
+    beforePublish: beforePublish,
+  );
+
+  /// Trust begins with the independently SAS-confirmed peer and transcript, not
+  /// a signing key advertised by the incoming packet. Its signature attests the
+  /// current enrollment context; install still verifies every D102/D106 bound.
+  static Future<Map<String, Object?>> ceremonyPins(
+    Map<String, Object?> packet, {
+    required identity.AtlasVaultDeviceIdentity recipient,
+    required identity.AtlasVaultDeviceDescriptor peer,
+    required String transcript,
+  }) async {
+    if (_canonicalJsonBytes(packet).length > 2 * 1024 * 1024 ||
+        packet['root'] != _root(packet) ||
+        !await Ed25519().verify(
+          _message(packet['root']! as String),
+          signature: Signature(
+            _base64(packet['signature_b64'], exactLength: 64),
+            publicKey: SimplePublicKey(
+              peer.signingPublicKey,
+              type: KeyPairType.ed25519,
+            ),
+          ),
+        )) {
+      _reject();
+    }
+    final p = _object(_object(packet['anchor'])['checkpoint']);
+    if (p['issuer_device_id'] != peer.deviceId ||
+        p['recipient_device_id'] != recipient.deviceId ||
+        p['recipient_agreement_sha256'] !=
+            _sha256Hex(recipient.agreementPublicKey) ||
+        p['transcript_sha256'] != transcript) {
+      _reject();
+    }
+    return {
+      'anchor_root': p['root'],
+      'recipient_device_id': recipient.deviceId,
+      'confirmed_transcript': transcript,
+      'current_context': {
+        for (final k in enrollment.AtlasVaultDeviceEnrollment.contextFields)
+          k: p[k],
+      },
+    };
+  }
+
+  static Map<String, Object?> _receiptBody(
+    Map<String, Object?> packet,
+    String deliveryHash,
+  ) {
+    final p = _object(_object(packet['anchor'])['checkpoint']);
+    return {
+      'format': 'atlasvault-enrollment-acknowledgement',
+      'version': 1,
+      'delivery_sha256': deliveryHash,
+      'anchor_root': p['root'],
+      'transcript_sha256': p['transcript_sha256'],
+      'recipient_device_id': p['recipient_device_id'],
+    };
+  }
+
+  static Uint8List _receiptMessage(Map<String, Object?> receipt) =>
+      Uint8List.fromList([
+        ...ascii.encode('atlasvault-enrollment-acknowledgement-v1\x00'),
+        ..._canonicalJsonBytes({...receipt}..remove('signature_b64')),
+      ]);
+
+  static Future<Map<String, Object?>> acknowledge(
+    Map<String, Object?> packet,
+    String deliveryHash,
+    identity.AtlasVaultDeviceIdentity recipient,
+  ) async {
+    final r = _receiptBody(packet, deliveryHash);
+    if (r['recipient_device_id'] != recipient.deviceId) _reject();
+    r['signature_b64'] = base64Encode(
+      await recipient.signBytes(_receiptMessage(r)),
+    );
+    return r;
+  }
+
+  static Future<void> verifyAcknowledgement(
+    Map<String, Object?> packet,
+    String deliveryHash,
+    Map<String, Object?> receipt,
+    identity.AtlasVaultDeviceDescriptor recipient,
+  ) async {
+    final body = {...receipt}..remove('signature_b64');
+    if (!_anchorEqual(body, _receiptBody(packet, deliveryHash)) ||
+        body['recipient_device_id'] != recipient.deviceId ||
+        !await Ed25519().verify(
+          _receiptMessage(receipt),
+          signature: Signature(
+            _base64(receipt['signature_b64'], exactLength: 64),
+            publicKey: SimplePublicKey(
+              recipient.signingPublicKey,
+              type: KeyPairType.ed25519,
+            ),
+          ),
+        )) {
+      _reject();
     }
   }
 }

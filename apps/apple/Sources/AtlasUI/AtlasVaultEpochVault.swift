@@ -8,6 +8,8 @@ public final class AtlasVaultEpochVault {
   let registry: [[String: Any]]
   let context: [String: Any]
   let historyOrigin: [String: Any]?
+  // Visible only during a locked new-store publication; never an active generation.
+  var enrollmentStaging: [String: Any]?
   func bridgeContext() throws -> [String: Any] {
     guard let historyOrigin else { return context }
     let p = try map(map(historyOrigin["anchor"])["checkpoint"])
@@ -111,7 +113,7 @@ public final class AtlasVaultEpochVault {
       currentKeyEpoch: viewInteger(state["epoch"]), keys: keys)
   }
   func load() throws -> [String: Any] {
-    let s = try file.read(default: [:])
+    let s = try enrollmentStaging ?? file.read(default: [:])
     try R.exact(
       s,
       [
@@ -247,7 +249,8 @@ public final class AtlasVaultEpochVault {
   }
   public func initialize(
     keys: [Int64: Data], history: AtlasVaultGuardedSyncState,
-    outbox: AtlasVaultDurableEncryptedOutbox? = nil, inbox: AtlasVaultDurableEncryptedInbox? = nil
+    outbox: AtlasVaultDurableEncryptedOutbox? = nil, inbox: AtlasVaultDurableEncryptedInbox? = nil,
+    enrollmentProjection: Data? = nil, beforePublish: (() throws -> Void)? = nil
   ) throws {
     try run {
       guard !FileManager.default.fileExists(atPath: file.fileURL.path) else {
@@ -274,7 +277,7 @@ public final class AtlasVaultEpochVault {
         currentKeyEpoch: viewInteger(context["key_epoch"]), keys: keys)
       _ = try outbox?.pendingOperations()
       _ = try inbox?.pendingOperations()
-      try file.write([
+      var initial: [String: Any] = [
         "context": context, "status": "ACTIVE", "epoch": context["key_epoch"]!,
         "registry": registry,
         "recipients": registry.filter { $0["state"] as? String == "ACTIVE" }.map {
@@ -288,15 +291,27 @@ public final class AtlasVaultEpochVault {
           "inbox": try inbox?.store.read(default: inboxDefault()) ?? inboxDefault(),
         ],
         "journal": NSNull(), "generation": 1,
-      ])
+      ]
+      if let enrollmentProjection {
+        guard historyOrigin != nil else { throw AtlasVaultBootstrapError.rejected }
+        enrollmentStaging = initial
+        defer { enrollmentStaging = nil }
+        initial = try stageEnrollmentRuntime(initial, projection: enrollmentProjection)
+      }
+      try file.write(initial, beforeReplace: beforePublish)
       _ = try self.history(load())
     }
   }
-  public func initialize(keys: [Int64: Data], history: AtlasVaultAnchoredSyncState) throws {
+  public func initialize(
+    keys: [Int64: Data], history: AtlasVaultAnchoredSyncState,
+    enrollmentProjection: Data? = nil, beforePublish: (() throws -> Void)? = nil
+  ) throws {
     guard let historyOrigin,
       try R.canonical(history.publicationOrigin()) == R.canonical(historyOrigin)
     else { throw AtlasVaultBootstrapError.rejected }
-    try initialize(keys: keys, history: history.publicationState())
+    try initialize(
+      keys: keys, history: history.publicationState(),
+      enrollmentProjection: enrollmentProjection, beforePublish: beforePublish)
   }
   public func observation() throws -> [String: Any] {
     try run {

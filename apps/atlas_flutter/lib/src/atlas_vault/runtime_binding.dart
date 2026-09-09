@@ -16,12 +16,82 @@ final class AtlasVaultRuntimeBinding {
     '${root.path}/${_sha256Hex(Uint8List.fromList(utf8.encode(_identifier(vaultID))))}',
   );
 
+  /// The native storage slot survives interruption; the binding pointer is last.
+  /// installRuntime admits only a new store or its exact encrypted receipt retry.
+  Future<void> installEnrollment(
+    Map<String, Object?> packet, {
+    required Map<String, Object?> pins,
+    required Uint8List trustedSigner,
+    required identity.AtlasVaultDeviceIdentity recipient,
+    Future<void> Function()? beforePublish,
+  }) async {
+    final checkpoint = _object(_object(packet['anchor'])['checkpoint']);
+    final vaultID = _identifier(checkpoint['vault_id']);
+    final storageSlot = _slot(vaultID, 'storage');
+    Uint8List? storage, agreement, seed;
+    try {
+      storage = await loadKey(storageSlot);
+      if (storage == null) {
+        if (await directory(vaultID).exists()) {
+          _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+        }
+        storage = Uint8List.fromList(SecretKeyData.random(length: 32).bytes);
+        await createKey(storageSlot, storage);
+      }
+      final secret = recipient.secretBundle();
+      try {
+        agreement = _base64(
+          secret.toJson()['agreement_private_key'],
+          exactLength: 32,
+        );
+        seed = _base64(secret.toJson()['signing_private_key'], exactLength: 32);
+      } finally {
+        secret.destroy();
+      }
+      final owner = await AtlasVaultEnrollmentDelivery.installRuntime(
+        directory(vaultID),
+        packet,
+        pins: pins,
+        trustedSigner: trustedSigner,
+        recipient: recipient,
+        agreementPrivateKey: agreement,
+        storageKey: storage,
+        beforePublish: beforePublish,
+      );
+      if (await File('${directory(vaultID).path}/runtime-binding').exists()) {
+        final current = await open(vaultID);
+        try {
+          if (!_anchorEqual(current.owner._context, owner._context) ||
+              !_sameRuntimeKey(current._seed, seed)) {
+            _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+          }
+          await current.owner.verifyEnrollmentRuntime(
+            _base64(packet['opaque_b64']),
+          );
+        } finally {
+          current.close();
+        }
+      } else {
+        await provision(
+          owner: owner,
+          signingSeed: seed,
+          beforePublish: beforePublish,
+        );
+      }
+    } finally {
+      for (final value in [storage, agreement, seed]) {
+        value?.fillRange(0, value.length, 0);
+      }
+    }
+  }
+
   /// Called only with an already initialized, authenticated P7 publication.
   /// Installation never calls initialize(), creates an account, or signs a root.
   Future<void> provision({
     required AtlasVaultEpochVault owner,
     required Uint8List signingSeed,
     List<Map<String, Object?>>? authenticatedRegistry,
+    Future<void> Function()? beforePublish,
   }) async {
     final s = await owner._run(() => owner._load());
     await owner._active(s);
@@ -80,7 +150,7 @@ final class AtlasVaultRuntimeBinding {
         'registry': owner._registry,
         'history_registry': ?originalRegistry,
         'history_origin': ?owner._historyOrigin,
-      });
+      }, beforeReplace: beforePublish);
     } finally {
       for (final value in [existingStorage, existingSigning, bindingKey]) {
         value?.fillRange(0, value.length, 0);

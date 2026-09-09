@@ -1521,6 +1521,15 @@ public struct AtlasVaultPairingArtifact: Sendable {
             )
             _ = try proof(payload["invitee_proof"])
         case .delivery:
+            if let packet = payload["enrollment_delivery"] as? [String: Any] {
+                guard Set(payload.keys) == ["enrollment_delivery", "inviter_proof"],
+                    packet["format"] as? String == "atlasvault-enrollment-delivery",
+                    strictInteger(packet["version"], equals: 1) else {
+                    throw AtlasVaultKeyDeliveryValidation.fail()
+                }
+                _ = try proof(payload["inviter_proof"])
+                return
+            }
             guard Set(payload.keys) == [
                 "signed_delivery", "bootstrap", "inviter_proof",
             ] else { throw AtlasVaultKeyDeliveryValidation.fail() }
@@ -1532,6 +1541,18 @@ public struct AtlasVaultPairingArtifact: Sendable {
             )
             _ = try proof(payload["inviter_proof"])
         case .acknowledgement:
+            if let receipt = payload["enrollment_acknowledgement"] as? [String: Any] {
+                guard Set(payload.keys) == ["enrollment_acknowledgement"],
+                    Set(receipt.keys) == ["format", "version", "delivery_sha256", "anchor_root",
+                        "transcript_sha256", "recipient_device_id", "signature_b64"],
+                    receipt["format"] as? String == "atlasvault-enrollment-acknowledgement",
+                    strictInteger(receipt["version"], equals: 1),
+                    let signature = receipt["signature_b64"] as? String else {
+                    throw AtlasVaultKeyDeliveryValidation.fail()
+                }
+                _ = try AtlasVaultKeyDeliveryValidation.base64(signature, length: 64)
+                return
+            }
             guard Set(payload.keys) == ["signed_acknowledgement"] else {
                 throw AtlasVaultKeyDeliveryValidation.fail()
             }

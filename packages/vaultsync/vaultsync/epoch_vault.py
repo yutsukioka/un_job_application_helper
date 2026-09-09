@@ -83,6 +83,7 @@ class EpochVault:
         self._key = bytes(storage_key)
         self._registry = copy.deepcopy(registry)
         self._history_origin = copy.deepcopy(history_origin)
+        self._enrollment_staging = None
         self._context = dict(
             account_id=_identifier(account_id),
             vault_id=_identifier(vault_id),
@@ -162,7 +163,11 @@ class EpochVault:
         return self._verify(record["proof"], state)
 
     def _load(self):
-        s = self._file.read({})
+        s = (
+            copy.deepcopy(self._enrollment_staging)
+            if self._enrollment_staging is not None
+            else self._file.read({})
+        )
         _exact(
             s,
             {
@@ -188,7 +193,7 @@ class EpochVault:
             _reject()
         registry_root(s["registry"])
         self._ring(s)
-        if set(s["components"]) != {"history", "outbox", "inbox"}:
+        if set(s["components"]) - {"runtime"} != {"history", "outbox", "inbox"}:
             _reject()
         journal = s["journal"]
         if journal and journal.get("kind") == "CATCH_UP":
@@ -316,7 +321,7 @@ class EpochVault:
             _reject("ATLAS_RECOVERY_PENDING")
 
     @_checked
-    def initialize(self, keys, *, history, outbox=None, inbox=None):
+    def initialize(self, keys, *, history, outbox=None, inbox=None, enrollment_projection=None):
         with self._lock:
             if self._file.path.exists():
                 _reject()
@@ -344,27 +349,30 @@ class EpochVault:
                 outbox.pending_operations()
             if inbox:
                 inbox.pending_operations()
-            self._file.write(
-                dict(
-                    context=self._context,
-                    status="ACTIVE",
-                    epoch=self._context["key_epoch"],
-                    registry=self._registry,
-                    recipients=sorted(
-                        e["device_id"] for e in self._registry if e["state"] == "ACTIVE"
-                    ),
-                    keys={str(k): base64.b64encode(v).decode() for k, v in keys.items()},
-                    components=dict(
-                        history=h,
-                        outbox=outbox._store.read(_outbox_default())
-                        if outbox
-                        else _outbox_default(),
-                        inbox=inbox._store.read(_inbox_default()) if inbox else _inbox_default(),
-                    ),
-                    journal=None,
-                    generation=1,
-                )
-            )
+            initial = {
+                "context": self._context,
+                "status": "ACTIVE",
+                "epoch": self._context["key_epoch"],
+                "registry": self._registry,
+                "recipients": sorted(
+                    e["device_id"] for e in self._registry if e["state"] == "ACTIVE"
+                ),
+                "keys": {str(k): base64.b64encode(v).decode() for k, v in keys.items()},
+                "components": {
+                    "history": h,
+                    "outbox": outbox._store.read(_outbox_default())
+                    if outbox
+                    else _outbox_default(),
+                    "inbox": inbox._store.read(_inbox_default()) if inbox else _inbox_default(),
+                },
+                "journal": None,
+                "generation": 1,
+            }
+            if enrollment_projection is not None:
+                from .enrollment_runtime import stage_runtime_projection
+
+                initial = stage_runtime_projection(self, initial, enrollment_projection)
+            self._file.write(initial)
 
     def catch_up(
         self, packets, *, current_activation_id, agreement_private_key, history_updates=()
