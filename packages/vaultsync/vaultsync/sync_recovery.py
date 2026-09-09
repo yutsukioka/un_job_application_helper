@@ -35,6 +35,44 @@ _PENDING = "ATLAS_RECOVERY_PENDING"
 _META = ("sequence", "root", "registry_root", "key_epoch")
 
 
+def _validate_history_chain(reader, raw, proof=None, *, origin=None):
+    if not isinstance(raw, list) or len(raw) > LIMIT:
+        _reject("ATLAS_HISTORY_LIMIT")
+    views, previous, registry = [], ZERO, EMPTY_REGISTRY
+    base = 0
+    if origin is not None:
+        base, previous, registry = (origin["sequence"], origin["root"], origin["registry_root"])
+    epoch, public = reader._context["key_epoch"], reader._public
+    proofs = proof or []
+    current = None
+    for i, item in enumerate(raw):
+        for candidate in proofs:
+            if (
+                previous == candidate["plan"]["state_root"]
+                and epoch == candidate["plan"]["previous_epoch"]
+            ):
+                current = candidate
+                epoch = candidate["plan"]["new_epoch"]
+                public = reader._bridge_public(candidate)
+        v = _verified(item, public)
+        if (
+            any(v[k] != reader._context[k] for k in ("account_id", "vault_id"))
+            or v["key_epoch"] != epoch
+        ):
+            _reject()
+        if current and v["registry_root"] != current["plan"]["resulting_registry_root"]:
+            _reject()
+        if (
+            v["sequence"] != base + i + 1
+            or v["previous_root"] != previous
+            or v["previous_registry_root"] != registry
+        ):
+            _reject()
+        views.append(v)
+        previous, registry = v["root"], v["registry_root"]
+    return views
+
+
 class GuardedSyncState:
     def __init__(
         self,
@@ -64,6 +102,10 @@ class GuardedSyncState:
             )
             self._lock = threading.RLock()
             self._rotation_registry = rotation_registry
+            self._origin = None
+
+    def _origin_offset(self):
+        return self._origin["sequence"] - 1 if self._origin is not None else 0
 
     def _bridge(self, state):
         from .epoch_catch_up import bridge_records, verify_bridges
@@ -82,38 +124,7 @@ class GuardedSyncState:
         return proofs
 
     def _chain(self, raw, proof=None):
-        if not isinstance(raw, list) or len(raw) > LIMIT:
-            _reject("ATLAS_HISTORY_LIMIT")
-        views, previous, registry = [], ZERO, EMPTY_REGISTRY
-        epoch, public = self._context["key_epoch"], self._public
-        proofs = proof or []
-        current = None
-        for i, item in enumerate(raw):
-            for candidate in proofs:
-                if (
-                    previous == candidate["plan"]["state_root"]
-                    and epoch == candidate["plan"]["previous_epoch"]
-                ):
-                    current = candidate
-                    epoch = candidate["plan"]["new_epoch"]
-                    public = self._bridge_public(candidate)
-            v = _verified(item, public)
-            if (
-                any(v[k] != self._context[k] for k in ("account_id", "vault_id"))
-                or v["key_epoch"] != epoch
-            ):
-                _reject()
-            if current and v["registry_root"] != current["plan"]["resulting_registry_root"]:
-                _reject()
-            if (
-                v["sequence"] != i + 1
-                or v["previous_root"] != previous
-                or v["previous_registry_root"] != registry
-            ):
-                _reject()
-            views.append(v)
-            previous, registry = v["root"], v["registry_root"]
-        return views
+        return _validate_history_chain(self, raw, proof)
 
     def _load(self):
         s = self._store.read({})
@@ -207,7 +218,7 @@ class GuardedSyncState:
         with self._lock, _boundary():
             s = self._load()
             return {
-                "sequence": len(s["views"]),
+                "sequence": self._origin_offset() + len(s["views"]),
                 "cursor": s["views"][-1]["root"] if s["views"] else ZERO,
                 "records": [s["records"][k] for k in sorted(s["records"])],
             }
@@ -270,8 +281,8 @@ class GuardedSyncState:
                 c["reason"] == "ATLAS_ROLLBACK_REJECTED"
                 and bool(c["peer"])
                 and all(
-                    v["sequence"] <= len(c["local"])
-                    and v["root"] == c["local"][v["sequence"] - 1]["root"]
+                    self._origin_offset() < v["sequence"] <= self._origin_offset() + len(c["local"])
+                    and v["root"] == c["local"][v["sequence"] - self._origin_offset() - 1]["root"]
                     for v in c["peer"]
                 )
             )
@@ -313,7 +324,7 @@ class GuardedSyncState:
                         _reject("ATLAS_CHECKPOINT_REQUIRED")
                     if any(a["root"] != b["root"] for a, b in zip(s["views"], checked)):
                         _reject("ATLAS_STATE_EQUIVOCATION")
-                    return min(len(s["views"]), len(checked))
+                    return self._origin_offset() + min(len(s["views"]), len(checked))
             except StateViewError as e:
                 self._alarm(s, str(e), signed)
 
@@ -333,7 +344,7 @@ class GuardedSyncState:
                         or view["key_epoch"] != epoch
                     ):
                         _reject()
-                    if s.get("epoch_bridge") or s.get("epoch_bridges"):
+                    if s.get("epoch_bridge") or s.get("epoch_bridges") or self._origin is not None:
                         from .revocation import registry_root as rotation_registry_root
 
                         registry_digest = rotation_registry_root(registry)
@@ -357,17 +368,20 @@ class GuardedSyncState:
                     )
                     n = view["sequence"]
                     views = s["views"]
-                    if n <= len(views) and view["root"] != views[n - 1]["root"]:
+                    base = self._origin_offset()
+                    if n <= base + len(views) and (
+                        n <= base or view["root"] != views[n - base - 1]["root"]
+                    ):
                         _reject("ATLAS_STATE_EQUIVOCATION")
-                    if n < len(views):
+                    if n < base + len(views):
                         _reject("ATLAS_ROLLBACK_REJECTED")
-                    if n == len(views):
+                    if n == base + len(views):
                         return False
-                    if n > LIMIT:
+                    if n - base > LIMIT:
                         _reject("ATLAS_HISTORY_LIMIT")
                     previous = views[-1] if views else None
                     if (
-                        n != len(views) + 1
+                        n != base + len(views) + 1
                         or view["previous_root"] != (previous["root"] if previous else ZERO)
                         or view["previous_registry_root"]
                         != (previous["registry_root"] if previous else EMPTY_REGISTRY)

@@ -18,6 +18,7 @@ import 'crypto.dart' as record_crypto;
 
 part 'authenticated_state_view.dart';
 part 'sync_recovery.dart';
+part 'anchored_history.dart';
 part 'revocation.dart';
 part 'epoch_vault.dart';
 part 'epoch_catch_up.dart';

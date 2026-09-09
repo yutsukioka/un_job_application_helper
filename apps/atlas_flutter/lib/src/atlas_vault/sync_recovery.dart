@@ -1,5 +1,54 @@
 part of 'sync_queue.dart';
 
+Future<List<Map<String, Object?>>> _validateHistoryChain(
+  AtlasVaultGuardedSyncState reader,
+  List<Map<String, Object?>> raw,
+  List<Map<String, Object?>> proofs, {
+  Map<String, Object?>? origin,
+}) async {
+  if (raw.length > _viewLimit) _viewFail('ATLAS_HISTORY_LIMIT');
+  final views = <Map<String, Object?>>[];
+  var previous = _zeroRoot, registry = _emptyRegistryRoot;
+  var base = 0;
+  if (origin != null) {
+    base = origin['sequence']! as int;
+    previous = origin['root']! as String;
+    registry = origin['registry_root']! as String;
+  }
+  var epoch = reader._context['key_epoch']! as int, public = reader._public;
+  Map<String, Object?>? plan;
+  for (var i = 0; i < raw.length; i++) {
+    for (final proof in proofs) {
+      final candidate = _object(proof['plan']);
+      if (previous == candidate['state_root'] &&
+          epoch == candidate['previous_epoch']) {
+        plan = candidate;
+        epoch = candidate['new_epoch'] as int;
+        public = reader._bridgePublic(proof);
+      }
+    }
+    final v = await AtlasVaultAuthenticatedStateView._verify(raw[i], public);
+    if (['account_id', 'vault_id'].any((k) => v[k] != reader._context[k]) ||
+        v['key_epoch'] != epoch) {
+      _viewFail();
+    }
+    if (plan != null &&
+        epoch == plan['new_epoch'] &&
+        v['registry_root'] != plan['resulting_registry_root']) {
+      _viewFail();
+    }
+    if (v['sequence'] != base + i + 1 ||
+        v['previous_root'] != previous ||
+        v['previous_registry_root'] != registry) {
+      _viewFail();
+    }
+    views.add(v);
+    previous = v['root']! as String;
+    registry = v['registry_root']! as String;
+  }
+  return views;
+}
+
 /// Atomic admission, terminal anchors and manual recovery, with one owner per file.
 final class AtlasVaultGuardedSyncState {
   AtlasVaultGuardedSyncState({
@@ -30,6 +79,9 @@ final class AtlasVaultGuardedSyncState {
   final List<Map<String, Object?>>? _rotationRegistry;
   final Uint8List _public;
   final Map<String, Object?> _context;
+  Map<String, Object?>? _origin;
+  int get _originOffset =>
+      _origin == null ? 0 : (_origin!['sequence']! as int) - 1;
   bool _busy = false;
   Future<T> _run<T>(Future<T> Function() operation) async {
     if (_busy) _viewFail();
@@ -58,42 +110,20 @@ final class AtlasVaultGuardedSyncState {
   Future<List<Map<String, Object?>>> _chain(
     List<Map<String, Object?>> raw, [
     List<Map<String, Object?>> proofs = const [],
-  ]) async {
+  ]) {
+    if (_origin == null) return _validateHistoryChain(this, raw, proofs);
     if (raw.length > _viewLimit) _viewFail('ATLAS_HISTORY_LIMIT');
-    final views = <Map<String, Object?>>[];
-    var previous = _zeroRoot, registry = _emptyRegistryRoot;
-    var epoch = _context['key_epoch']! as int, public = _public;
-    Map<String, Object?>? plan;
-    for (var i = 0; i < raw.length; i++) {
-      for (final proof in proofs) {
-        final candidate = _object(proof['plan']);
-        if (previous == candidate['state_root'] &&
-            epoch == candidate['previous_epoch']) {
-          plan = candidate;
-          epoch = candidate['new_epoch'] as int;
-          public = _bridgePublic(proof);
-        }
-      }
-      final v = await AtlasVaultAuthenticatedStateView._verify(raw[i], public);
-      if (['account_id', 'vault_id'].any((k) => v[k] != _context[k]) ||
-          v['key_epoch'] != epoch) {
-        _viewFail();
-      }
-      if (plan != null &&
-          epoch == plan['new_epoch'] &&
-          v['registry_root'] != plan['resulting_registry_root']) {
-        _viewFail();
-      }
-      if (v['sequence'] != i + 1 ||
-          v['previous_root'] != previous ||
-          v['previous_registry_root'] != registry) {
-        _viewFail();
-      }
-      views.add(v);
-      previous = v['root']! as String;
-      registry = v['registry_root']! as String;
+    if (raw.isEmpty ||
+        jsonEncode(_canonicalValue(raw.first)) !=
+            jsonEncode(_canonicalValue(_origin))) {
+      _viewFail();
     }
-    return views;
+    return _validateHistoryChain(
+      this,
+      raw.sublist(1),
+      proofs,
+      origin: _origin,
+    ).then((suffix) => [raw.first, ...suffix]);
   }
 
   List<Map<String, Object?>> _views(Object? value) =>
@@ -203,7 +233,7 @@ final class AtlasVaultGuardedSyncState {
         records = _object(s['records']),
         keys = records.keys.toList()..sort();
     return {
-      'sequence': views.length,
+      'sequence': _originOffset + views.length,
       'cursor': views.isEmpty ? _zeroRoot : views.last['root'],
       'records': [for (final k in keys) records[k]],
     };
@@ -285,8 +315,10 @@ final class AtlasVaultGuardedSyncState {
         peer.isNotEmpty &&
         peer.every(
           (v) =>
-              (v['sequence']! as int) <= local.length &&
-              v['root'] == local[(v['sequence']! as int) - 1]['root'],
+              (v['sequence']! as int) > _originOffset &&
+              (v['sequence']! as int) <= _originOffset + local.length &&
+              v['root'] ==
+                  local[(v['sequence']! as int) - _originOffset - 1]['root'],
         );
     c['disposition'] = disposition;
     c['rejected_branch'] = {
@@ -339,7 +371,7 @@ final class AtlasVaultGuardedSyncState {
               _viewFail('ATLAS_STATE_EQUIVOCATION');
             }
           }
-          return common;
+          return _originOffset + common;
         });
       } on AtlasVaultStateViewException catch (e) {
         return _alarm(s, e.code, signed);
@@ -383,7 +415,7 @@ final class AtlasVaultGuardedSyncState {
               v['key_epoch'] != epoch) {
             _viewFail();
           }
-          registryDigest = bridge == null
+          registryDigest = bridge == null && _origin == null
               ? AtlasVaultAuthenticatedStateView.registryRoot(registry)
               : AtlasVaultRevocation.registryRoot(registry);
           if (v['registry_root'] != registryDigest) {
@@ -407,14 +439,16 @@ final class AtlasVaultGuardedSyncState {
             _viewFail();
           }
           final n = v['sequence']! as int, views = _views(s['views']);
-          if (n <= views.length && v['root'] != views[n - 1]['root']) {
+          final base = _originOffset;
+          if (n <= base + views.length &&
+              (n <= base || v['root'] != views[n - base - 1]['root'])) {
             _viewFail('ATLAS_STATE_EQUIVOCATION');
           }
-          if (n < views.length) _viewFail('ATLAS_ROLLBACK_REJECTED');
-          if (n == views.length) return true;
-          if (n > _viewLimit) _viewFail('ATLAS_HISTORY_LIMIT');
+          if (n < base + views.length) _viewFail('ATLAS_ROLLBACK_REJECTED');
+          if (n == base + views.length) return true;
+          if (n - base > _viewLimit) _viewFail('ATLAS_HISTORY_LIMIT');
           final previous = views.isEmpty ? null : views.last;
-          if (n != views.length + 1 ||
+          if (n != base + views.length + 1 ||
               v['previous_root'] != (previous?['root'] ?? _zeroRoot) ||
               v['previous_registry_root'] !=
                   (previous?['registry_root'] ?? _emptyRegistryRoot) ||
