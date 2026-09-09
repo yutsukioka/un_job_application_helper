@@ -58,6 +58,20 @@ void main() {
           key: v[key],
       };
       expect(await history.bootstrap(args), isTrue);
+      final supplements = runtimeRows(
+        loadAtlasVaultVector(
+          'atlasvault_historical_authority_v1.json',
+        )['cases'],
+      );
+      final proof = runtimeObject(supplements[i]['proof']);
+      expect(
+        await history.installHistoricalAuthority(
+          proof,
+          collection: runtimeObject(v['collection']),
+          opaqueState: base64Decode(v['opaque_b64']! as String),
+        ),
+        isTrue,
+      );
       final origin = await history.publicationOrigin();
       final owner = AtlasVaultEpochVault(
         Directory('${root.path}/owner'),
@@ -86,6 +100,18 @@ void main() {
       } finally {
         opened.fillRange(0, opened.length, 0);
       }
+      expect(await owner.observation(), before);
+      final attacks = loadAtlasVaultVector(
+        'atlasvault_historical_authority_attacks_v1.json',
+      );
+      await expectLater(
+        owner.open(
+          AtlasVaultOpaqueCiphertextEnvelope.fromJson(
+            runtimeObject(attacks['uncovered_late_envelope']),
+          ),
+        ),
+        throwsA(isA<Exception>()),
+      );
       expect(await owner.observation(), before);
     });
   }

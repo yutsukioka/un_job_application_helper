@@ -841,6 +841,17 @@ final class AtlasVaultEpochVault {
       authorRegistry = _epochRows(s['registry']);
     } else if (envelope.keyEpoch == _context['key_epoch']) {
       authorRegistry = _registry;
+    } else if (_historyOrigin != null &&
+        envelope.keyEpoch < (_context['key_epoch']! as int)) {
+      await _active(s);
+      final h = _anchoredPublicationHistory(this);
+      await h._active(await h._load());
+      final row = _object(h._historicalRecords[envelope.objectId]);
+      if (row['key_epoch'] != envelope.keyEpoch ||
+          row['envelope_sha256'] != _sha256Hex(_canonicalJsonBytes(raw))) {
+        _authorityFail();
+      }
+      authorRegistry = [_object(row['author'])];
     } else {
       final records = _epochBridgeRecords(
         _object(_object(s['components'])['history']),

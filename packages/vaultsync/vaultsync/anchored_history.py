@@ -115,10 +115,13 @@ class AnchoredSyncState(GuardedSyncState):
         )
 
     def _verify(self, anchor):
-        if set(anchor) != {"checkpoint", "enrollment", "view"}:
+        if set(anchor) not in (
+            {"checkpoint", "enrollment", "view"},
+            {"checkpoint", "enrollment", "view", "historical_authority"},
+        ):
             reject()
         p = verify_anchor(
-            **anchor,
+            **{k: anchor[k] for k in ("checkpoint", "enrollment", "view")},
             registry=self._rotation_registry,
             current_context=self._pins["current_context"],
             recipient_device_id=self._pins["recipient_device_id"],
@@ -135,6 +138,47 @@ class AnchoredSyncState(GuardedSyncState):
             reject()
         self._origin = copy.deepcopy(anchor["view"])
         self._anchor = copy.deepcopy(anchor)
+        self._historical_records = {}
+        if "historical_authority" in anchor:
+            from .historical_authority import verify_authority
+
+            a = anchor["historical_authority"]
+            if set(a) != {"proof", "collection", "opaque_b64"}:
+                reject()
+            self._historical_records = verify_authority(
+                a["proof"],
+                anchor=anchor,
+                registry=self._rotation_registry,
+                pins=self._pins,
+                trusted_signer=self._public,
+                collection=a["collection"],
+                opaque_state=base64.b64decode(a["opaque_b64"], validate=True),
+            )
+
+    def install_historical_authority(self, proof, *, collection, opaque_state):
+        """One-time authenticated addition before an anchored owner is published."""
+        with self._lock, _boundary():
+            state = self._load()
+            self._active(state)
+            if not isinstance(self._store, _AnchorStore) or len(state["views"]) != 1:
+                reject()
+            value = {
+                "proof": copy.deepcopy(proof),
+                "collection": copy.deepcopy(collection),
+                "opaque_b64": base64.b64encode(opaque_state).decode(),
+            }
+            previous = self._anchor.get("historical_authority")
+            if previous is not None:
+                if previous != value:
+                    reject()
+                return False
+            anchor = dict(self._anchor, historical_authority=value)
+            self._verify(anchor)
+            # The authority evidence and existing accepted history become durable
+            # together through the same encrypted atomic file replacement.
+            self._store.anchor = anchor
+            self._store.write(state)
+            return True
 
     def _chain(self, raw, proof=None):
         if not isinstance(raw, list) or len(raw) > LIMIT:
@@ -160,7 +204,9 @@ class AnchoredSyncState(GuardedSyncState):
                 )
                 if self._store.path.exists():
                     self._active(self._load())
-                    if anchor != self._store.anchor:
+                    if anchor != {
+                        k: v for k, v in self._store.anchor.items() if k != "historical_authority"
+                    }:
                         reject()
                     return False
                 self._store.anchor = anchor

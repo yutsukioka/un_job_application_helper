@@ -88,6 +88,7 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
   }
   final Map<String, Object?> _trust;
   Map<String, Object?>? _publicationAnchor;
+  Map<String, Object?> _historicalRecords = {};
   Future<Map<String, Object?>> publicationOrigin() => _run(() async {
     await _active(await _load());
     return _anchorCopy({
@@ -121,7 +122,12 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
   Future<void> initialize() async => _bootstrapFail();
 
   Future<void> _verifyAnchor(Map<String, Object?> anchor) async {
-    _exact(anchor, {'checkpoint', 'enrollment', 'view'});
+    _exact(anchor, {
+      'checkpoint',
+      'enrollment',
+      'view',
+      if (anchor.containsKey('historical_authority')) 'historical_authority',
+    });
     final p = _object(anchor['checkpoint']), e = _object(anchor['enrollment']);
     _exact(p, {
       ...enrollment.AtlasVaultDeviceEnrollment.contextFields,
@@ -248,8 +254,75 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
       _bootstrapFail();
     }
     _origin = _anchorCopy(view);
+    _historicalRecords = {};
+    if (anchor.containsKey('historical_authority')) {
+      final h = _object(anchor['historical_authority']);
+      _exact(h, {'proof', 'collection', 'opaque_b64'});
+      _historicalRecords = await _verifyHistoricalAuthority(
+        _object(h['proof']),
+        anchor,
+        _public,
+        registry,
+        _trust,
+        _object(h['collection']),
+        _base64(h['opaque_b64']),
+      );
+    }
     _publicationAnchor = _anchorCopy(anchor);
   }
+
+  Future<bool> installHistoricalAuthority(
+    Map<String, Object?> proof, {
+    required Map<String, Object?> collection,
+    required Uint8List opaqueState,
+  }) => _installHistoricalAuthority(
+    proof,
+    collection: collection,
+    opaqueState: opaqueState,
+  );
+
+  Future<bool> installHistoricalAuthorityForTesting(
+    Map<String, Object?> proof, {
+    required Map<String, Object?> collection,
+    required Uint8List opaqueState,
+    required FutureOr<void> Function() beforeReplace,
+  }) => _installHistoricalAuthority(
+    proof,
+    collection: collection,
+    opaqueState: opaqueState,
+    beforeReplace: beforeReplace,
+  );
+
+  Future<bool> _installHistoricalAuthority(
+    Map<String, Object?> proof, {
+    required Map<String, Object?> collection,
+    required Uint8List opaqueState,
+    FutureOr<void> Function()? beforeReplace,
+  }) => _run(() async {
+    final state = await _load();
+    await _active(state);
+    if (_store is! _AnchoredFile || (state['views']! as List).length != 1) {
+      _bootstrapFail();
+    }
+    final store = _store as _AnchoredFile;
+    final added = _anchorCopy({
+      'proof': proof,
+      'collection': collection,
+      'opaque_b64': base64Encode(opaqueState),
+    });
+    final anchor = _anchorCopy(store.anchor!);
+    if (anchor.containsKey('historical_authority')) {
+      if (!_anchorEqual(anchor['historical_authority'], added)) {
+        _bootstrapFail();
+      }
+      return false;
+    }
+    anchor['historical_authority'] = added;
+    await _verifyAnchor(anchor);
+    store.anchor = anchor;
+    await store.write(state, beforeReplace: beforeReplace);
+    return true;
+  });
 
   Future<bool> bootstrap(Map<String, Object?> packet) async {
     try {
@@ -329,7 +402,12 @@ final class AtlasVaultAnchoredSyncState extends AtlasVaultGuardedSyncState {
         final store = _store as _AnchoredFile;
         if (await store.file.exists()) {
           await _active(await _load());
-          if (!_anchorEqual(store.anchor, anchor)) _bootstrapFail();
+          if (!_anchorEqual(
+            {...store.anchor!}..remove('historical_authority'),
+            anchor,
+          )) {
+            _bootstrapFail();
+          }
           return false;
         }
         store.anchor = _anchorCopy(anchor);

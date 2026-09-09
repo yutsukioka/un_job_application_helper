@@ -14,7 +14,7 @@ from vaultsync.enrollment_bootstrap import create_history_bootstrap
 from vaultsync.epoch_vault import EpochVault
 
 
-def historical_scenario(root, author_index=0):
+def historical_scenario(root, author_index=0, *, install_authority=False, changed_projection=False):
     root.mkdir(parents=True, exist_ok=True)
     seed_root = root / "seed"
     seed_root.mkdir()
@@ -28,12 +28,25 @@ def historical_scenario(root, author_index=0):
         revision="r1",
         signing_key=env[2][author_index],
     )
+    records = [ciphertext.to_dict()]
+    if changed_projection:
+        records.append(
+            clients[0]
+            .seal(
+                "patch",
+                b"synthetic-unrelated-old",
+                object_id="other-record",
+                revision="r1",
+                signing_key=env[2][0],
+            )
+            .to_dict()
+        )
     body = json.dumps(
         {
             "format": "atlasvault-guarded-collection",
             "version": 1,
             "route": "patch",
-            "records": [ciphertext.to_dict()],
+            "records": records,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -52,6 +65,17 @@ def historical_scenario(root, author_index=0):
     assert issuer.open(ciphertext) == plaintext
     admission = enrollment(issuer, env[2][0])
     issuer.accept_enrollment(admission, confirmed_transcript=admission["transcript_sha256"])
+    if changed_projection:
+        records[1] = issuer.seal(
+            "patch",
+            b"synthetic-unrelated-new",
+            object_id="other-record",
+            revision="r2",
+            signing_key=env[2][0],
+        ).to_dict()
+        value = json.loads(body)
+        value["records"] = records
+        body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     page = issuer.create_commitment(body, signing_key=env[2][0])
     checkpoint = create_history_bootstrap(
         issuer,
@@ -87,6 +111,23 @@ def historical_scenario(root, author_index=0):
         current_context=args["current_context"],
     )
     assert history.bootstrap(**args)
+    response = env[1].get(f"/v1/accounts/{checkpoint['account_id']}/devices", headers=env[3][0])
+    response.raise_for_status()
+    authority_inputs = {
+        "signed_descriptors": response.json()["devices"],
+        "prior_registry": env[4]["registry"],
+        "revocation": env[4]["revocation"],
+        "views": issuer._history(issuer._load()).export_evidence(),
+    }
+    if install_authority:
+        from vaultsync.historical_authority import build_authority
+
+        proof = build_authority(checkpoint, **authority_inputs)
+        assert history.install_historical_authority(
+            proof,
+            collection=page["collection"],
+            opaque_state=body,
+        )
     recipient = EpochVault(
         root / "recipient-runtime",
         storage_key=bytes([97]) * 32,
@@ -109,13 +150,18 @@ def historical_scenario(root, author_index=0):
         "ciphertext": ciphertext.to_dict(),
         "historical_author_device_id": env[2][author_index].device_id,
         "synthetic_test_only": True,
+        "authority_inputs": authority_inputs,
     }
     return issuer, recipient, ciphertext, plaintext, public
 
 
 @pytest.mark.parametrize("author_index", [0, 2], ids=["still-active-author", "now-revoked-author"])
 def test_current_view_retained_record_is_readable_after_anchored_bootstrap(tmp_path, author_index):
-    issuer, recipient, ciphertext, expected, _ = historical_scenario(tmp_path, author_index)
+    issuer, recipient, ciphertext, expected, _ = historical_scenario(
+        tmp_path,
+        author_index,
+        install_authority=True,
+    )
     before = recipient.observation()
     assert issuer.open(ciphertext) == expected
     assert recipient.open(ciphertext) == expected

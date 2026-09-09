@@ -13,6 +13,7 @@ public final class AtlasVaultAnchoredSyncState {
   private let core: AtlasVaultGuardedSyncState
   private let actual: EncryptedQueueFile
   private var anchor: [String: Any]?
+  private var historicalRecords = [String: Any]()
   private let publicKey: Data
 
   public func publicationOrigin() throws -> [String: Any] {
@@ -36,6 +37,12 @@ public final class AtlasVaultAnchoredSyncState {
   }
 
   static func publicationReader(_ owner: AtlasVaultEpochVault) throws -> AtlasVaultGuardedSyncState
+  {
+    try publicationWrapper(owner).core
+  }
+
+  private static func publicationWrapper(_ owner: AtlasVaultEpochVault) throws
+    -> AtlasVaultAnchoredSyncState
   {
     guard let o = owner.historyOrigin else { throw AtlasVaultBootstrapError.rejected }
     try R.exact(o, ["format", "version", "context", "pins", "registry", "anchor"])
@@ -66,7 +73,21 @@ public final class AtlasVaultAnchoredSyncState {
       fileURL: owner.file.fileURL, encryptionKey: owner.key, trust: trust)
     try reader.verifyAnchor(a)
     reader.core.store = try owner.componentFile("history")
-    return reader.core
+    return reader
+  }
+
+  static func retainedAuthor(
+    _ owner: AtlasVaultEpochVault, state: [String: Any],
+    envelope: AtlasVaultOpaqueCiphertextEnvelope
+  ) throws -> [[String: Any]] {
+    try owner.active(state)
+    let reader = try publicationWrapper(owner)
+    try reader.core.active(reader.core.load())
+    let row = try AtlasVaultDeviceDelivery.map(reader.historicalRecords[envelope.objectID])
+    guard try E.integer(row["key_epoch"]) == envelope.keyEpoch,
+      row["envelope_sha256"] as? String == R.digest(try R.canonical(envelope.jsonObject))
+    else { throw AtlasVaultHistoricalAuthorityError.rejected }
+    return [try AtlasVaultDeviceDelivery.map(row["author"])]
   }
 
   func publicationState() throws -> AtlasVaultGuardedSyncState {
@@ -111,8 +132,12 @@ public final class AtlasVaultAnchoredSyncState {
       })
   }
 
-  private func verifyAnchor(_ a: [String: Any]) throws {
-    try R.exact(a, ["checkpoint", "enrollment", "view"])
+  func verifyAnchor(_ a: [String: Any]) throws {
+    try R.exact(
+      a,
+      Set(
+        ["checkpoint", "enrollment", "view"]
+          + (a["historical_authority"] == nil ? [] : ["historical_authority"])))
     let p = try AtlasVaultDeviceDelivery.map(a["checkpoint"])
     let e = try AtlasVaultDeviceDelivery.map(a["enrollment"])
     try R.exact(
@@ -198,6 +223,56 @@ public final class AtlasVaultAnchoredSyncState {
     core.anchorBridgeContext = p.filter {
       ["registry_generation", "activation_id", "issuer_device_id"].contains($0.key)
     }
+    historicalRecords = [:]
+    if let raw = a["historical_authority"] {
+      let h = try AtlasVaultDeviceDelivery.map(raw)
+      try R.exact(h, ["proof", "collection", "opaque_b64"])
+      guard let encoded = h["opaque_b64"] as? String, encoded.count <= 1_398_104,
+        let bytes = Data(base64Encoded: encoded), bytes.base64EncodedString() == encoded
+      else { throw AtlasVaultHistoricalAuthorityError.rejected }
+      historicalRecords = try AtlasVaultHistoricalAuthority.verify(
+        AtlasVaultDeviceDelivery.map(h["proof"]), anchor: a, publicKey: publicKey,
+        trust: trust, collection: AtlasVaultDeviceDelivery.map(h["collection"]), bytes: bytes)
+    }
+  }
+
+  public func installHistoricalAuthority(
+    _ proof: [String: Any], collection: [String: Any], opaqueState: Data
+  ) throws -> Bool {
+    try installHistoricalAuthorityForTesting(
+      proof, collection: collection, opaqueState: opaqueState, beforeReplace: nil)
+  }
+
+  func installHistoricalAuthorityForTesting(
+    _ proof: [String: Any], collection: [String: Any], opaqueState: Data,
+    beforeReplace: (() throws -> Void)?
+  ) throws -> Bool {
+    let result: Result<Bool, AtlasVaultHistoricalAuthorityError> = try core.run {
+      do {
+        let state = try core.load()
+        try core.active(state)
+        guard let existing = anchor, let views = state["views"] as? [[String: Any]],
+          views.count == 1
+        else { throw AtlasVaultBootstrapError.rejected }
+        let added: [String: Any] = [
+          "proof": proof, "collection": collection, "opaque_b64": opaqueState.base64EncodedString(),
+        ]
+        if let installed = existing["historical_authority"] {
+          guard try R.canonical(AtlasVaultDeviceDelivery.map(installed)) == R.canonical(added)
+          else {
+            throw AtlasVaultBootstrapError.rejected
+          }
+          return .success(false)
+        }
+        var updated = existing
+        updated["historical_authority"] = added
+        try verifyAnchor(updated)
+        try actual.write(["anchor": updated, "state": state], beforeReplace: beforeReplace)
+        anchor = updated
+        return .success(true)
+      } catch let error as AtlasVaultHistoricalAuthorityError { return .failure(error) }
+    }
+    return try result.get()
   }
 
   public func bootstrap(_ packet: [String: Any]) throws -> Bool {
@@ -247,7 +322,9 @@ public final class AtlasVaultAnchoredSyncState {
         }
         if FileManager.default.fileExists(atPath: actual.fileURL.path) {
           try core.active(core.load())
-          guard let anchor, try R.canonical(anchor) == R.canonical(a) else {
+          guard let anchor,
+            try R.canonical(anchor.filter { $0.key != "historical_authority" }) == R.canonical(a)
+          else {
             throw AtlasVaultBootstrapError.rejected
           }
           return false

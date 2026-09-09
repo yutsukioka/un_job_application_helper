@@ -42,6 +42,17 @@ final class AtlasVaultBootstrapAuthorityTests: XCTestCase {
       fileURL: directory.appendingPathComponent("history"),
       encryptionKey: Data(repeating: 96, count: 32), trust: trust)
     XCTAssertTrue(try history.bootstrap(args))
+    let supplements =
+      try JSONSerialization.jsonObject(
+        with: Data(
+          contentsOf: repo.appendingPathComponent(
+            "contracts/sync/test_vectors/atlasvault_historical_authority_v1.json")))
+      as! [String: Any]
+    let proof = (supplements["cases"] as! [[String: Any]])[index]["proof"] as! [String: Any]
+    XCTAssertTrue(
+      try history.installHistoricalAuthority(
+        proof, collection: v["collection"] as! [String: Any],
+        opaqueState: Data(base64Encoded: v["opaque_b64"] as! String)!))
     let owner = try AtlasVaultEpochVault(
       directory: directory.appendingPathComponent("owner"),
       storageKey: Data(repeating: 97, count: 32),
@@ -67,6 +78,17 @@ final class AtlasVaultBootstrapAuthorityTests: XCTestCase {
     }
     defer { opened.resetBytes(in: 0..<opened.count) }
     XCTAssertTrue(opened == Data("c30-synthetic-current-view".utf8))
+    XCTAssertTrue(NSDictionary(dictionary: try owner.observation()).isEqual(to: before))
+    let attacks =
+      try JSONSerialization.jsonObject(
+        with: Data(
+          contentsOf: repo.appendingPathComponent(
+            "contracts/sync/test_vectors/atlasvault_historical_authority_attacks_v1.json")))
+      as! [String: Any]
+    XCTAssertThrowsError(
+      try owner.open(
+        AtlasVaultOpaqueCiphertextEnvelope(
+          jsonObject: attacks["uncovered_late_envelope"] as! [String: Any])))
     XCTAssertTrue(NSDictionary(dictionary: try owner.observation()).isEqual(to: before))
   }
 }

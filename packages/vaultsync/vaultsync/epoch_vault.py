@@ -757,6 +757,12 @@ class EpochVault:
                 author_registry = s["registry"]
             elif envelope.key_epoch == self._context["key_epoch"]:
                 author_registry = self._registry
+            elif (
+                self._history_origin is not None and envelope.key_epoch < self._context["key_epoch"]
+            ):
+                from .historical_authority import retained_author
+
+                author_registry = retained_author(self, s, envelope)
             else:
                 records, _ = self._bridges(s)
                 author_registry = next(

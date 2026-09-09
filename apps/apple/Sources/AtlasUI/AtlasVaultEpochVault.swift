@@ -650,6 +650,9 @@ public final class AtlasVaultEpochVault {
         authorRegistry = try rows(s["registry"])
       } else if envelope.keyEpoch == (try viewInteger(context["key_epoch"])) {
         authorRegistry = registry
+      } else if try historyOrigin != nil && envelope.keyEpoch < viewInteger(context["key_epoch"]) {
+        authorRegistry = try AtlasVaultAnchoredSyncState.retainedAuthor(
+          self, state: s, envelope: envelope)
       } else {
         let records = try EpochCatchUp.records(map(map(s["components"])["history"]))
         _ = try EpochCatchUp.verify(records, registry: registry, context: bridgeContext())
