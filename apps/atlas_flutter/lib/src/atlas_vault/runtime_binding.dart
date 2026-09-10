@@ -48,6 +48,24 @@ final class AtlasVaultRuntimeBinding {
       } finally {
         secret.destroy();
       }
+      if (await File('${directory(vaultID).path}/runtime-binding').exists()) {
+        final current = await open(vaultID);
+        try {
+          if (!_sameRuntimeKey(current._seed, seed)) {
+            _epochFail('ATLAS_RUNTIME_BINDING_REJECTED');
+          }
+          await current.owner.verifyEnrollmentReceipt(
+            packet,
+            pins: pins,
+            trustedSigner: trustedSigner,
+            recipient: recipient,
+          );
+          await beforePublish?.call();
+          return;
+        } finally {
+          current.close();
+        }
+      }
       final owner = await AtlasVaultEnrollmentDelivery.installRuntime(
         directory(vaultID),
         packet,

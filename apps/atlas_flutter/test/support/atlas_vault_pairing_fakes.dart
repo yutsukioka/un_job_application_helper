@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'atlas_vault_vector_loader.dart';
+import 'atlas_vault_runtime_fixtures.dart';
 
 typedef AtlasVaultPairingMethodHandler =
     Future<Object?> Function(MethodCall call);
@@ -457,15 +459,10 @@ runAtlasVaultPairingPlatformJourney({
   required AtlasVaultPairingRole platformRole,
   required AtlasVaultPairingPlatformStores platformStores,
 }) async {
-  final bootstrap = AtlasVaultPairingBootstrap.fromJson(
-    atlasVaultObject(vector['bootstrap']),
-  );
-  final vaultId = bootstrap.vaultMetadata.vaultId;
-  final rawVaultKey = Uint8List.fromList(
-    base64Decode(vector['test_only_vault_key_b64']! as String),
-  );
-  final nativeSecret = await atlasVaultPairingIdentitySecret(vector, 'inviter');
-  final peerSecret = await atlasVaultPairingIdentitySecret(vector, 'invitee');
+  const vaultId = RuntimeFixture.vaultID;
+  final nativeIsInviter = platformRole == AtlasVaultPairingRole.inviter;
+  final nativeSecret = await _secureJourneyIdentity(nativeIsInviter);
+  final peerSecret = await _secureJourneyIdentity(!nativeIsInviter);
   final nativeIdentity = await AtlasVaultDeviceIdentitySecret.fromJson(
     atlasVaultObject(jsonDecode(utf8.decode(nativeSecret))),
   ).loadIdentity();
@@ -478,7 +475,45 @@ runAtlasVaultPairingPlatformJourney({
           existingRegistry.devices.isNotEmpty)) {
     throw StateError('native pairing registry is not clean');
   }
-  final existingReplay = await platformStores.replay.read();
+  var existingReplay = await platformStores.replay.read();
+  // A completed previous role leaves an empty test replay ledger. Only the
+  // other fixed synthetic role may be rebound; unrelated/native state is refused.
+  if (existingReplay != null &&
+      existingReplay.entries.isEmpty &&
+      existingReplay.localDeviceId != nativeDeviceId &&
+      !await platformStores.identity.containsPrimaryIdentity()) {
+    final previous = AtlasVaultDeviceIdentitySecret.fromJson(
+      atlasVaultObject(jsonDecode(utf8.decode(peerSecret))),
+    );
+    try {
+      final previousIdentity = await previous.loadIdentity();
+      try {
+        if (existingReplay.localDeviceId == previousIdentity.deviceId) {
+          final updated = AtlasVaultPairingReplayStore.fromJson({
+            ...existingReplay.toJson(),
+            'local_device_id': nativeDeviceId,
+            'parent_revision': existingReplay.revision,
+            'revision': _nextCleanupRevision(
+              existingReplay.revision,
+              existingReplay.parentRevision,
+              replay: true,
+            ),
+          });
+          await platformStores.replay.replace(
+            updated,
+            expectedSha256: await atlasVaultSha256Hex(
+              existingReplay.canonicalBytes(),
+            ),
+          );
+          existingReplay = await platformStores.replay.read();
+        }
+      } finally {
+        previousIdentity.destroy();
+      }
+    } finally {
+      previous.destroy();
+    }
+  }
   if (existingReplay != null &&
       (existingReplay.localDeviceId != nativeDeviceId ||
           existingReplay.entries.isNotEmpty)) {
@@ -527,38 +562,62 @@ runAtlasVaultPairingPlatformJourney({
     events: peerEvents,
   );
 
+  final root = await Directory.systemTemp.createTemp('c30-platform-journey-');
+  final nativeSlots = <String>{};
+  final nativeBinding = AtlasVaultRuntimeBinding(
+    root: Directory('${root.path}/native'),
+    loadKey: platformStores.secureKey.loadVaultKey,
+    createKey: (id, key) async {
+      await platformStores.secureKey.createVaultKey(id, key);
+      nativeSlots.add(id);
+    },
+  );
+  final peerBinding = AtlasVaultRuntimeBinding(
+    root: Directory('${root.path}/peer'),
+    loadKey: peerKeys.loadVaultKey,
+    createKey: peerKeys.createVaultKey,
+  );
+
   final platformRuntime = AtlasVaultPrivateStateRuntime(
     secureKeyStore: platformStores.secureKey,
     localStoreIO: platformStores.localStore,
+    epochSessionFactory: nativeBinding.open,
+    epochEnrollmentInstaller: nativeBinding.installEnrollment,
   );
   final peerRuntime = AtlasVaultPrivateStateRuntime(
     secureKeyStore: peerKeys,
     localStoreIO: peerLocal,
+    epochSessionFactory: peerBinding.open,
+    epochEnrollmentInstaller: peerBinding.installEnrollment,
   );
-  final localStore = AtlasVaultLocalStore.fromJson(<String, Object?>{
-    'format': AtlasVaultLocalStore.format,
-    'version': AtlasVaultLocalStore.version,
-    'store_id': '63000000-0000-4000-8000-000000000001',
-    'created_at': '2026-08-15T10:00:00Z',
-    'updated_at': '2026-08-15T10:00:00Z',
-    'vault_metadata': bootstrap.vaultMetadata.toJson(),
-    'records': <Object?>[
-      for (final record in bootstrap.records) record.toJson(),
-    ],
-  });
-
-  final nativeIsInviter = platformRole == AtlasVaultPairingRole.inviter;
+  final inviterBinding = nativeIsInviter ? nativeBinding : peerBinding;
+  final fixture = RuntimeFixture();
+  final owner = await fixture.initialize(inviterBinding.directory(vaultId));
+  final payload = runtimePayloads().values.first;
+  await owner.commitRuntimeRecord(
+    payload: payload,
+    objectID: 'platform-live',
+    signingKey: await fixture.signer(),
+  );
+  final deleted = await owner.commitRuntimeRecord(
+    payload: payload,
+    objectID: 'platform-deleted',
+    signingKey: await fixture.signer(),
+  );
+  await owner.commitRuntimeRecord(
+    payload: null,
+    objectID: 'platform-deleted',
+    expectedRevision: deleted.envelope.revision,
+    signingKey: await fixture.signer(),
+  );
+  await inviterBinding.provision(owner: owner, signingSeed: runtimeTestKey(10));
   if (nativeIsInviter) {
-    await platformStores.localStore.create(vaultId, localStore);
-    await platformStores.secureKey.createVaultKey(vaultId, rawVaultKey);
     await platformStores.selectedVault.create(vaultId);
     expect(
       await platformRuntime.activateExisting(vaultId),
       AtlasVaultActivationResult.activated,
     );
   } else {
-    peerLocal.values[vaultId] = localStore;
-    peerKeys.values[vaultId] = Uint8List.fromList(rawVaultKey);
     peerSelected.value = vaultId;
     expect(
       await peerRuntime.activateExisting(vaultId),
@@ -686,19 +745,29 @@ runAtlasVaultPairingPlatformJourney({
 
     final nativeRegistry = await platformStores.registry.read();
     final nativeReplay = await platformStores.replay.read();
-    expect(nativeRegistry?.devices, hasLength(1));
+    expect(nativeRegistry, isNull);
     expect(nativeReplay?.entries, hasLength(1));
     expect(await platformStores.transaction.read(), isNull);
     for (final kind in AtlasVaultPairingArtifactKind.values) {
       expect(await platformStores.staging.read(kind), isNull);
     }
     expect(await platformStores.selectedVault.read(), vaultId);
-    final nativeStore = await platformStores.localStore.read(vaultId);
-    expect(nativeStore?.records, hasLength(bootstrap.records.length));
+    expect(await platformStores.localStore.read(vaultId), isNull);
+    final reopened = await nativeBinding.open(vaultId);
+    final nativeRecords = await reopened.read();
+    expect(nativeRecords, hasLength(2));
     expect(
-      nativeStore?.records.where((record) => record.deleted),
+      nativeRecords.where((record) => record.payload == null),
       hasLength(1),
     );
+    final registry = await reopened.owner.enrollmentRegistry();
+    expect(
+      registry.where(
+        (row) => row['device_id'] == nativeDeviceId && row['state'] == 'ACTIVE',
+      ),
+      hasLength(1),
+    );
+    reopened.close();
     final duplicate = consumeAtlasVaultPairingReplay(
       nativeReplay!,
       nativeReplay.entries.single,
@@ -727,9 +796,9 @@ runAtlasVaultPairingPlatformJourney({
       vaultId: vaultId,
       sas: inviterCodes.sas!,
       artifacts: artifacts,
-      installedRecordCount: nativeStore!.records.length,
-      tombstoneCount: nativeStore.records
-          .where((record) => record.deleted)
+      installedRecordCount: nativeRecords.length,
+      tombstoneCount: nativeRecords
+          .where((record) => record.payload == null)
           .length,
     );
     await _cleanNativePairingJourney(
@@ -744,9 +813,33 @@ runAtlasVaultPairingPlatformJourney({
     await invitee.stop();
     await platformRuntime.deactivate();
     await peerRuntime.deactivate();
-    rawVaultKey.fillRange(0, rawVaultKey.length, 0);
+    for (final id in nativeSlots) {
+      await platformStores.secureKey.deleteVaultKey(id);
+      expect(await platformStores.secureKey.containsVaultKey(id), isFalse);
+    }
+    await platformStores.identity.deletePrimaryIdentity();
+    for (final key in peerKeys.values.values) {
+      key.fillRange(0, key.length, 0);
+    }
+    await root.delete(recursive: true);
     nativeSecret.fillRange(0, nativeSecret.length, 0);
     peerSecret.fillRange(0, peerSecret.length, 0);
+  }
+}
+
+Future<Uint8List> _secureJourneyIdentity(bool inviter) async {
+  final identity = await AtlasVaultDeviceIdentity.fromPrivateKeys(
+    signingPrivateSeed: runtimeTestKey(inviter ? 10 : 90),
+    agreementPrivateKey: runtimeTestKey(inviter ? 20 : 100),
+    createdAt: '2026-08-15T10:00:00Z',
+    keyEpoch: 1,
+  );
+  final secret = identity.secretBundle();
+  try {
+    return secret.canonicalBytes();
+  } finally {
+    secret.destroy();
+    identity.destroy();
   }
 }
 
@@ -835,8 +928,12 @@ Future<void> _cleanNativePairingJourney({
   expect(await stores.secureKey.containsVaultKey(vaultId), isFalse);
   expect(await stores.localStore.read(vaultId), isNull);
   expect(await stores.identity.containsPrimaryIdentity(), isFalse);
-  expect((await stores.registry.read())?.localDeviceId, localDeviceId);
-  expect((await stores.registry.read())?.devices, isEmpty);
+  if (registry != null) {
+    expect((await stores.registry.read())?.localDeviceId, localDeviceId);
+    expect((await stores.registry.read())?.devices, isEmpty);
+  } else {
+    expect(await stores.registry.read(), isNull);
+  }
   expect((await stores.replay.read())?.localDeviceId, localDeviceId);
   expect((await stores.replay.read())?.entries, isEmpty);
 }

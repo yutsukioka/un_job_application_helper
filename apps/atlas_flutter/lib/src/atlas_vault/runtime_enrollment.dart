@@ -331,4 +331,59 @@ extension AtlasVaultRuntimeEnrollment on AtlasVaultEpochVault {
       _bootstrapFail();
     }
   });
+
+  /// Read-only retry after native publication. Never reinstall the old projection
+  /// over authenticated edits made after activation.
+  Future<void> verifyEnrollmentReceipt(
+    Map<String, Object?> packet, {
+    required Map<String, Object?> pins,
+    required Uint8List trustedSigner,
+    required identity.AtlasVaultDeviceIdentity recipient,
+  }) => _run(() async {
+    if (_canonicalJsonBytes(packet).length > 2 * 1024 * 1024) _bootstrapFail();
+    final s = await _load();
+    await _active(s);
+    final origin = _historyOrigin;
+    final expectedAnchor = {
+      ..._object(packet['anchor']),
+      if (packet['historical_authority'] != null)
+        'historical_authority': {
+          'proof': packet['historical_authority'],
+          'collection': packet['collection'],
+          'opaque_b64': packet['opaque_b64'],
+        },
+    };
+    if (origin == null ||
+        !_anchorEqual(origin['pins'], pins) ||
+        !_anchorEqual(origin['anchor'], expectedAnchor) ||
+        _object(origin['context'])['signing_public_b64'] !=
+            base64Encode(trustedSigner) ||
+        _context['device_id'] != recipient.deviceId ||
+        _object(
+              _object(origin['anchor'])['checkpoint'],
+            )['recipient_agreement_sha256'] !=
+            _sha256Hex(recipient.agreementPublicKey) ||
+        packet['root'] != AtlasVaultEnrollmentDelivery._root(packet) ||
+        !await Ed25519().verify(
+          AtlasVaultEnrollmentDelivery._message(packet['root']! as String),
+          signature: Signature(
+            _base64(packet['signature_b64'], exactLength: 64),
+            publicKey: SimplePublicKey(
+              trustedSigner,
+              type: KeyPairType.ed25519,
+            ),
+          ),
+        )) {
+      _bootstrapFail();
+    }
+    final receipt = await _EncryptedQueueFile(
+      File('${_file.file.parent.path}/enrollment-receipt'),
+      _key,
+      kind: 'enrollment-receipt-v1',
+    ).read({});
+    if (!_anchorEqual(receipt, {'root': packet['root']})) _bootstrapFail();
+    // Loading and reading validate the current anchored history and terminal
+    // tombstones; neither the accepted root nor the runtime is replaced.
+    await _records(s);
+  });
 }

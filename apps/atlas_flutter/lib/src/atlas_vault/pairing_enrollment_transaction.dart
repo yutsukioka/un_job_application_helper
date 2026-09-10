@@ -69,6 +69,21 @@ extension _EpochPairingTransaction on AtlasVaultTrustedPairingCoordinator {
         transaction.transcriptSha256 != _hexBytes(transcript)) {
       throw const AtlasVaultPairingTransactionException();
     }
+    if (_stageAtLeast(transaction, AtlasVaultPairingStage.selectionCommitted)) {
+      if (!transaction.selectionCommitted ||
+          transaction.deliverySha256 !=
+              await atlasVaultSha256Hex(artifact.canonicalBytes())) {
+        throw const AtlasVaultPairingTransactionException();
+      }
+      // Protected, post-install intent pins the already SAS-verified artifact.
+      // Signature and recipient/transcript checks still run on every retry.
+      return sync.AtlasVaultEnrollmentDelivery.ceremonyPins(
+        _epochPacket(artifact),
+        recipient: identity,
+        peer: offer.offer.inviter.descriptor,
+        transcript: _hexBytes(transcript),
+      );
+    }
     final key = await _sessionKeyFor(transaction, identity);
     final supplied = _proof(artifact, 'inviter_proof');
     try {
@@ -103,7 +118,13 @@ extension _EpochPairingTransaction on AtlasVaultTrustedPairingCoordinator {
     if (!_runtime.usesEpochComposition) {
       throw const AtlasVaultPairingTransactionException();
     }
-    await _requireLivePairingDeadlineFor(transaction);
+    final hash = await atlasVaultSha256Hex(artifact.canonicalBytes());
+    if (transaction.deliverySha256 == null) {
+      await _requireLivePairingDeadlineFor(transaction);
+    } else if (transaction.deliverySha256 != hash ||
+        transaction.bootstrapSha256 == null) {
+      throw const AtlasVaultPairingTransactionException();
+    }
     final blocked = _cleanInstallResult(await _cleanInstallProbe());
     if (blocked != null) return blocked;
     final identity = await _requireIdentity();
@@ -153,18 +174,23 @@ extension _EpochPairingTransaction on AtlasVaultTrustedPairingCoordinator {
         AtlasVaultPairingStage.runtimeActivated,
       )) {
         if (_runtime.isActive) {
-          // An interrupted activation can only resume the same verified native binding.
-          await _runtime.deactivate();
+          await _runtime.verifyPairingEnrollment(
+            packet,
+            pins: pins,
+            trustedSigner: offer.offer.inviter.descriptor.signingPublicKey,
+            recipient: identity,
+          );
+        } else {
+          await _runtime.installPairingEnrollment(
+            packet,
+            pins: pins,
+            trustedSigner: offer.offer.inviter.descriptor.signingPublicKey,
+            recipient: identity,
+            beforePublish: () async {
+              _authorizeSensitiveMutation();
+            },
+          );
         }
-        await _runtime.installPairingEnrollment(
-          packet,
-          pins: pins,
-          trustedSigner: offer.offer.inviter.descriptor.signingPublicKey,
-          recipient: identity,
-          beforePublish: () async {
-            _authorizeSensitiveMutation();
-          },
-        );
         for (final stage in [
           AtlasVaultPairingStage.storeCreated,
           AtlasVaultPairingStage.keyCreated,
@@ -192,11 +218,12 @@ extension _EpochPairingTransaction on AtlasVaultTrustedPairingCoordinator {
           transaction = await _advance(
             transaction,
             AtlasVaultPairingStage.selectionCommitted,
-            {'selection_committed': true},
+            {'selection_committed': true, 'ephemeral_private_key': null},
           );
         }
         _authorizeSensitiveMutation();
-        if (!await _activateInstalledVault(transaction.vaultId!)) {
+        if (!_runtime.isActiveVault(transaction.vaultId!) &&
+            !await _activateInstalledVault(transaction.vaultId!)) {
           throw const AtlasVaultPairingTransactionException();
         }
         transaction = await _advance(

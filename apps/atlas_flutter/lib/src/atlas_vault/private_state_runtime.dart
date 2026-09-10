@@ -433,6 +433,40 @@ final class AtlasVaultPrivateStateRuntime
 
   bool get usesEpochComposition => _epochSessionFactory != null;
 
+  Future<void> verifyPairingEnrollment(
+    Map<String, Object?> packet, {
+    required Map<String, Object?> pins,
+    required Uint8List trustedSigner,
+    required vault.AtlasVaultDeviceIdentity recipient,
+  }) async {
+    final session = _epochSession, generation = _generation;
+    if (!isActive ||
+        session == null ||
+        _pendingMutationCount != 0 ||
+        _interoperabilityOperation != null) {
+      throw const AtlasVaultPrivateStateException();
+    }
+    final pending = session.owner.verifyEnrollmentReceipt(
+      packet,
+      pins: pins,
+      trustedSigner: trustedSigner,
+      recipient: recipient,
+    );
+    _interoperabilityOperation = pending;
+    try {
+      await pending;
+      if (!isActive ||
+          generation != _generation ||
+          !identical(session, _epochSession)) {
+        throw const AtlasVaultPrivateStateException();
+      }
+    } finally {
+      if (identical(_interoperabilityOperation, pending)) {
+        _interoperabilityOperation = null;
+      }
+    }
+  }
+
   Future<void> installPairingEnrollment(
     Map<String, Object?> packet, {
     required Map<String, Object?> pins,
