@@ -4,6 +4,10 @@ import base64
 import copy
 import hashlib
 import json
+import multiprocessing
+import os
+import signal
+import time
 from pathlib import Path
 
 import pytest
@@ -96,11 +100,10 @@ def test_production_install_publishes_nonempty_replica_and_terminal_tombstone(tm
         assert not owner.pending_operations()
 
 
-def test_authenticated_empty_projection_is_not_a_fallback(tmp_path, monkeypatch):
+@pytest.fixture
+def authenticated_empty_delivery(tmp_path, monkeypatch):
     import test_runtime_enrollment
     from test_enrollment_bootstrap import scenario
-
-    from vaultsync.enrollment_runtime import runtime_projection
 
     target = identity(80)
     vector = copy.deepcopy(test_runtime_enrollment.VECTOR)
@@ -127,18 +130,71 @@ def test_authenticated_empty_projection_is_not_a_fallback(tmp_path, monkeypatch)
     )
     pins = {k: args[k] for k in ("current_context", "recipient_device_id", "confirmed_transcript")}
     pins["anchor_root"] = args["checkpoint"]["root"]
-    owner = delivery.install_enrollment_delivery(
-        tmp_path / "empty-recipient",
+    return (
         packet,
-        pins=pins,
-        trusted_signer=env[2][0].signing_public_key,
-        recipient_identity=target,
-        storage_key=bytes([111]) * 32,
-        require_runtime_projection=True,
+        {
+            "pins": pins,
+            "trusted_signer": env[2][0].signing_public_key,
+            "recipient_identity": target,
+            "storage_key": bytes([111]) * 32,
+            "require_runtime_projection": True,
+        },
+        args["checkpoint"]["state_root"],
     )
-    assert runtime_projection(owner) == ()
-    assert not owner.pending_operations()
-    assert owner.observation()["state_root"] == args["checkpoint"]["state_root"]
+
+
+def test_authenticated_empty_projection_is_not_a_fallback(tmp_path, authenticated_empty_delivery):
+    from vaultsync.enrollment_runtime import runtime_projection
+
+    packet, options, state_root = authenticated_empty_delivery
+    destination = tmp_path / "empty-recipient"
+    first_observation = None
+    for _ in range(2):
+        owner = delivery.install_enrollment_delivery(destination, packet, **options)
+        assert runtime_projection(owner) == ()
+        assert not owner.pending_operations()
+        assert owner.observation()["state_root"] == state_root
+        if first_observation is None:
+            first_observation = owner.observation()
+        else:
+            assert owner.observation() == first_observation
+
+
+@pytest.mark.parametrize("point", ["before", "after"])
+def test_authenticated_empty_install_survives_sigkill(
+    tmp_path, authenticated_empty_delivery, point
+):
+    from test_enrollment_delivery import _install_process
+
+    from vaultsync.enrollment_runtime import runtime_projection
+
+    packet, options, state_root = authenticated_empty_delivery
+    destination = tmp_path / "empty-recipient"
+    child = multiprocessing.get_context("spawn").Process(
+        target=_install_process,
+        args=(str(destination), packet, options["pins"], options["trusted_signer"], point, True),
+    )
+    child.start()
+    try:
+        marker = tmp_path / "install-marker"
+        deadline = time.monotonic() + 15
+        while not marker.exists() and child.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert marker.exists()
+        assert (destination / "activation").exists() == (point == "after")
+        os.kill(child.pid, signal.SIGKILL)
+        child.join(5)
+        assert child.exitcode == -signal.SIGKILL
+    finally:
+        if child.is_alive():
+            child.kill()
+            child.join(5)
+    for _ in range(2):
+        owner = delivery.install_enrollment_delivery(destination, packet, **options)
+        assert owner.observation()["status"] == "ACTIVE"
+        assert owner.observation()["state_root"] == state_root
+        assert runtime_projection(owner) == ()
+        assert not owner.pending_operations()
 
 
 def test_nonempty_anchor_cannot_be_replaced_by_empty_projection(tmp_path):

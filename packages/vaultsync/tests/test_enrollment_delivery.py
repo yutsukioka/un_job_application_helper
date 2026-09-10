@@ -227,7 +227,7 @@ def test_concurrent_delivery_retry_and_conflict(tmp_path):
     assert retried[0] == retried[1] == results[index]
 
 
-def _install_process(path, packet, pins, public, point):
+def _install_process(path, packet, pins, public, point, require_runtime_projection=False):
     from vaultsync.epoch_vault import EpochVault
 
     original = EpochVault.initialize
@@ -253,6 +253,7 @@ def _install_process(path, packet, pins, public, point):
         trusted_signer=public,
         recipient_identity=identity(80),
         storage_key=bytes([111]) * 32,
+        require_runtime_projection=require_runtime_projection,
     )
 
 

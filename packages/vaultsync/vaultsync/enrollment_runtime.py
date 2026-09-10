@@ -51,6 +51,9 @@ def stage_runtime_projection(owner, initial, opaque):
         records = json.loads(opaque)["records"]
         if len(records) > 256:
             _reject()
+        if records == []:
+            # Materialize only the authenticated empty view in the staging map.
+            replica._write((), (), ())
         for raw in records:
             envelope = OpaqueCiphertextEnvelope.from_dict(raw)
             body = json.loads(owner.open(envelope))
