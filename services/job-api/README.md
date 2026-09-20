@@ -11,6 +11,12 @@ python -m pip install -e services/job-api
 job-api
 ```
 
+With uv, run the service project directly:
+
+```bash
+uv run --directory services/job-api job-api
+```
+
 Defaults:
 
 - Database: `private/jobagg/output/all_jobs.sqlite3`

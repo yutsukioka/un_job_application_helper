@@ -1,0 +1,8 @@
+{
+  "capture_metadata_path": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/fao_taleo/full-001/http/00090.json",
+  "capture_metadata_sha256": "b37bdec9d7e17e01954259df23a83acfd96105e256376f26310dc6ba31fcff59",
+  "body_sha256": "c27ad6f00a07352aec13b8d6f10a3bdc4859ffa3f4c96a21b52af05cc823b369",
+  "original_url": "https://jobs.fao.org/careersection/fao_external/jobdetail.ftl?job=2601865&tz=GMT%2B02%3A00&tzname=Europe%2FRome",
+  "original_started_at": "2026-09-13T10:57:26.299515+00:00",
+  "original_finished_at": "2026-09-13T10:57:29.810378+00:00"
+}

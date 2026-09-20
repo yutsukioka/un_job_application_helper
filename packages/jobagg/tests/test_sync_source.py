@@ -1,4 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.db import JobDatabase
@@ -999,7 +1001,7 @@ def test_complete_unchanged_details_are_skipped_from_backlog(tmp_path):
         source,
         db=db,
         policy=_policy(),
-        refresh_all_details=True,
+        refresh_all_details=False,
     )
 
     assert first.fetched == 1
@@ -1063,6 +1065,8 @@ def test_listing_payload_can_satisfy_detail_without_detail_fetch(tmp_path):
     diagnostics = list(db.iter_source_run_diagnostics(source.id))
     assert diagnostics[0]["detail_attempted"] == 0
     assert diagnostics[0]["detail_failed"] == 0
+    assert diagnostics[0]["run_classification"] == "ok"
+    assert diagnostics[0]["publishability_classification"] == "ok"
     backlog = db.get_detail_backlog("listing_payload_complete:A1")
     assert backlog is not None
     assert backlog["detail_status"] == "complete"
@@ -1072,6 +1076,53 @@ def test_listing_payload_can_satisfy_detail_without_detail_fetch(tmp_path):
     assert breaker["last_reason"] == "listing payload satisfies detail"
     stored = db.get_job("listing_payload_complete:A1")
     assert stored["description"].startswith("Complete listing detail text")
+
+
+def test_listing_payload_clears_stale_permanent_failed_backlog(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "listing_payload_complete",
+        "listing_payload_complete_test",
+        listing_payload_is_detail_complete=True,
+    )
+    existing = build_job(
+        source,
+        title="Listing Complete Role",
+        external_id="A1",
+        closes_at="2099-12-31",
+        description=(
+            "Complete listing detail text includes responsibilities, qualifications, "
+            "selection criteria, organizational context, reporting lines, and "
+            "application information for this vacancy."
+        ),
+        apply_url="https://example.org/jobs/A1",
+        raw={"id": "A1", "externalDescription": "complete listing payload"},
+    )
+    db.upsert_job(existing)
+    db.record_detail_backlog_attempt(
+        job_key=existing.identity_key(),
+        source_id=source.id,
+        status="permanent_failed",
+        listing_hash=existing.normalized_hash or "listing-hash",
+        error="old separate detail endpoint failure",
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+    )
+
+    assert result.errors == []
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 0
+    assert diagnostics[0]["detail_failed"] == 0
+    assert diagnostics[0]["publishability_classification"] == "ok"
+    backlog = db.get_detail_backlog("listing_payload_complete:A1")
+    assert backlog is not None
+    assert backlog["detail_status"] == "complete"
+    assert backlog["last_error"] is None
 
 
 def test_configured_excluded_external_id_closes_existing_row_immediately(tmp_path):
@@ -1301,13 +1352,24 @@ def test_source_http_retry_and_timeout_overrides_reach_adapter(tmp_path):
     sync_source(source, db=db, policy=_policy(request_timeout_seconds=15))
 
     stored = db.get_job("http_config_source:HTTP")
-    assert stored["raw"] == {
+    observed_raw = dict(stored["raw"])
+    frame = observed_raw.pop("_jobagg_listing_verification")
+    assert frame["observed_in_latest_listing"] is True
+    assert frame["source_id"] == source.id
+    assert observed_raw == {
         "timeout_seconds": 60,
         "max_retries": 4,
         "backoff_base_seconds": 2,
         "tls_verify": False,
         "default_headers": {"Cookie": "aws-waf-token=abc; session=def"},
     }
+
+
+def test_source_http_verifies_tls_when_setting_absent_or_null():
+    from jobagg.pipelines.sync_source import _http_client_for_source
+    for extra in ({}, {"tls_verify": None}, {"tls_verify": True}):
+        client = _http_client_for_source(_source("tls_defaults", "http_config_test", **extra), _policy())
+        assert client.tls_verify is True
 
 
 def _source(source_id, family, **extra):
@@ -1324,3 +1386,36 @@ def _policy(**overrides):
     values = {"honor_robots_txt": False, "min_delay_seconds": 0}
     values.update(overrides)
     return RobotsPolicy(**values)
+
+
+@pytest.mark.parametrize("cached_status", ["complete", "permanent_failed", "skipped"])
+@pytest.mark.parametrize("cooldown_active", [False, True])
+def test_explicit_refresh_retries_cached_status_without_bypassing_cooldown(tmp_path, cached_status, cooldown_active):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("selective_detail_counting", "selective_detail_counting_test")
+    SelectiveDetailCountingTestAdapter.calls = []
+    sync_source_with_selective_details(source, db=db, policy=_policy())
+    backlog = db.get_detail_backlog("selective_detail_counting:A1")
+    cooldown = datetime.now(tz=UTC) + timedelta(hours=1) if cooldown_active else None
+    db.record_detail_backlog_attempt(
+        job_key="selective_detail_counting:A1", source_id=source.id,
+        status=cached_status, listing_hash=backlog["listing_hash_at_detail_fetch"],
+        cooldown_until=cooldown,
+    )
+    if cooldown_active and cached_status == "complete":
+        # Recording success normally clears cooldown. Exercise an explicitly
+        # persisted cooldown independently of that success-recording behavior.
+        with db.connect() as conn:
+            conn.execute("UPDATE detail_backlog SET cooldown_until = ? WHERE job_key = ?",
+                         (cooldown.isoformat(), "selective_detail_counting:A1"))
+    SelectiveDetailCountingTestAdapter.calls = []
+    result = sync_source_with_selective_details(
+        source, db=db, policy=_policy(), refresh_all_details=True,
+    )
+    assert result.fetched == 1
+    assert SelectiveDetailCountingTestAdapter.calls == ([] if cooldown_active else ["A1"])
+    assert result.diagnostics.detail_attempted == (0 if cooldown_active else 1)
+    assert db.get_detail_backlog("selective_detail_counting:A1")["detail_status"] == (
+        "pending" if cooldown_active else "complete"
+    )

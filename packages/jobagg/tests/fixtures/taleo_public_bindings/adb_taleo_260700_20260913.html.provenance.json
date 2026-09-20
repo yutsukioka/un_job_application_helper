@@ -1,0 +1,8 @@
+{
+  "capture_metadata_path": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/evidence/taleo_bound_timezones/adb_taleo/http/00011.json",
+  "capture_metadata_sha256": "4a9f9b4c0aa377736516c0e2f6a51c898e1299ca93a6794cd9a161bc7a1fd03a",
+  "body_sha256": "dd2c19b3fc9ef96ebed7a8958e444cbdb3fea41bd2d9d7323c1301b92fcb2abb",
+  "original_url": "https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260700&tz=GMT%2B08%3A00&tzname=Asia%2FManila",
+  "original_started_at": "2026-09-13T13:42:46.825877+00:00",
+  "original_finished_at": "2026-09-13T13:42:56.726627+00:00"
+}

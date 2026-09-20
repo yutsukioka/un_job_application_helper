@@ -1,0 +1,35 @@
+[
+  {
+    "external_id": "1436245533",
+    "fixture": "/Users/yutsukioka2/git/un_job_application_helper/packages/jobagg/tests/fixtures/ebrd_public/1436245533_20260913.html",
+    "fixture_sha256": "cdb78e85574eb9960bc02ebea60d885321373957c273a38568cf576975ffaa0c",
+    "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/ebrd_successfactors/full-001/http/00003.json",
+    "capture_sha256": "e8812a70d19b93c8f8f6ad9f7d84764ba026b16110074c3d8023b6144290c649",
+    "original_started_at": "2026-09-13T10:52:16.699951+00:00",
+    "original_finished_at": "2026-09-13T10:52:19.928782+00:00",
+    "url": "https://jobs.ebrd.com/job/Bucharest-Intern/1436245533/",
+    "title": "Intern"
+  },
+  {
+    "external_id": "1436231133",
+    "fixture": "/Users/yutsukioka2/git/un_job_application_helper/packages/jobagg/tests/fixtures/ebrd_public/1436231133_20260913.html",
+    "fixture_sha256": "199a821d1a7393ca4035fe99e81ed873d6bc8fceec6b74f8af6bb447dd83d190",
+    "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/ebrd_successfactors/full-001/http/00005.json",
+    "capture_sha256": "1afb945e76bee1f8639b90673868c7d310d3c12eaaddec6260ce33afcb04cd43",
+    "original_started_at": "2026-09-13T10:52:23.092614+00:00",
+    "original_finished_at": "2026-09-13T10:52:26.252895+00:00",
+    "url": "https://jobs.ebrd.com/job/London-Principal%2C-ESD/1436231133/",
+    "title": "Principal, ESD"
+  },
+  {
+    "external_id": "1434506233",
+    "fixture": "/Users/yutsukioka2/git/un_job_application_helper/packages/jobagg/tests/fixtures/ebrd_public/1434506233_20260913.html",
+    "fixture_sha256": "11750cde84ec6f37b04234db93286fef808f0751404f35bccc7473ee6dcd77c2",
+    "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/ebrd_successfactors/full-001/http/00023.json",
+    "capture_sha256": "07291deff7bdbc82db3b70e40604d078d538f98f049b0af33613a827b51aba35",
+    "original_started_at": "2026-09-13T10:53:17.097766+00:00",
+    "original_finished_at": "2026-09-13T10:53:19.968060+00:00",
+    "url": "https://jobs.ebrd.com/job/London-Analyst%2C-Portfolio-Manager/1434506233/",
+    "title": "Analyst, Portfolio Manager"
+  }
+]

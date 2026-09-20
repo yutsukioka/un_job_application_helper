@@ -21,6 +21,24 @@ from typing import Any
 from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError
 
 
+def verified_ssl_context() -> ssl.SSLContext:
+    """Use platform trust roots when available, without changing global SSL state.
+
+    A missing optional import uses Python's verified default trust store. An
+    installed truststore that cannot initialize fails closed; it must not cause
+    certificate or hostname checks to be disabled.
+    """
+    try:
+        import truststore
+    except ImportError:
+        context = ssl.create_default_context()
+    else:
+        context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
+        raise ValueError("HTTPS requires certificate and hostname verification")
+    return context
+
+
 @dataclass(slots=True)
 class HttpResponse:
     url: str
@@ -46,6 +64,41 @@ class ResponseTooLargeError(HTTPError):
 # pulling a large binary into memory and persisting it as ``description``.
 _DEFAULT_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
 _RESPONSE_READ_CHUNK_BYTES = 64 * 1024
+
+
+class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Check every destination before urllib follows it or forwards credentials."""
+
+    def __init__(self, client: JobAggHTTPClient) -> None:
+        self.client = client
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        count = getattr(req, '_jobagg_redirect_count', 0) + 1
+        if self.client.safe_policy is not None:
+            newurl = self.client.safe_policy.validate_redirect(
+                req.full_url, newurl, redirect_count=count
+            )
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(newurl)
+        if old.scheme == 'https' and new.scheme != 'https':
+            raise SSRFProtectionError('HTTPS redirect downgrade is not allowed')
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        redirected._jobagg_redirect_count = count
+        old_origin = (old.scheme, old.hostname, old.port or (443 if old.scheme == 'https' else 80))
+        new_origin = (new.scheme, new.hostname, new.port or (443 if new.scheme == 'https' else 80))
+        if old_origin != new_origin:
+            # Cookies from the jar are added separately for the destination's
+            # own scope. Never forward an explicit Cookie/auth/custom token.
+            public_headers = {'accept', 'accept-encoding', 'accept-language', 'user-agent', 'cache-control'}
+            for name, _ in list(redirected.header_items()):
+                if name.lower() not in public_headers:
+                    redirected.remove_header(name)
+        self.client._mark_request((old.hostname or '').lower())
+        self.client._respect_min_delay((new.hostname or '').lower())
+        self.client._mark_request((new.hostname or '').lower())
+        return redirected
 
 
 class JobAggHTTPClient:
@@ -79,13 +132,27 @@ class JobAggHTTPClient:
         # multiple hosts (e.g. listing API + CDN attachment fetch).
         self._last_request_at_by_host: dict[str, float] = {}
         self._cookie_jar = CookieJar()
-        handlers = [urllib.request.HTTPCookieProcessor(self._cookie_jar)]
-        if not self.tls_verify:
+        if self.tls_verify:
+            self._ssl_context = verified_ssl_context()
+        else:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            handlers.append(urllib.request.HTTPSHandler(context=context))
-        self._opener = urllib.request.build_opener(*handlers)
+            self._ssl_context = context
+        self._opener = self._build_opener()
+
+    def _build_opener(self, redirect_handler=None):
+        """Keep the same TLS context and cookie jar when redirect policy changes."""
+        if self.tls_verify and (
+            self._ssl_context.verify_mode != ssl.CERT_REQUIRED
+            or not self._ssl_context.check_hostname
+        ):
+            raise ValueError("HTTPS requires certificate and hostname verification")
+        return urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self._cookie_jar),
+            redirect_handler if redirect_handler is not None else _ValidatedRedirectHandler(self),
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+        )
 
     def _request(
         self,
@@ -96,6 +163,11 @@ class JobAggHTTPClient:
         body: bytes | None = None,
         timeout_seconds: int | float | None = None,
     ) -> HttpResponse:
+        diagnostic_start = time.monotonic()
+        self.last_request_diagnostics = {
+            "stage": "policy_validation", "headers_received": False,
+            "wire_bytes_read": 0, "elapsed_seconds": 0.0,
+        }
         request_headers = {
             "User-Agent": self.user_agent,
             "Accept": "*/*",
@@ -111,7 +183,11 @@ class JobAggHTTPClient:
         for attempt in range(self.max_retries + 1):
             self._respect_min_delay(host)
             try:
+                self.last_request_diagnostics["stage"] = "connect_or_headers"
                 with self._opener.open(request, timeout=timeout) as response:
+                    self.last_request_diagnostics.update(
+                        stage="body_read", headers_received=True, status_code=response.status,
+                    )
                     declared = response.headers.get("Content-Length")
                     if declared is not None:
                         try:
@@ -125,7 +201,9 @@ class JobAggHTTPClient:
                         response,
                         url=url,
                         max_bytes=self.max_response_bytes,
+                        progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total),
                     )
+                    self.last_request_diagnostics["stage"] = "body_decode"
                     decoded_bytes = _decode_content_encoding(
                         raw_bytes,
                         response.headers.get("Content-Encoding"),
@@ -136,6 +214,7 @@ class JobAggHTTPClient:
                     charset = response.headers.get_content_charset() or "utf-8"
                     text = decoded_bytes.decode(charset, errors="replace")
                     self._mark_request(host)
+                    self.last_request_diagnostics["stage"] = "complete"
                     return HttpResponse(
                         url=response.geturl(),
                         status_code=response.status,
@@ -145,17 +224,19 @@ class JobAggHTTPClient:
                     )
             except urllib.error.HTTPError as exc:
                 self._mark_request(host)
+                self.last_request_diagnostics.update(stage="error_body_read", headers_received=True, status_code=exc.code)
                 error_bytes = _decode_content_encoding(
-                    _read_capped_body(exc, url=url, max_bytes=self.max_response_bytes),
+                    _read_capped_body(exc, url=url, max_bytes=self.max_response_bytes,
+                                     progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total)),
                     exc.headers.get("Content-Encoding") if exc.headers else None,
                     max_bytes=self.max_response_bytes,
                 )
                 response_body = error_bytes.decode("utf-8", errors="replace")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     retry_after = _retry_after_from_headers(exc.headers)
-                    delay = retry_after or self.backoff_base_seconds * (2**attempt)
+                    delay = retry_after if retry_after is not None else self.backoff_base_seconds * (2**attempt)
                     if delay > 0:
-                        time.sleep(self._with_jitter(delay))
+                        time.sleep(max(delay, self._with_jitter(delay)) if retry_after is not None else self._with_jitter(delay))
                     continue
                 raise HTTPError(
                     f"{method} {url} failed with HTTP {exc.code}: {response_body[:300]}"
@@ -170,6 +251,8 @@ class JobAggHTTPClient:
                         time.sleep(self._with_jitter(delay))
                     continue
                 raise HTTPError(f"{method} {url} failed: {exc.reason}") from exc
+            finally:
+                self.last_request_diagnostics["elapsed_seconds"] = max(0.0, time.monotonic() - diagnostic_start)
 
         raise HTTPError(f"{method} {url} failed after retries")
 
@@ -321,7 +404,7 @@ def _default_accept_encoding() -> str:
     return "gzip, deflate"
 
 
-def _read_capped_body(stream: Any, *, url: str, max_bytes: int) -> bytes:
+def _read_capped_body(stream: Any, *, url: str, max_bytes: int, progress=None) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
@@ -329,6 +412,8 @@ def _read_capped_body(stream: Any, *, url: str, max_bytes: int) -> bytes:
         if not chunk:
             break
         total += len(chunk)
+        if progress is not None:
+            progress(total)
         if total > max_bytes:
             raise ResponseTooLargeError(
                 f"Response from {url} exceeded cap of {max_bytes} bytes"

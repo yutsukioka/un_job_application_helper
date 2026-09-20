@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin
 
@@ -19,13 +20,20 @@ class ICDDRBAdapter(JobAdapter):
 
     def fetch_jobs(self) -> list[JobRecord]:
         listing_html = self.fetch_text(self.source.base_url)
+        from jobagg.adapters.icddrb_inventory import all_board_links
+        all_links = all_board_links(listing_html, self.source.base_url)
+        if all_links is not None:
+            self.run_diagnostics.pages_fetched = 1
+            self.run_diagnostics.pagination_complete = True
+            self.run_diagnostics.total_reported_by_source = len(all_links)
+            return [self._job_from_link(link) for link in all_links]
         token = _csrf_token(listing_html)
         jobs: list[JobRecord] = []
         seen_urls: set[str] = set()
         employee_type_ids = self.source.extra.get("employee_type_ids") or [3, 2]
         for employee_type_id in employee_type_ids:
             response_html = self._fetch_employee_type_listing(employee_type_id, token)
-            for link in _vacancy_links(response_html or listing_html, self.source.base_url):
+            for link in _vacancy_links(response_html, self.source.base_url):
                 if link["href"] in seen_urls:
                     continue
                 seen_urls.add(link["href"])
@@ -46,14 +54,9 @@ class ICDDRBAdapter(JobAdapter):
         payload: dict[str, Any] = {"employee_type_id": employee_type_id}
         if token:
             payload["_token"] = token
-        try:
-            return self.post_form_text(
-                url,
-                payload,
-                headers={"X-CSRF-TOKEN": token} if token else None,
-            )
-        except Exception:
-            return ""
+        return self.post_form_text(
+            url, payload, headers={"X-CSRF-TOKEN": token} if token else None,
+        )
 
     def _job_from_link(self, link: dict[str, str]) -> JobRecord:
         fetch_details = _as_bool(self.source.extra.get("fetch_details"), default=True)
@@ -97,11 +100,7 @@ class ICDDRBAdapter(JobAdapter):
             html_text,
             r"<span\b(?=[^>]*class=[\"'][^\"']*\bdeadline-date\b)[^>]*>(?P<value>.*?)</span>",
         )
-        body = _first_match(
-            html_text,
-            r"<div\b(?=[^>]*class=[\"'][^\"']*\bicddrb-invites\b)[^>]*>(?P<value>.*?)</div>",
-            raw=True,
-        )
+        body = _description_html(html_text)
         location = _field_from_description(body, "Location")
         contract_type = _field_from_description(body, "Contract Type and Duration")
         return build_job(
@@ -200,3 +199,55 @@ def _field_from_description(html_text: str | None, label: str) -> str | None:
 def _external_id(url: str) -> str | None:
     match = re.search(r"/vacancy-preview/(\d+)", url)
     return match.group(1) if match else None
+
+
+class _Description(HTMLParser):
+    """Capture the entire job container, including nested divs."""
+    def __init__(self, text):
+        super().__init__(convert_charrefs=False)
+        self.depth = 0
+        self.count = 0
+        self.parts = []
+        self.feed(text)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "div" and "icddrb-invites" in dict(attrs).get("class", "").split():
+            self.count += 1
+            if not self.depth:
+                self.depth = 1
+                return
+        if self.depth:
+            self.parts.append(self.get_starttag_text())
+            if tag == "div":
+                self.depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        if self.depth:
+            self.parts.append(self.get_starttag_text())
+
+    def handle_endtag(self, tag):
+        if self.depth:
+            if tag == "div":
+                self.depth -= 1
+                if not self.depth:
+                    return
+            self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self.depth:
+            self.parts.append(data)
+
+    def handle_entityref(self, name):
+        self.handle_data(f"&{name};")
+
+    def handle_charref(self, name):
+        self.handle_data(f"&#{name};")
+
+
+def _description_html(html_text):
+    parsed = _Description(html_text)
+    body = "".join(parsed.parts)
+    if parsed.count != 1 or parsed.depth or not clean_html(body):
+        raise ValueError("icddr,b job description container is missing, ambiguous or incomplete")
+    return body

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "worker_argv": [],
+  "worker_cwd": ".",
+  "source_manifest_path": "source_manifest.example.json",
+  "state_dir": "runtime",
+  "shared_lock_path": "runtime/shared-jobagg.lock",
+  "timeout_seconds": 600,
+  "terminate_grace_seconds": 10,
+  "listing_max_age_seconds": 3600,
+  "detail_max_age_seconds": 86400
+}

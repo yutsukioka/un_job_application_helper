@@ -56,6 +56,9 @@ class InspiraAdapter(JobAdapter):
 
         jobs: list[JobRecord] = []
         seen_keys: set[str] = set()
+        totals: set[int] = set()
+        pages_fetched = 0
+        terminal = False
         for page in range(max_pages):
             payload = {
                 "filterConfig": filter_config,
@@ -67,8 +70,13 @@ class InspiraAdapter(JobAdapter):
                 },
             }
             response = self.post_json(list_url, payload, headers=self._headers())
+            pages_fetched += 1
+            total = _count_from_payload(response)
+            if total is not None:
+                totals.add(total)
             rows = _rows_from_payload(response)
             if not rows:
+                terminal = True
                 break
             for item in rows:
                 job = self.parse_listing_item(item)
@@ -81,11 +89,54 @@ class InspiraAdapter(JobAdapter):
                     continue
                 seen_keys.add(key)
                 jobs.append(job)
-            total = _count_from_payload(response)
             if total is not None and (page + 1) * page_size >= total:
+                terminal = True
                 break
             if len(rows) < page_size:
+                terminal = True
                 break
+        # Equal startDate values can shift across offset pages. If the unique
+        # inventory disagrees with a stable advertised total, request that
+        # observed total in one bounded response, preserving the exact filters.
+        # The bound is explicit; larger/changed inventories remain uncertified.
+        expected = next(iter(totals)) if len(totals) == 1 else None
+        reconciliation_limit = _as_int(
+            self.source.extra.get("single_page_reconciliation_max_rows"), default=1000
+        )
+        if (expected is not None and 0 < expected <= reconciliation_limit
+                and len(jobs) != expected):
+            response = self.post_json(list_url, {
+                "filterConfig": filter_config,
+                "pagination": {"page": 0, "itemPerPage": expected,
+                    "sortBy": sort_by, "sortDirection": sort_direction},
+            }, headers=self._headers())
+            pages_fetched += 1
+            final_total = _count_from_payload(response)
+            candidates = {}
+            for item in _rows_from_payload(response):
+                candidate = self.parse_listing_item(item)
+                candidates[candidate.identity_key()] = candidate
+            if final_total == expected and len(candidates) == expected:
+                jobs = list(candidates.values())
+                terminal = True
+            else:
+                if final_total is not None:
+                    totals.add(final_total)
+                # Retain all discoveries, but an inconsistent observation does
+                # not justify absence transitions or a completeness claim.
+                prior = {job.identity_key(): job for job in jobs}
+                prior.update(candidates)
+                jobs = list(prior.values())
+                terminal = False
+        self.run_diagnostics.pages_fetched = pages_fetched
+        self.run_diagnostics.total_reported_by_source = expected
+        self.run_diagnostics.pagination_complete = (
+            terminal and len(totals) == 1 and expected is not None and len(jobs) == expected
+        )
+        if expected == 0 and not jobs and len(totals) == 1:
+            self.run_diagnostics.health_status = "ok_empty"
+            self.run_diagnostics.empty_reason = "verified_total_zero"
+            self.run_diagnostics.zero_fetched_evidence = {"total_reported_by_source": 0}
         return jobs
 
     def parse_jobs(self, payload: Any) -> list[JobRecord]:

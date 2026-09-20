@@ -7,15 +7,20 @@ import copy
 import html
 import json
 import re
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import parse_qsl, quote, unquote, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from jobagg.adapters.base import JobAdapter, register_adapter
+from jobagg.adapters.base import AdapterContext, JobAdapter, register_adapter
+from jobagg.adapters.taleo_public_bindings import public_bindings
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job, clean_text
 from jobagg.utils import as_bool as _as_bool
 from jobagg.utils import as_int as _as_int
 from jobagg.utils import clean_html
+from jobagg.vacancy_outcomes import DetailIdentityMismatch, VacancyUnavailable, unavailable_template
 
 _ANCHOR_RE = re.compile(
     r"<a[^>]+href=[\"'](?P<href>[^\"']+)[\"'][^>]*>(?P<title>.*?)</a>",
@@ -75,6 +80,119 @@ class TaleoAdapter(JobAdapter):
         return jobs
 
     def _fetch_rest_jobs(self) -> list[JobRecord]:
+        if _as_bool(self.source.extra.get("enumerate_job_locales"), default=False):
+            return self._fetch_multilingual_rest_jobs()
+        return self._fetch_rest_jobs_single()
+
+    def _fetch_multilingual_rest_jobs(self) -> list[JobRecord]:
+        """Enumerate the advertised posting locales, deduplicating vacancy IDs.
+
+        Taleo's JOB_LOCALE control changes the URL lang parameter. It is not a
+        normal selectedValues facet. Counts remain separate because a vacancy
+        may be advertised in several languages, and source totals may be stale.
+        """
+        api = str(self.source.extra["search_api_url"])
+        default_locale = dict(parse_qsl(urlsplit(api).query)).get("lang", "en")
+        pending = [default_locale]
+        by_key: dict[str, JobRecord] = {}
+        locales: dict[str, Any] = {}
+        max_locales = _as_int(self.source.extra.get("max_job_locales"), default=10)
+        while pending:
+            locale = pending.pop(0)
+            if locale in locales:
+                continue
+            if len(locales) >= max_locales:
+                raise ValueError("Taleo posting-language limit reached before inventory completion")
+            extra = {**self.source.extra, "enumerate_job_locales": False, "accept_language": locale.replace("_", "-"), "preserve_detail_timezone": True}
+            extra["search_api_url"] = self._language_url(api, locale)
+            if extra.get("search_url"):
+                extra["search_url"] = self._language_url(str(extra["search_url"]), locale)
+            child = type(self)(AdapterContext(replace(self.source, extra=extra), self.context.http, self.context.robots))
+            jobs = child._fetch_rest_jobs_single(posting_locale=locale)
+            facets = child.listing_language_facets
+            for advertised in facets:
+                if advertised not in locales and advertised not in pending and advertised != locale:
+                    pending.append(advertised)
+            locales[locale] = {
+                "search_api_url": extra["search_api_url"],
+                "observed_ids": sorted(str(j.external_id) for j in jobs),
+                "unique_count": len(jobs),
+                "reported_total": child.run_diagnostics.total_reported_by_source,
+                "pagination_complete": child.run_diagnostics.pagination_complete,
+                "pages_fetched": child.run_diagnostics.pages_fetched,
+                "advertised_posting_locales": facets,
+            }
+            for job in jobs:
+                row = copy.deepcopy(job.raw["_taleo_locale_listings"][locale])
+                existing = by_key.get(job.identity_key())
+                if existing is None:
+                    by_key[job.identity_key()] = job
+                else:
+                    existing.raw["_taleo_available_locales"].append(locale)
+                    existing.raw["_taleo_locale_listings"][locale] = row
+        self.language_inventory = {
+            "locales": locales, "distinct_count": len(by_key),
+            "locale_totals_must_not_be_summed": True,
+            "pagination_complete": all(v["pagination_complete"] is True for v in locales.values()),
+        }
+        for job in by_key.values():
+            job.raw["_taleo_language_inventory"] = copy.deepcopy(self.language_inventory)
+        self.run_diagnostics.pages_fetched = sum(v["pages_fetched"] or 0 for v in locales.values())
+        self.run_diagnostics.total_reported_by_source = next(iter(locales.values()))["reported_total"] if len(locales) == 1 else None
+        self.run_diagnostics.pagination_complete = self.language_inventory["pagination_complete"]
+        if not self.run_diagnostics.pagination_complete:
+            self.run_diagnostics.scope_validation_status = "incomplete"
+        return list(by_key.values())
+
+    @staticmethod
+    def _language_url(url: str, locale: str) -> str:
+        if not re.fullmatch(r"[a-z]{2,3}(?:_[A-Z]{2})?", locale):
+            raise ValueError("Unsupported Taleo public posting-language code")
+        parts = urlsplit(url)
+        query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "lang"]
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode([*query, ("lang", locale)]), parts.fragment))
+
+    def _posting_locale_url(self, url: str, locale: str, external_id: str) -> str:
+        """Pin a public posting language without changing its requisition ID."""
+        identities = [value for key, value in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+                      if key.lower() in {"job", "jobid", "requisition"}]
+        if identities != [str(external_id)]:
+            raise ValueError("Taleo detail URL identity differs from the public listing")
+        return self._language_url(url, locale)
+
+    def _validated_posting_locale(self, item: dict[str, Any], external_id: str) -> str | None:
+        locale = item.get("_taleo_posting_locale")
+        if locale is None:
+            return None
+        self._language_url("", str(locale))
+        available = item.get("_taleo_available_locales")
+        listings = item.get("_taleo_locale_listings")
+        row = listings.get(locale) if isinstance(listings, dict) else None
+        if (not isinstance(available, list) or locale not in available
+                or not isinstance(row, dict)
+                or str(self._external_id(self._flatten_item(row))) != str(external_id)):
+            raise ValueError("Taleo posting locale lacks matching public listing membership")
+        inventory = item.get("_taleo_language_inventory")
+        if isinstance(inventory, dict):
+            language = inventory.get("locales", {}).get(locale, {})
+            if str(external_id) not in language.get("observed_ids", []):
+                raise ValueError("Taleo posting locale differs from the public language inventory")
+        return str(locale)
+
+    def _bind_listing_locale(self, job: JobRecord, locale: str) -> None:
+        original = {"apply_url": job.apply_url, "source_url": job.source_url,
+                    "_taleo_detail_url": job.raw.get("_taleo_detail_url")}
+        row = copy.deepcopy(job.raw)
+        job.apply_url = self._posting_locale_url(job.apply_url, locale, str(job.external_id))
+        job.source_url = self._posting_locale_url(job.source_url or original["apply_url"], locale, str(job.external_id))
+        job.raw.update(_taleo_posting_locale=locale, _taleo_available_locales=[locale],
+                       _taleo_locale_listings={locale: row}, _taleo_original_urls=original,
+                       _taleo_detail_url=job.apply_url,
+                       _taleo_locale_url_resolution={"posting_locale": locale,
+                                                     "basis": "public listing returned in this JOB_LOCALE inventory",
+                                                     "public_detail_url": job.apply_url})
+
+    def _fetch_rest_jobs_single(self, *, posting_locale: str | None = None) -> list[JobRecord]:
         search_api_url = str(self.source.extra["search_api_url"])
         payload_template = self.source.extra.get("search_payload") or self._default_search_payload()
         max_pages = _as_int(self.source.extra.get("max_pages"), default=25)
@@ -85,17 +203,35 @@ class TaleoAdapter(JobAdapter):
 
         jobs: list[JobRecord] = []
         seen_keys: set[str] = set()
+        totals: set[int] = set()
+        pages_fetched = 0
+        terminal = False
+        self.listing_language_facets: dict[str, Any] = {}
         for page_no in range(1, max_pages + 1):
             payload = copy.deepcopy(payload_template)
             if isinstance(payload, dict):
                 payload["pageNo"] = page_no
             page = self.post_json(search_api_url, payload, headers=self._rest_headers())
+            for facet in page.get("facetResults", []) if isinstance(page, dict) else []:
+                if facet.get("id") == "JOB_LOCALE":
+                    for value in facet.get("facetValueResults", []):
+                        locale = str(value.get("id") or "")
+                        if re.fullmatch(r"[a-z]{2,3}(?:_[A-Z]{2})?", locale):
+                            self.listing_language_facets[locale] = copy.deepcopy(value)
+            pages_fetched += 1
+            paging = page.get("pagingData", {}) if isinstance(page, dict) else {}
+            raw_total = paging.get("totalCount") if isinstance(paging, dict) else None
+            if raw_total is not None and str(raw_total).isdigit():
+                totals.add(int(raw_total))
             rows = _jobs_from_payload(page)
             if not rows:
+                terminal = True
                 break
             page_new = 0
             for item in rows:
                 job = self.parse_listing_item(item)
+                if posting_locale is not None:
+                    self._bind_listing_locale(job, posting_locale)
                 if fetch_details:
                     detail_job = self.fetch_detail_for_listing_item(job.raw)
                     if detail_job is not None:
@@ -109,7 +245,18 @@ class TaleoAdapter(JobAdapter):
             if page_new == 0:
                 break
             if self._is_last_page(page, page_no):
+                terminal = True
                 break
+        expected = next(iter(totals)) if len(totals) == 1 else None
+        self.run_diagnostics.pages_fetched = pages_fetched
+        self.run_diagnostics.total_reported_by_source = expected
+        self.run_diagnostics.pagination_complete = (
+            terminal and expected is not None and len(jobs) == expected
+        )
+        if expected == 0 and not jobs:
+            self.run_diagnostics.health_status = "ok_empty"
+            self.run_diagnostics.empty_reason = "verified_total_zero"
+            self.run_diagnostics.zero_fetched_evidence = {"total_reported_by_source": 0}
         return jobs
 
     def parse_listing_item(self, item: dict[str, Any]) -> JobRecord:
@@ -153,7 +300,7 @@ class TaleoAdapter(JobAdapter):
             apply_url=str(apply_url),
             source_url=str(apply_url),
             description=_first_value(flat, "description", "jobDescription"),
-            raw={**item, "_taleo_flat": flat, "_taleo_detail_url": str(apply_url)},
+            raw={**item, "_taleo_flat": flat, "_taleo_detail_url": str(apply_url), "_taleo_record_kind": "listing"},
         )
 
     def parse_jobs_from_html(self, html_text: str) -> list[JobRecord]:
@@ -178,14 +325,36 @@ class TaleoAdapter(JobAdapter):
 
     def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
         detail_url = item.get("_taleo_detail_url")
+        expected = self._external_id(self._flatten_item(item))
         if not detail_url:
-            flat = self._flatten_item(item)
-            external_id = self._external_id(flat)
-            if not external_id:
+            if not expected:
                 return None
-            detail_url = self._job_detail_url(str(external_id))
+            detail_url = self._job_detail_url(str(expected))
+        expected = expected or self._job_id_from_url(str(detail_url))
+        locale = self._validated_posting_locale(item, str(expected))
+        detail_url = self._with_detail_timezone(str(detail_url))
+        if locale:
+            detail_url = self._posting_locale_url(detail_url, locale, str(expected))
+            if getattr(self, "_active_taleo_locale", None) != locale:
+                search = str(self.source.extra.get("search_url") or self.source.base_url)
+                self.fetch_text(self._language_url(search, locale))
+                self._active_taleo_locale = locale
         html_text = self.fetch_text(str(detail_url))
-        return self.parse_detail_html(html_text, str(detail_url))
+        if unavailable_template(self.source.id, str(expected), str(detail_url), str(detail_url), html_text):
+            raise VacancyUnavailable("Taleo active template explicitly reports unavailable requisition")
+        job = self.parse_detail_html(html_text, str(detail_url))
+        returned = self._parse_taleo_detail_payload(html_text).get("external_id")
+        if (locale and not returned) or (returned and expected and str(returned) != str(expected)):
+            raise DetailIdentityMismatch("Taleo returned requisition identity differs from listing")
+        job.raw.update(detail_html=html_text, _taleo_listing=copy.deepcopy(item))
+        for key in ("_taleo_posting_locale", "_taleo_available_locales", "_taleo_locale_listings", "_taleo_language_inventory", "_taleo_original_urls"):
+            if key in item:
+                job.raw[key] = copy.deepcopy(item[key])
+        if locale:
+            job.raw["_taleo_locale_url_resolution"] = {"posting_locale": locale,
+                "basis": "public language-inventory membership and matching returned requisition ID",
+                "public_detail_url": detail_url, "original_listing_detail_url": item.get("_taleo_detail_url")}
+        return job
 
     def parse_detail_html(self, html_text: str, detail_url: str) -> JobRecord:
         parsed_detail = self._parse_taleo_detail_payload(html_text)
@@ -218,6 +387,7 @@ class TaleoAdapter(JobAdapter):
             or flat.get("TYPE_OF_REQUISITION")
             or flat.get("JOB_TYPE")
             or flat.get("POSITION_LEVEL_LABEL")
+            or flat.get("SCHEDULE")
         )
         job = build_job(
             self.source,
@@ -239,7 +409,115 @@ class TaleoAdapter(JobAdapter):
         )
         if body:
             job.description = body
+        if parsed_detail.get("public_bindings"):
+            job.raw["_taleo_public_metadata_resolution"] = {"kind":"paired_public_dom_bindings", "binding":"_taleo_flat._taleo_public_bindings"}
+        if all(parsed_detail.get(key) for key in ("external_id", "title", "description")):
+            job.raw["_taleo_record_kind"] = "detail"
+        values = self._detail_fill_list_values(html_text)
+        if job.raw.get("_taleo_record_kind") == "detail":
+            # Taleo serializes request-local wall clocks on every provider.
+            # An unqualified response cannot establish its UTC offset.
+            is_fao = self._is_fao_detail_layout(values) and not parsed_detail.get("public_bindings")
+            posting_value = str(values[12] if is_fao else flat.get("Job Posting") or "")
+            public_value = str(values[14] if is_fao else flat.get("Closing Date") or "")
+            posting = self._localized_taleo_date(posting_value)
+            closing = self._localized_taleo_date(public_value)
+            query_pairs = parse_qsl(urlsplit(detail_url).query, keep_blank_values=True)
+            query = dict(query_pairs)
+            timezone_pairs = [(key, value) for key, value in query_pairs if key in {"tz", "tzname"}]
+            unambiguous_timezone_pair = len(timezone_pairs) == 2 and {key for key, _ in timezone_pairs} == {"tz", "tzname"}
+            zone_name = query.get("tzname")
+            resolution = {"url": detail_url, "public_value": public_value, "tzname": zone_name}
+            posting_has_clock = bool(re.search(r",\s*\d{1,2}:\d{2}", posting_value))
+            local_posting = self._bound_deadline(posting, query) if posting and posting_has_clock and unambiguous_timezone_pair else None
+            job.posted_at = local_posting.astimezone(UTC) if local_posting else None
+            job.raw["_taleo_posting_time_resolution"] = {
+                "url": detail_url, "public_value": posting_value, "tzname": zone_name,
+                "kind": "known_instant" if local_posting else ("public_calendar_date_only" if posting and not posting_has_clock else "unknown_timezone"),
+            }
+            job.closes_at = None
+            job.closes_at_local = public_value or None
+            job.closes_tz = None
+            closing_has_clock = bool(re.search(r",\s*\d{1,2}:\d{2}", public_value))
+            local = self._bound_deadline(closing, query) if closing and closing_has_clock and unambiguous_timezone_pair else None
+            if local:
+                job.closes_at, job.closes_tz = local.astimezone(UTC), zone_name
+                resolution["kind"] = "known_instant"
+                job.raw["_taleo_deadline_timezone_evidence"] = dict(resolution)
+            elif public_value.strip().casefold() in {"continuo", "continu", "ongoing"}:
+                resolution["kind"] = "open_ended"
+                job.closes_at_local = None
+                job.raw["_taleo_deadline_open_ended"] = dict(resolution)
+            else:
+                resolution["kind"] = "unknown_timezone" if closing else "unparsed"
+            job.raw["_taleo_deadline_resolution"] = resolution
         return job
+
+    @staticmethod
+    def _bound_deadline(closing: datetime, query: dict[str, str]) -> datetime | None:
+        offset = re.fullmatch(r"GMT([+-])(\d{2}):(\d{2})", query.get("tz", ""))
+        if not offset or not query.get("tzname"):
+            return None
+        sign, hours, minutes = offset.groups()
+        if int(hours) > 14 or int(minutes) > 59:
+            return None
+        expected = timedelta(hours=int(hours), minutes=int(minutes)) * (1 if sign == "+" else -1)
+        try:
+            local = closing.replace(tzinfo=ZoneInfo(query["tzname"]))
+        except (ZoneInfoNotFoundError, ValueError):
+            return None
+        # Conflicting offset/zone pairs and DST-fold ambiguity need review.
+        if local.utcoffset() != expected or local.replace(fold=1).utcoffset() != expected:
+            return None
+        if local.astimezone(UTC).astimezone(local.tzinfo).replace(tzinfo=None) != closing:
+            return None
+        return local
+
+    @staticmethod
+    def _localized_taleo_date(value: str) -> datetime | None:
+        months = {
+            "jan": 1, "janv": 1, "janvier": 1, "ene": 1, "enero": 1,
+            "févr": 2, "février": 2, "feb": 2, "febrero": 2,
+            "mars": 3, "mar": 3, "marzo": 3,
+            "apr": 4, "avr": 4, "avril": 4, "abr": 4, "abril": 4,
+            "mai": 5, "may": 5, "mayo": 5,
+            "juin": 6, "jun": 6, "junio": 6,
+            "juil": 7, "juillet": 7, "jul": 7, "julio": 7,
+            "aug": 8, "août": 8, "ago": 8, "agosto": 8,
+            "sept": 9, "septembre": 9, "sep": 9, "septiembre": 9,
+            "oct": 10, "octobre": 10, "octubre": 10,
+            "nov": 11, "novembre": 11, "noviembre": 11,
+            "dec": 12, "déc": 12, "décembre": 12, "dic": 12, "diciembre": 12,
+        }
+        # Public Taleo providers use day-first named months (FAO/ADB/WIPO),
+        # month-first English (WHO), and ISO calendar dates (IAEA).
+        value = value.strip()
+        clock = r"(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?)?"
+        match = re.fullmatch(r"(\d{1,2})[/-]([^/-]+)[/-]([0-9]{4})" + clock, value, re.IGNORECASE)
+        if match:
+            day, name, year, hour, minute, second, period = match.groups()
+            month = months.get(name.lower().rstrip('.'))
+        else:
+            match = re.fullmatch(r"([0-9]{4})-(\d{2})-(\d{2})" + clock, value, re.IGNORECASE)
+            if match:
+                year, month_value, day, hour, minute, second, period = match.groups()
+                month = int(month_value)
+            else:
+                match = re.fullmatch(r"([A-Za-zÀ-ÿ.]+)\s+(\d{1,2}),\s*([0-9]{4})" + clock, value, re.IGNORECASE)
+                if not match:
+                    return None
+                name, day, year, hour, minute, second, period = match.groups()
+                month = months.get(name.lower().rstrip('.'))
+        if not month:
+            return None
+        if period:
+            if not 1 <= int(hour) <= 12:
+                return None
+            hour = str(int(hour) % 12 + (12 if period.upper() == "PM" else 0))
+        try:
+            return datetime(int(year), month, int(day), int(hour or 0), int(minute or 0), int(second or 0))
+        except ValueError:
+            return None
 
     def _default_search_payload(self) -> dict[str, Any]:
         return {
@@ -359,7 +637,8 @@ class TaleoAdapter(JobAdapter):
     def _job_detail_url(self, job_id: str) -> str:
         template = self.source.extra.get("detail_url_template")
         if template:
-            return str(template).format(job_id=job_id, job_id_url=quote(job_id, safe=""))
+            result = str(template).format(job_id=job_id, job_id_url=quote(job_id, safe=""))
+            return self._with_detail_timezone(result)
         if job_id.startswith(("http://", "https://")):
             return job_id
         search_url = str(self.source.extra.get("search_url") or self.source.base_url)
@@ -369,6 +648,25 @@ class TaleoAdapter(JobAdapter):
             return f"{base}{separator}job={quote(job_id, safe='')}"
         return urljoin(f"{self.source.base_url.rstrip('/')}/", f"jobdetail.ftl?job={quote(job_id, safe='')}")
 
+    def _with_detail_timezone(self, url: str) -> str:
+        if (not any(_as_bool(self.source.extra.get(key), default=False) for key in ("preserve_detail_timezone", "enumerate_job_locales"))
+                and not any(self.source.extra.get(key) for key in ("tz", "tzname"))):
+            return url
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+        present = [(key, value) for key, value in pairs if key in {"tz", "tzname"}]
+        if present:
+            # Never create a mixed pair by filling one missing parameter.
+            if len(present) != 2 or {key for key, _ in present} != {"tz", "tzname"} or not all(value for _, value in present):
+                raise ValueError("Taleo detail URL has an incomplete or ambiguous timezone pair")
+            return url
+        configured = [(key, str(self.source.extra[key])) for key in ("tz", "tzname") if self.source.extra.get(key)]
+        if len(configured) == 1:
+            raise ValueError("Taleo detail timezone configuration requires both tz and tzname")
+        if not configured:
+            return url
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode([*pairs, *configured]), parts.fragment))
+
     def _job_id_from_url(self, detail_url: str) -> str | None:
         query = dict(parse_qsl(urlsplit(detail_url).query, keep_blank_values=True))
         return query.get("job")
@@ -377,6 +675,10 @@ class TaleoAdapter(JobAdapter):
         if not isinstance(payload, dict):
             return True
         paging = payload.get("pagingData") if isinstance(payload.get("pagingData"), dict) else payload
+        total = paging.get("totalCount")
+        size = paging.get("pageSize")
+        if total is not None and size is not None and str(total).isdigit() and str(size).isdigit() and int(size) > 0:
+            return page_no * int(size) >= int(total)
         total_pages = (
             paging.get("numberOfPages")
             or paging.get("totalPages")
@@ -394,6 +696,10 @@ class TaleoAdapter(JobAdapter):
         values = self._detail_fill_list_values(html_text)
         if not values:
             return {}
+
+        binding = public_bindings(html_text, values)
+        if binding is not None:
+            return self._parse_public_bound_fields(binding)
 
         if self._is_fao_detail_layout(values):
             title = clean_text(unquote(values[11])) if len(values) > 11 else None
@@ -413,6 +719,72 @@ class TaleoAdapter(JobAdapter):
             "description": description,
             "flat": flat,
         }
+
+    def _parse_public_bound_fields(self, binding: dict[str, Any]) -> dict[str, Any]:
+        semantic_values: dict[str, str] = {}
+        flat: dict[str, Any] = {"_taleo_parser": "paired_public_dom_bindings"}
+        body_parts, body_seen = [], set()
+        for field in binding['visible_fields']:
+            encoded = field['encoded_value']
+            decoded = unquote(encoded).lstrip('!*')
+            value = self._clean_detail_html_fragment(decoded) if '<' in decoded else clean_text(decoded)
+            field['public_text'] = value
+            if not value:
+                continue
+            semantic, label = field['semantic'], field['public_label']
+            if semantic in semantic_values and semantic_values[semantic] != value:
+                raise ValueError('Conflicting Taleo public values for ' + semantic)
+            semantic_values[semantic] = value
+            if label:
+                if label in flat and flat[label] != value:
+                    raise ValueError('Conflicting Taleo public field label')
+                flat[label] = value
+            part = (label + '\n' if label else '') + value
+            fingerprint = re.sub(r'\s+', ' ', part).strip()
+            if fingerprint not in body_seen:
+                body_parts.append(part)
+                body_seen.add(fingerprint)
+        aliases = {'title':'Requisition Title', 'contestnumber':'Job Number',
+                   'postingdate':'Job Posting', 'unpostingdate':'Closing Date',
+                   'primarylocation':'LOCATION', 'otherlocations':'OTHER_LOCATIONS',
+                   'organization':'ORGANIZATIONAL_UNIT', 'jobschedule':'SCHEDULE',
+                   'jobtype':'JOB_TYPE', 'jobfield':'JOB_FIELD'}
+        for semantic, alias in aliases.items():
+            value = semantic_values.get('reqlistitem.' + semantic)
+            if value:
+                flat[alias] = value
+        public_aliases = {'Grade':'JOB_LEVEL', 'Grade Level':'JOB_LEVEL', 'Position Level':'JOB_LEVEL',
+                          'Type of Requisition':'TYPE_OF_REQUISITION', 'Organizational Unit':'ORGANIZATIONAL_UNIT',
+                          'Department':'JOB_FIELD', 'Staff Category':'POSITION_LEVEL_LABEL',
+                          'Contract Duration':'CONTRACT_DURATION', 'Contract Duration (Years, Months, Days)':'CONTRACT_DURATION',
+                          'Contract Type':'JOB_TYPE', 'Contractual Arrangement':'JOB_TYPE', 'Post Number':'POST_NUMBER'}
+        for label, alias in public_aliases.items():
+            if flat.get(label):
+                flat.setdefault(alias, flat[label])
+        # WIPO's public department line has no printed label; its exact bound
+        # semantic is verified against the current official browser header.
+        if self.source.id == 'wipo_taleo':
+            value = semantic_values.get('reqlistitem.G170205120713')
+            if value:
+                flat['ORGANIZATIONAL_UNIT'] = value
+        if self.source.id == 'fao_taleo':
+            # These source semantic identities are language independent; their
+            # current English/Spanish/French public labels remain in evidence.
+            for semantic, alias in {'G12005120163':'ORGANIZATIONAL_UNIT',
+                                    'G18305120163':'TYPE_OF_REQUISITION', 'G23705120163':'JOB_LEVEL',
+                                    'G61905020205':'CONTRACT_DURATION', 'G9905120163':'POST_NUMBER',
+                                    'G61805020205':'CLASSIFICATION_CODE'}.items():
+                value = semantic_values.get('reqlistitem.' + semantic)
+                if value:
+                    flat[alias] = value
+        flat['_taleo_public_bindings'] = binding
+        title = semantic_values.get('reqlistitem.title')
+        identity = semantic_values.get('reqlistitem.contestnumber')
+        if not title or not identity or not semantic_values.get('reqlistitem.description'):
+            raise ValueError('Public Taleo title, identity or main description is empty')
+        return {'title':title, 'external_id':identity,
+                'description':'\n\n'.join(body_parts), 'flat':flat,
+                'public_bindings':binding}
 
     def _detail_fill_list_values(self, html_text: str) -> list[str]:
         match = re.search(
@@ -544,6 +916,9 @@ class TaleoAdapter(JobAdapter):
 
     def _clean_detail_html_fragment(self, html_text: str) -> str | None:
         text = html.unescape(html_text)
+        # Drop executable/presentation bodies before their tags are removed;
+        # otherwise CSS/JavaScript becomes indistinguishable from job prose.
+        text = re.sub(r"<(script|style)\b[^>]*>.*?</\1\s*>", " ", text, flags=re.I | re.S)
         text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
         text = re.sub(r"(?i)<\s*li\b[^>]*>", "\n- ", text)
         text = re.sub(r"(?i)</\s*li\s*>", "\n", text)

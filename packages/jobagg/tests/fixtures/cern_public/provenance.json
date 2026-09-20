@@ -1,0 +1,34 @@
+{
+  "fixtures": [
+    {
+      "external_id": "te-crg-ic-2026-94-grap",
+      "fixture": "te-crg-ic-2026-94-grap_20260913.html",
+      "sha256": "86e9e7c18e132513e6d93905355ce144f90fd13ea13ff91703fb075b80eb4d5f",
+      "source_url": "https://careers.cern/jobs/te-crg-ic-2026-94-grap/",
+      "capture": "private/jobagg/complete_fetch_20260913/sources/cern_custom_html/full-001/http/00025.json",
+      "capture_sha256": "232ffb637918496b0f437c24af7859cf484f72737f0e34a00c4d5c3d7f9775ab",
+      "original_started_at": "2026-09-13T10:51:36.481540+00:00",
+      "original_finished_at": "2026-09-13T10:51:39.339395+00:00"
+    },
+    {
+      "external_id": "th-sp-2026-68-ld",
+      "fixture": "th-sp-2026-68-ld_20260913.html",
+      "sha256": "18a0184ff87dc8982bd4c84def52864c4794e91f2c2864c18114f0c8e701ff36",
+      "source_url": "https://careers.cern/jobs/th-sp-2026-68-ld/",
+      "capture": "private/jobagg/complete_fetch_20260913/sources/cern_custom_html/full-001/http/00015.json",
+      "capture_sha256": "2132cf0c81fe9fcf611509fb8ac0b68d64748faef91f69cc149d45f1ce9dc24a",
+      "original_started_at": "2026-09-13T10:51:07.805559+00:00",
+      "original_finished_at": "2026-09-13T10:51:10.623780+00:00"
+    },
+    {
+      "external_id": "tsc-cv",
+      "fixture": "tsc-cv_20260913.html",
+      "sha256": "c1afa5ce8409fc49b0d15e3f9347d962aec0b8671d91a49743bdceb686682815",
+      "source_url": "https://careers.cern/jobs/tsc-cv/",
+      "capture": "private/jobagg/complete_fetch_20260913/sources/cern_custom_html/full-001/http/00019.json",
+      "capture_sha256": "3b252ad5701f13e7aa98f3b56d969a1b7dcd1e7f53ee5ad510fa3d896dd6fcb9",
+      "original_started_at": "2026-09-13T10:51:18.966661+00:00",
+      "original_finished_at": "2026-09-13T10:51:21.934763+00:00"
+    }
+  ]
+}

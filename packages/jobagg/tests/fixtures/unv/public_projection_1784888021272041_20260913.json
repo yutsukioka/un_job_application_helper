@@ -1,0 +1,720 @@
+{
+  "id": 1784888021272041,
+  "doaRequestNo": "1784888021272041",
+  "name": "Public Finance Officer",
+  "country": {
+    "children": null,
+    "id": 223,
+    "isActive": true,
+    "isDefault": false,
+    "label": "Zambia",
+    "longDescription": "Zambia",
+    "order": 223,
+    "parentValueCode": null,
+    "props": {
+      "currency": {
+        "code": "USD",
+        "id": 1,
+        "isActive": true,
+        "isDefault": false,
+        "label": null,
+        "localizedValues": null,
+        "longDescription": "US Dollar",
+        "order": 1,
+        "parentValueCode": null,
+        "props": null,
+        "shortDescription": "USD"
+      },
+      "geoClassification": {
+        "code": "AFR",
+        "id": 54,
+        "isActive": true,
+        "isDefault": false,
+        "label": null,
+        "localizedValues": [],
+        "longDescription": "AFR",
+        "order": 1,
+        "parentValueCode": null,
+        "props": null,
+        "shortDescription": "AFR"
+      },
+      "geoClassificationMasterTableCode": "GeoClass",
+      "ibanCode": null,
+      "unvRegion": {
+        "code": "NAIROBI",
+        "id": 74,
+        "isActive": true,
+        "isDefault": false,
+        "label": null,
+        "localizedValues": [],
+        "longDescription": "NAIROBI REGIONAL OFFICE",
+        "order": 5,
+        "parentValueCode": null,
+        "props": null,
+        "shortDescription": "NAIROBI REGIONAL OFFICE"
+      },
+      "unvRegionMasterTableCode": "Region"
+    },
+    "shortDescription": "Zambia",
+    "value": {
+      "code": "ZMB",
+      "tableCode": "Country"
+    }
+  },
+  "isOnsite": true,
+  "startDate": "2026-10-19T00:00:00",
+  "expectedEndDate": "2027-10-19T00:00:00",
+  "duration": 365,
+  "isDurationFilled": true,
+  "possibilityOfExtension": false,
+  "numberOfAssigments": 1,
+  "sdgType": {
+    "children": null,
+    "id": 477,
+    "isActive": true,
+    "isDefault": false,
+    "label": "2. Zero hunger",
+    "longDescription": "ZERO HUNGER-EN",
+    "order": 2,
+    "parentValueCode": null,
+    "props": null,
+    "shortDescription": "ZERO HUNGER-EN",
+    "value": {
+      "code": "SDG_2",
+      "tableCode": "SDG"
+    }
+  },
+  "peopleWithDisabilities": false,
+  "reasonableAccommodation": false,
+  "accessibilityList": [],
+  "accessibilityComment": "",
+  "isReferenceChecksRequired": false,
+  "refereesType": {
+    "children": null,
+    "id": 0,
+    "isActive": false,
+    "isDefault": false,
+    "label": "-",
+    "longDescription": null,
+    "order": 0,
+    "parentValueCode": null,
+    "props": {},
+    "shortDescription": null,
+    "value": {
+      "code": "",
+      "tableCode": ""
+    }
+  },
+  "hoursWeek": {
+    "children": null,
+    "id": 0,
+    "isActive": false,
+    "isDefault": false,
+    "label": "-",
+    "longDescription": null,
+    "order": 0,
+    "parentValueCode": null,
+    "props": {},
+    "shortDescription": null,
+    "value": {
+      "code": "",
+      "tableCode": ""
+    }
+  },
+  "organizationMission": "UNICEF helps build a world where the rights of every child are fully realized. It is our conviction that nurturing and caring for children are the cornerstones of human progress. UNICEF was created in 1946 to work with others to overcome the obstacles that poverty, violence, disease and discrimination place in a child’s path. It has global authority to influence decision-makers, and a wide variety of partners at grassroots level to turn the most innovative ideas into reality.  \n\nFor 70 years, UNICEF has been working on the ground in 190 countries and territories to promote children's survival, protection and development. The world's largest provider of vaccines for developing countries, UNICEF supports child health and nutrition, good water and sanitation, quality basic education for all boys and girls, and the protection of children from violence, exploitation, and AIDS. UNICEF is funded entirely by the voluntary contributions of individuals, businesses, foundations and Governments.\n",
+  "context": "Zambia continues to face serious nutrition challenges despite policy commitments under the Eighth National Development Plan. Thirty two percent of children under five are stunted, including ten percent severely stunted, while three percent are wasted, a life-threatening condition that reflects persistent gaps in child survival and development.\n\nNutrition financing remains critically low, accounting for less than 0.01 percent of the K253.1 billion national budget. Although allocations increased slightly in 2026, these gains were eroded by inflation, leaving real funding levels unchanged from 2025. Nutrition was absent from both the 2026 Budget Speech and the Medium-Term Budget Plan, and the implementation of dedicated nutrition budget lines and mainstreaming across sectors remains limited.\n\nPublic finance is therefore central to addressing malnutrition in Zambia. The Government continues to mobilise financial and technical resources through the Medium-Term Budget Plans, with nutrition investments coordinated under the Public Finance Management for Nutrition in Children (PF4C-N). Under the decentralised system, strengthening Local Authorities’ capacity to plan, track, and report on nutrition budgets is critical. Increased and better coordinated investments across health, education, agriculture, fisheries and livestock, water and sanitation, and social protection are essential to improve outcomes for children, adolescents, and women.\n",
+  "taskType": {
+    "children": null,
+    "id": 0,
+    "isActive": false,
+    "isDefault": false,
+    "label": "-",
+    "longDescription": null,
+    "order": 0,
+    "parentValueCode": null,
+    "props": {},
+    "shortDescription": null,
+    "value": {
+      "code": "",
+      "tableCode": ""
+    }
+  },
+  "taskDescription": "The Public Finance Officer will support the Nutrition Section, specifically working closely with the UNICEF Nutrition Specialist. S/he will contribute to the section’s policy work, focusing on Public Finance Management for Nutrition in Children (PF4C-N) and multi-sectoral nutrition coordination capacity building at sub-national level, to support the Government of Zambia’s making informed budgetary decisions to address malnutrition. Areas to be covered include:\n\ni.\tAnnual Planning and Budget Formulation: Supporting the alignment of national nutrition plans with Mid Term Budget Plans (MTBP) processes, to help ensure focus includes linking policy commitments in development of plans. This includes contributing to costing of nutrition plans.  \nii.\tMonitoring Budget Allocation, Tracking, and Execution: Assist in monitoring and tracking nutrition budgets, especially at sub-national levels, to understand the level of budget allocation and execution towards nutrition intervention.  \niii.\tBuilding Capacity in Public Finance Management: Support and capacity building for Government programme managers in public finance management for nutrition and governance at provincial and district level. \niv.\tSupport capacity building for District Food and Nutrition Coordinators and their Local Authorities supervisors in multi-sectoral nutrition coordination for joint planning, budgeting, and monitoring. \nv.\tSupporting Data Analysis and Reporting: Support data extraction, analysis, and reporting within frameworks such as the UNICEF Public Finance for Nutrition (PF4C-N), contributing to evidence-based decision-making and advocacy.\n",
+  "isFullyFunding": true,
+  "additionalEligibilityCriteria": "This assignment is funded by the Government of the Republic of Ireland and therefore specific criteria apply:\n\n- Candidates must be Irish citizens or a European Economic Area nationals with an unrestricted right to reside in Ireland or have a declaration of refugee status from the Minister for Justice and Law Reform. \n\n\n\nAPPLICATION\n- You may apply to a maximum of three assignments and indicate the order of preference in the ‘Additional remarks’ field when filling in the application form. \n-- Preference will be given to candidates who have not served as UN Volunteers funded by Ireland before\n- Application deadline: 16 August 2026\n\n \nSELECTION\n- Only shortlisted candidates will be contacted. The selection will be done by the UN Host Entity at the level of the country of assignment.\n\n+++ UN Volunteer entitlement calculator: https://app.unv.org/calculator +++",
+  "requiredExperience": 0,
+  "unitOfExperience": 1,
+  "requiredSkillExperience": "•\tDemonstrated interest and/or experience (up to two years) in working in a reputable organization or related public sector institutions, with preference for experience within the Ministry of Finance and National Planning or allied ministries.\n•\tDemonstrated interest and/or experience (up to two years)  in budget analysis and public finance management, including reviewing, scrutinizing, and interpreting national and subnational budget documents.\n•\tPractical understanding of key budget instruments including Yellow Books, Medium-Term Budget Plans (MTBPs), Annual Budget Estimates, and Budget Speeches.\n•\tStrong understanding of decentralization and intergovernmental fiscal processes, including Local Government planning and budgeting systems in Zambia.\n•\tExposure to nutrition related programs will be considered an added advantage.\n•\tBe able to work independently as well as with a team in an international, multicultural and interdisciplinary environment and establish harmonious and effective working relationships both within and outside the organization.\n•\tExcellent communication and writing skills of the English language, including ability to present information at different levels and to different technical and non-technical audiences as well as drafting publishable documents.\n•\tExcellent interpersonal skills; culturally and socially sensitive; ability to work inclusively and collaboratively with a range of partners, including grassroots community members, religious and youth organizations, and authorities at different levels; familiarity with tools and approaches of communications for development.\n•\tAbility to work and adapt professionally and effectively in a challenging environment; ability to work effectively in a multicultural team of international and national personnel; and office technology equipment.\n•\tStrong communication, coordination, drafting, analytical, and interpersonal skills.\n•\tProficiency in Microsoft Office applications (Word, Excel, PowerPoint) and ability to support reporting, documentation, and stakeholder engagement processes.\n",
+  "languages": [
+    {
+      "isRequired": true,
+      "language": {
+        "children": null,
+        "id": 398,
+        "isActive": true,
+        "isDefault": false,
+        "label": "English",
+        "longDescription": "English",
+        "order": 1,
+        "parentValueCode": null,
+        "props": null,
+        "shortDescription": "English",
+        "value": {
+          "code": "LAN_ENG",
+          "tableCode": "Language"
+        }
+      },
+      "level": {
+        "children": null,
+        "id": 63,
+        "isActive": true,
+        "isDefault": false,
+        "label": "Fluent",
+        "longDescription": "Fluent",
+        "order": 4,
+        "parentValueCode": null,
+        "props": null,
+        "shortDescription": "Fluent",
+        "value": {
+          "code": "FLUENT",
+          "tableCode": "LangLevel"
+        }
+      }
+    }
+  ],
+  "expertiseAreas": [
+    {
+      "children": null,
+      "id": 2180,
+      "isActive": true,
+      "isDefault": false,
+      "label": "Economics, poverty reduction, livelihoods",
+      "longDescription": "Economics, poverty reduction, livelihoods",
+      "order": 4,
+      "parentValueCode": null,
+      "props": null,
+      "shortDescription": "Economics, poverty reduction, livelihoods",
+      "value": {
+        "code": "AOE_104",
+        "tableCode": "AreaOfExpertise"
+      }
+    },
+    {
+      "children": null,
+      "id": 2210,
+      "isActive": true,
+      "isDefault": false,
+      "label": "Finance, accounting",
+      "longDescription": "Finance, accounting",
+      "order": 34,
+      "parentValueCode": null,
+      "props": null,
+      "shortDescription": "Finance, accounting",
+      "value": {
+        "code": "AOE_603",
+        "tableCode": "AreaOfExpertise"
+      }
+    },
+    {
+      "children": null,
+      "id": 2178,
+      "isActive": true,
+      "isDefault": false,
+      "label": "Community development",
+      "longDescription": "Community development",
+      "order": 2,
+      "parentValueCode": null,
+      "props": null,
+      "shortDescription": "Community development",
+      "value": {
+        "code": "AOE_102",
+        "tableCode": "AreaOfExpertise"
+      }
+    }
+  ],
+  "requiredEducation": {
+    "children": null,
+    "id": 67,
+    "isActive": true,
+    "isDefault": false,
+    "label": "Bachelor's degree",
+    "longDescription": "Bachelor's degree",
+    "order": 3,
+    "parentValueCode": null,
+    "props": null,
+    "shortDescription": "Bachelor's degree",
+    "value": {
+      "code": "BACH_DEG",
+      "tableCode": "QuaLevel"
+    }
+  },
+  "specializationArea": "Public Finance, Economics, Social Sciences, Business Administration or any related field.",
+  "drivingLicense": null,
+  "requiredDrivingLicense": false,
+  "competency": "Accountability\nAdaptability and Flexibility\nEthics and Values\nIntegrity\nRespect for diversity\n",
+  "livingConditions": "Zambia is a land-linked, resource-rich country with sparsely populated land in the centre of Southern Africa. It shares its border with eight countries (Angola, Botswana, Democratic Republic of Congo, Malawi, Mozambique, Namibia, Tanzania, and Zimbabwe) that serve as an expanded market for its goods.\n\nLusaka is the capital of the Republic of Zambia. The climate is sunny and temperate, but it can be very cold during few months, with freezing temperature at times especially during the night. It is therefore advisable to bring warm clothing and foresee using heaters and other heating options when necessary. As the commercial and cultural centre of Zambia, Lusaka has seen rapid development in recent decades, with reasonable transportation connections and widely spoken English making the city highly attractive to vacationers and experts alike. Unemployment and poverty are issues in the city, and beyond. Key industries for the region and Zambia as a whole, include mining, agriculture, and tourism. Like most Southern African cities, life in Lusaka will require some adjustments for a person moving from outside the region, but the potential rewards and opportunities for experiences are well worth the effort.\n\nLusaka hosts several international organisation and embassies/diplomatic missions, therefore there is a very large community of expatriates from around the world. Housing is most of the time readily available and of good standard options are available. Most foodstuffs, beverages, household goods, furniture, and clothing, mostly imported from South Africa, Europe, and China while some ranges of local brands are available at a competitive price to imports. Meat, fish, fresh fruits, and vegetables are reasonably priced and abundantly available.\n\nThe basic infrastructures roads, utilities, and telecommunications are of reasonable standard, although the city experiences power outages from time to time. Medical facilities are still largely inadequate, although several private clinics and hospitals provide reasonably good routine care. Several restaurants around the city serve local or international cuisine and there are numerous social and sports facilities (fitness, tennis, swimming, riding, golf, etc.) in the major hotels or in different establishments around the city. There are no major or special security concerns within Lusaka city limits. For more information, please visit http://zambiatourism.com.\n",
+  "publishDate": "2026-08-31T14:13:54.7248249",
+  "sourcingEndDate": "2026-09-13T00:00:00",
+  "status": {
+    "children": null,
+    "id": 11,
+    "isActive": true,
+    "isDefault": false,
+    "label": "Recruiting",
+    "longDescription": "In advertising",
+    "order": 7,
+    "parentValueCode": null,
+    "props": {
+      "buttonClass": "btn-special",
+      "buttonLabel": "Approve and publish",
+      "confirmationMessage": "Are you sure you want to approve and publish this DoA?"
+    },
+    "shortDescription": "In advertising",
+    "value": {
+      "code": "DOA_SOURCING",
+      "tableCode": "DoaState"
+    }
+  },
+  "volunteersCategoryCode": "INT_ASO_PRE_FTM_LTR",
+  "hostEntity": {
+    "name": "UNICEF",
+    "institution": {
+      "value": {
+        "code": "CF",
+        "tableCode": "Institution"
+      }
+    }
+  },
+  "batch": {
+    "donorPriorities": "-"
+  },
+  "volunteersCategoryDetails": {
+    "assignmentDuration": {
+      "label": "Long-term",
+      "value": {
+        "code": "LONGTERM",
+        "tableCode": "AssignmentDuration"
+      }
+    },
+    "categoryName": {
+      "label": "Associate UCoS from Apr2026",
+      "value": {
+        "code": "ASSOCIATE",
+        "tableCode": "CategoryName"
+      }
+    },
+    "categoryType": {
+      "label": "International",
+      "value": {
+        "code": "INTERNATIONAL",
+        "tableCode": "VolunteerType"
+      }
+    },
+    "workArrangement": {
+      "label": "Full-time",
+      "value": {
+        "code": "FULLTIME",
+        "tableCode": "WorkArrangement"
+      }
+    },
+    "workLocation": {
+      "label": "On UN premises",
+      "value": {
+        "code": "ONPREMISE",
+        "tableCode": "WorkLocation"
+      }
+    },
+    "volunteersCategory": {
+      "value": {
+        "code": "INT_ASO_PRE_FTM_LTR",
+        "tableCode": "Category"
+      }
+    }
+  },
+  "_unv_public_render_context": {
+    "translations": {
+      "helpers.months": "months",
+      "helpers.weeks": "weeks",
+      "helpers.unknown": "Unknown",
+      "helpers.incomplete": "Incomplete",
+      "helpers.not_applicable": "Not applicable",
+      "opportunities.helpers.months": "months",
+      "opportunities.helpers.weeks": "weeks",
+      "opportunities.helpers.unknown": "Unknown",
+      "opportunities.helpers.online": "Online",
+      "opportunities.helpers.onsite": "Onsite",
+      "opportunities.helpers.affinity": "Affinity",
+      "opportunities.helpers.yes": "Yes",
+      "opportunities.helpers.no": "No",
+      "opportunities.helpers.sponsored": "Fully-funded",
+      "opportunities.helpers.regular": "Regular",
+      "opportunities.helpers.single": "Direct",
+      "opportunities.helpers.competitive": "Competitive",
+      "opportunities.helpers.adapted": "Adapted",
+      "opportunities.helpers.not_adapted": "Not adapted",
+      "opportunities.helpers.referees_type.pro": "Yes - Professional",
+      "opportunities.helpers.referees_type.acad": "Yes - Academic",
+      "volunteer_profile.languages.level": "Level",
+      "doa.funding_labels.fully_funded": "Fully funded",
+      "doa.funding_labels.single_source": "Direct recruitment",
+      "doa.funding_labels.regular_sourcing": "Competitive recruitment",
+      "doa.funding_labels.badge_stop_sourcing": "Advertising stopped",
+      "doa.funding_labels.date_of_end_sourcing": "Advertisement end date:",
+      "eligibility.noExperience": "No experience required",
+      "doa_detail.headers.opportunity_details": "Description of assignment (DoA) details",
+      "doa_detail.headers.opportunity_manager": "Description of assignment (DoA) manager",
+      "doa_detail.headers.general": "General",
+      "doa_detail.headers.details": "Details",
+      "doa_detail.headers.requirements": "Assignment requirements",
+      "doa_detail.headers.elegibility_criteria": "Eligibility criteria",
+      "doa_detail.headers.assignment_detail": "DOA-Assignment detail",
+      "doa_detail.headers.funding_information": "Funding information",
+      "doa_detail.headers.other": "Other information",
+      "doa_detail.headers.accordion_title": "Funding details",
+      "doa_detail.headers.archived_coas": "Archived Coas",
+      "doa_detail.headers.archive_funding_information": "Archive funding information",
+      "doa_detail.headers.online_warning": "Attention! Please note that this is an Online Volunteering assignment. It's a short-term, task-based and non-contractual remote assignment; Online Volunteers are not UN Volunteers and do not receive any allowance or entitlements as part of the Online Volunteer assignment but receive a certificate of appreciation after successful completion. In addition, UNV  is not involved in the selection process or collaboration.",
+      "doa_detail.headers.online_warning_title": "I understand",
+      "doa_detail.labels.spiLabel": "Code name",
+      "doa_detail.labels.areas_of_expertise": "Areas of expertise",
+      "doa_detail.labels.no_areas_of_expertise": "No areas of expertise assigned",
+      "doa_detail.labels.assigned_by_ai": "ASSIGNED BY AI",
+      "doa_detail.labels.spiDescription": "SPI Exceptions",
+      "doa_detail.labels.views": "views",
+      "doa_detail.labels.vacants": "assignment(s)",
+      "doa_detail.labels.status": "Status",
+      "doa_detail.labels.managed_by": "Managed by",
+      "doa_detail.labels.host_entity": "Host entity",
+      "doa_detail.labels.full_title": "Description of assignment title",
+      "doa_detail.labels.assignment_country": "Assignment country",
+      "doa_detail.labels.assignment_country_warning": "The candidate's nationality or legal residency must be the same as the country of the description of assignment",
+      "doa_detail.labels.type": "Type",
+      "doa_detail.labels.volunteer_category": "Volunteer category",
+      "doa_detail.labels.un_volunteers_number": "Number of assignments",
+      "doa_detail.labels.start_date": "Expected start date",
+      "doa_detail.labels.end_date": "Expected end date",
+      "doa_detail.labels.duration": "Duration",
+      "doa_detail.labels.sdg_type": "Sustainable Development Goal",
+      "doa_detail.labels.assignments": "Assignments",
+      "doa_detail.labels.context": "Context",
+      "doa_detail.labels.mission_and_objectives": "Mission and objectives",
+      "doa_detail.labels.task_description": "Task description",
+      "doa_detail.labels.expertise_area": "Area(s) of expertise",
+      "doa_detail.labels.specialization_area": "Specialization area",
+      "doa_detail.labels.months": "months",
+      "doa_detail.labels.weeks": "weeks",
+      "doa_detail.labels.possibility_of_extension": "(with possibility of extension)",
+      "doa_detail.labels.possibility_of_extension_yes": "Yes",
+      "doa_detail.labels.possibility_of_extension_no": "No",
+      "doa_detail.labels.different": "different",
+      "doa_detail.labels.languages": "Languages",
+      "doa_detail.labels.work_location": "Work location",
+      "doa_detail.labels.number_of_assignments": "Number of Assignments",
+      "doa_detail.labels.work_arrangement": "Work schedule",
+      "doa_detail.labels.modality": "Modality",
+      "doa_detail.labels.standard_entitlements": "Standard Entitlements",
+      "doa_detail.labels.short_term_benefits": "Short-term benefits and allowances",
+      "doa_detail.labels.long_term_benefits": "Long-term benefits and allowances",
+      "doa_detail.labels.entitlements_popup_message": "Short-term entitlements apply for this assignment",
+      "doa_detail.labels.short_term_benefits_message": "Reduced or short-term benefits apply as per the Conditions of Service for durations of 3 months or less",
+      "doa_detail.labels.long_term_benefits_message": "Long-term entitlements apply for this assignment",
+      "doa_detail.labels.academic_qualifications": "Academic qualifications",
+      "doa_detail.labels.professional_experience": "Profile experience",
+      "doa_detail.labels.references": "References",
+      "doa_detail.labels.contact_current_employer": "* May contact current employer",
+      "doa_detail.labels.required_education": "Required education level",
+      "doa_detail.labels.relevant_experience": "Relevant experience",
+      "doa_detail.labels.required_experience": "Required experience",
+      "doa_detail.labels.required_experience_warning": "Required experience doesn't match the eligibility criteria",
+      "doa_detail.labels.living_conditions": "Living conditions and remarks",
+      "doa_detail.labels.inclusivity_statment": "Inclusivity statement",
+      "doa_detail.labels.vaccination_notice": "Note on Covid-19 vaccination requirements",
+      "doa_detail.labels.competencies_and_values": "Competencies and values",
+      "doa_detail.labels.driving_licence": "Driving license",
+      "doa_detail.labels.duty_stations": "Duty stations",
+      "doa_detail.labels.duty_station": "Duty station",
+      "doa_detail.labels.people_with_disabilities": "DoA reserved for persons with disabilities",
+      "doa_detail.labels.people_with_disabilities_yes": "Yes",
+      "doa_detail.labels.people_with_disabilities_no": "No",
+      "doa_detail.labels.reasonable_accommodation": "Reasonable accommodation",
+      "doa_detail.labels.reasonable_accommodation_yes": "Yes",
+      "doa_detail.labels.reasonable_accommodation_no": "No",
+      "doa_detail.labels.accessibility_checklist": "Accessibility measures in place",
+      "doa_detail.labels.accessibility_comment": "Additional accessibility info",
+      "doa_detail.labels.assignment_item": "DOA-Assignment {{i}}",
+      "doa_detail.labels.candidateName": "Candidate name",
+      "doa_detail.labels.volunteerName": "Volunteer name",
+      "doa_detail.labels.doaCandidateId": "Assignment id",
+      "doa_detail.labels.un_volunteer_reports_to": "UN Volunteer reports to",
+      "doa_detail.labels.hiring_manager": "Hiring manager",
+      "doa_detail.labels.supervisor": "Supervisor",
+      "doa_detail.labels.onsite_opportunity_type": "DoA type",
+      "doa_detail.labels.onsite_opportunity_type_fully_funded": "Fully funded",
+      "doa_detail.labels.onsite_opportunity_type_entity_funded": "Entity funded",
+      "doa_detail.labels.hours_week": "For how many hours per week will the volunteer be required?",
+      "doa_detail.labels.eligibility_criteria_age": "Age",
+      "doa_detail.labels.eligibility_criteria_nationality": "Nationality",
+      "doa_detail.labels.additional_eligibility_criteria": "Additional eligibility criteria",
+      "doa_detail.labels.donor_priorities": "Donor priorities",
+      "doa_detail.labels.language": "Language",
+      "doa_detail.labels.duration_warning": "The current duration doesn't match the eligibility criteria",
+      "doa_detail.labels.scam_warning": "Scam warning",
+      "doa_detail.labels.RequiredSkillExperience": "Skills and experience",
+      "doa_detail.labels.eligibility_criteria_required_experience": "Required experience",
+      "doa_detail.labels.disabilityLabels.mainEntrance": "Main entrance",
+      "doa_detail.labels.disabilityLabels.officeSpaces": "Office spaces",
+      "doa_detail.labels.disabilityLabels.officeEquipment": "Office equipment",
+      "doa_detail.labels.disabilityLabels.securityAndEmeregency": "Security & emergency",
+      "doa_detail.labels.disabilityLabels.facilitiesSignposted": "Facilities signposted",
+      "doa_detail.labels.disabilityLabels.transportationAdapted": "Transportation adapted",
+      "doa_detail.labels.disabilityLabels.signsInBraile": "Signs available in braille",
+      "doa_detail.labels.disabilityLabels.alternativePrinters": "Alternative printers",
+      "doa_detail.labels.disabilityLabels.assistiveTechnology": "Assistive technology",
+      "doa_detail.labels.disabilityLabels.iTAccesibility": "IT accessibility",
+      "doa_detail.labels.disabilityLabels.hearingCues": "Hearing cues",
+      "doa_detail.labels.disabilityLabels.signLanguage": "Sign language",
+      "doa_detail.labels.disabilityLabels.captioning": "Captioning",
+      "doa_detail.labels.disabilityLabels.visualCues": "Visual cues",
+      "doa_detail.labels.disabilityDescriptions.mainEntrance": "The main entrance (or an alternative entrance) of the building is wheelchair accessible (e.g. ramps, handrails, elevators, etc. are available)",
+      "doa_detail.labels.disabilityDescriptions.officeSpaces": "At least one office/work station, one conference room and one bathroom are wheelchair accessible (please confirm that doors, routes and corridors that lead to these spaces are wide enough for wheelchair use)",
+      "doa_detail.labels.disabilityDescriptions.officeEquipment": "Tables, printers and other office equipment are accessible by a person using a wheelchair.",
+      "doa_detail.labels.disabilityDescriptions.securityAndEmeregency": "The security and emergency protocol take into account persons with disabilities (e.g. evacuation chair is available, etc.)",
+      "doa_detail.labels.disabilityDescriptions.facilitiesSignposted": "All accessible facilities are marked with symbols or signs",
+      "doa_detail.labels.disabilityDescriptions.transportationAdapted": "Accessible transportation to commute to/from the office is available (e.g. public transportation, and/or official vehicle that is accessible for wheelchair users, etc.)",
+      "doa_detail.labels.disabilityDescriptions.signsInBraile": "Signs are also in braille, or the text characters are raised (e.g. bathroom, offices, etc.)",
+      "doa_detail.labels.disabilityDescriptions.alternativePrinters": "Alternative printing can be provided (e.g. large-printing and/or braille printing)",
+      "doa_detail.labels.disabilityDescriptions.assistiveTechnology": "Assistive technology can be provided upon request (e.g. braille note-taker, printers, screen-reader software, etc.)",
+      "doa_detail.labels.disabilityDescriptions.iTAccesibility": "IT systems and tools are accessible (e.g. website, intranet, etc.)",
+      "doa_detail.labels.disabilityDescriptions.hearingCues": "The emergency warning system has hearing cues",
+      "doa_detail.labels.disabilityDescriptions.signLanguage": "Sign language interpretation can be provided upon request (e.g. English, American, and/or other languages)",
+      "doa_detail.labels.disabilityDescriptions.captioning": "Captioning services can be provided upon request (e.g. on-site or remote CART services, close-captioning for video",
+      "doa_detail.labels.disabilityDescriptions.visualCues": "The emergency warning system has visual cues",
+      "doa_detail.labels.primaryTask": "What expertise is required for this task?",
+      "doa_detail.labels.secondaryTask": "Does this task require an additional, secondary area of expertise?",
+      "doa_detail.labels.ServingCandidate": "Serving DOA-Candidate",
+      "doa_detail.labels.cancelled": "Cancelled",
+      "doa_detail.labels.task_type": "Task type",
+      "doa_detail.labels.reference_checks": "Reference checks requested by host entity",
+      "doa_detail.labels.referees_type.no": "No",
+      "doa_detail.labels.referees_type.yes": "Yes",
+      "doa_detail.labels.referees_type.pro": "Yes - Professional references only",
+      "doa_detail.labels.referees_type.acad": "Yes - Academic references only",
+      "doa_detail.inclusivity_statment": "United Nations Volunteers is an equal opportunity programme that welcomes applications from qualified professionals. We are committed to achieving diversity in terms of gender, care protected characteristics. As part of their adherence to the values of UNV, all UN Volunteers commit themselves to combat any form of discrimination, and to promoting respect for human rights and individual dignity, without distinction of a person’s race, sex, gender identity, religion, nationality, ethnic origin, sexual orientation, disability, pregnancy, age, language, social origin or other status.",
+      "doa_detail.vaccination_notice": "Selected candidates for certain occupational groups may be subject to inoculation (vaccination) requirements, including against SARS-CoV-2 (Covid-19) in line with the applicable host entity policy",
+      "doa_detail.Unicef_first_para": "UNICEF offers reasonable accommodation for UN Volunteers with disabilities. This may include, for example, accessible software, travel assistance for missions or personal attendants. We encourage you to disclose your disability during your application in case you need reasonable accommodation during the recruitment process and afterwards in your assignment. ",
+      "doa_detail.Unicef_second_para": "In addition to duty station-specific vaccine requirements, appointments are subject to confirmation of fully-vaccinated status against SARS-CoV-2 (Covid-19) with a World Health Organization (WHO)-endorsed vaccine, which must be met prior to taking up the appointment. It does not apply to UN Volunteers who will work remotely and are not expected to work on or visit UNICEF premises, programme delivery locations or directly interact with communities UNICEF works with, nor to travel to perform functions for UNICEF for the duration of their contracts.",
+      "doa_detail.un_fee_notice": "The United Nations does not charge any application, processing, training, interviewing, testing or other fee in connection with the application or recruitment process. Should you receive a solicitation for the payment of a fee, please disregard it. Furthermore, please note that emblems, logos, names and addresses are easily copied and reproduced. Therefore, you are advised to apply particular care when submitting personal information on the web.",
+      "doa_detail.volunteerism_description": "Volunteerism is understood as a wide range of activities undertaken of free will, for the general public good, for which monetary reward is not the principal motivating factor.",
+      "doa_detail.helpers.education_connector": "in",
+      "doa_detail.helpers.experience_connector": "years of experience in",
+      "doa_detail.helpers.experience_without_area": "years of experience",
+      "doa_detail.helpers.required_or_desirable": "Required or desirable",
+      "doa_detail.helpers.required": "Required",
+      "doa_detail.helpers.desirable": "Desirable",
+      "doa_detail.helpers.assignments_empty": "No assignments meet the criteria",
+      "doa_detail.helpers.eligibility_criteria_national": "Candidate must be a national or legal resident of the country of assignment.",
+      "doa_detail.helpers.eligibility_criteria_international": "Candidate must be a national of a country other than the country of assignment.",
+      "doa_detail.helpers.eligibility_criteria_refugee": "Application to this assignment is open exclusively to individuals residing in the country of assignment, with stateless, refugee or similar protective status.",
+      "doa_detail.helpers.nothingToShow": "There is nothing to show here at the moment",
+      "doa_detail.helpers.no_experience": "No experience required",
+      "doa_detail.helpers.eligibility_criteria_required_experience_community": "No experience required",
+      "doa_detail.helpers.months": "months",
+      "doa_detail.helpers.years": "years",
+      "doa_detail.helpers.month": "month",
+      "doa_detail.helpers.year": "year",
+      "candidates.helpers.years": "years",
+      "candidates.helpers.months": "months",
+      "candidates.helpers.unknown": "Unknown",
+      "candidates.helpers.yes": "Yes",
+      "candidates.helpers.no": "No",
+      "candidates.helpers.requested": "Requested",
+      "candidates.helpers.three_months": "More than 3 months left in an onsite assignment.",
+      "candidates.helpers.experience_required": "Candidate does not have enough experience for this category",
+      "candidates.helpers.none": "None"
+    },
+    "display_config": {
+      "sections": [
+        1000,
+        2000,
+        3000,
+        4000,
+        5000
+      ],
+      "fields": [
+        1001,
+        1002,
+        1003,
+        1004,
+        1011,
+        1010,
+        1030,
+        1040,
+        1050,
+        1009,
+        1006,
+        1012,
+        1005,
+        1007,
+        1008,
+        1013,
+        2001,
+        2002,
+        2003,
+        3001,
+        3002,
+        3003,
+        3004,
+        3005,
+        4004,
+        4001,
+        4002,
+        4003,
+        4005,
+        4006,
+        4007,
+        5001,
+        1017,
+        1014,
+        1015,
+        1016
+      ],
+      "badges": [],
+      "headers": []
+    },
+    "category_configuration_enabled": null,
+    "category_sections": null
+  },
+  "_unv_duty_station_response": [
+    {
+      "dutyStation": {
+        "children": null,
+        "value": {
+          "tableCode": "DutyStation",
+          "code": "4980"
+        },
+        "id": 15875,
+        "order": 1645,
+        "label": "Lusaka",
+        "shortDescription": "Lusaka",
+        "longDescription": "Lusaka",
+        "isDefault": true,
+        "props": {
+          "country": {
+            "code": "ZMB",
+            "id": 223,
+            "order": 223,
+            "label": null,
+            "shortDescription": "Zambia",
+            "longDescription": "Zambia",
+            "isDefault": false,
+            "props": null,
+            "parentValueCode": null,
+            "isActive": true,
+            "localizedValues": null
+          },
+          "hardshipClass": "B",
+          "isFamily": true,
+          "isHazardPay": false,
+          "pamAmount": 43.0,
+          "steps": 1,
+          "priorityDutyStation": false,
+          "isDefault": true
+        },
+        "parentValueCode": null,
+        "isActive": true
+      },
+      "dutyStationFromAnotherCountry": false,
+      "customDutyStation": null,
+      "isCustomDutyStation": false,
+      "id": 0
+    }
+  ],
+  "_unv_eligibility_criteria": [
+    {
+      "children": null,
+      "value": {
+        "tableCode": "ElegibilityCriteria",
+        "code": "ElegibilityNationalityInternationalAssociatePremiseFulltimeLongTerm"
+      },
+      "id": 621,
+      "order": 3,
+      "label": "Candidate must be a national of a country other than the country of assignment.",
+      "shortDescription": "Required nationality",
+      "longDescription": "Required nationality",
+      "isDefault": true,
+      "props": {
+        "doa": false,
+        "doaCreationForm": false,
+        "minValue": 0,
+        "maxValue": 100
+      },
+      "parentValueCode": null,
+      "isActive": true
+    },
+    {
+      "children": null,
+      "value": {
+        "tableCode": "ElegibilityCriteria",
+        "code": "ElegibilityDurationRequiredInternationalAssociatePremiseFulltimeLongTerm"
+      },
+      "id": 620,
+      "order": 2,
+      "label": "Maximum years of service as an international UN Volunteer is 4 years.",
+      "shortDescription": "Required duration",
+      "longDescription": "Required duration",
+      "isDefault": true,
+      "props": {
+        "doa": true,
+        "doaCreationForm": true,
+        "minValue": 3,
+        "maxValue": 48
+      },
+      "parentValueCode": null,
+      "isActive": true
+    },
+    {
+      "children": null,
+      "value": {
+        "tableCode": "ElegibilityCriteria",
+        "code": "ElegibilityAgeRequiredInternationalAssociatePremiseFulltimeLongTerm"
+      },
+      "id": 619,
+      "order": 1,
+      "label": "Required age",
+      "shortDescription": "Required age",
+      "longDescription": "Required age",
+      "isDefault": true,
+      "props": {
+        "doa": false,
+        "doaCreationForm": false,
+        "minValue": 18,
+        "maxValue": 80
+      },
+      "parentValueCode": null,
+      "isActive": true
+    },
+    {
+      "children": null,
+      "value": {
+        "tableCode": "ElegibilityCriteria",
+        "code": "ElegibilityExperienceRequiredInternationalAssociatePremiseFulltimeLongTerm"
+      },
+      "id": 618,
+      "order": 0,
+      "label": "Required experience",
+      "shortDescription": "Required experience",
+      "longDescription": "Required experience",
+      "isDefault": true,
+      "props": {
+        "doa": true,
+        "doaCreationForm": true,
+        "minValue": 1,
+        "maxValue": 1200
+      },
+      "parentValueCode": null,
+      "isActive": true
+    }
+  ],
+  "isSingleSource": false,
+  "isSourcingActive": true
+}

@@ -13,6 +13,18 @@ from urllib.parse import urljoin, urlsplit
 _LOGGER = logging.getLogger(__name__)
 
 
+class BlankLineSafeRobotFileParser(urllib.robotparser.RobotFileParser):
+    """Preserve rule groups across blank/comment-only lines.
+
+    RFC9309 sections2.1/2.2 allow empty lines within a group; only a subsequent
+    user-agent group or EOF terminates it. Python's legacy parser instead drops
+    later rules after a blank line. Its remaining matching behavior is unchanged.
+    """
+
+    def parse(self, lines: Iterable[str]) -> None:
+        super().parse([line for line in lines if line.split("#", 1)[0].strip()])
+
+
 @dataclass(slots=True)
 class RobotsPolicy:
     user_agent: str = "jobagg/0.1"
@@ -79,18 +91,14 @@ def validate_policy(policy: RobotsPolicy) -> list[str]:
     if not policy.honor_robots_txt and not getattr(policy, "_default_override_reason", None):
         # Default override is recorded separately; we leave the global default
         # alone here unless the YAML loader populated an attribute.
-        warnings.append(
-            "default policy disables honor_robots_txt without override_reason"
-        )
+        warnings.append("default policy disables honor_robots_txt without override_reason")
     for host, config in policy.domains.items():
         honors = config.get("honor_robots_txt", True)
         if honors:
             continue
         reason = str(config.get("override_reason") or "").strip()
         if not reason:
-            warnings.append(
-                f"domain {host!r} disables honor_robots_txt without override_reason"
-            )
+            warnings.append(f"domain {host!r} disables honor_robots_txt without override_reason")
     return warnings
 
 
@@ -114,9 +122,7 @@ def explicit_robots_stance_gaps(
             if not isinstance(config, Mapping) or not isinstance(
                 config.get("honor_robots_txt"), bool
             ):
-                gaps.append(
-                    f"{source_id}: host {host!r} lacks explicit honor_robots_txt"
-                )
+                gaps.append(f"{source_id}: host {host!r} lacks explicit honor_robots_txt")
     return gaps
 
 
@@ -152,7 +158,7 @@ class RobotsChecker:
         root = f"{parts.scheme}://{parts.netloc}"
         parser = self._parsers.get(root)
         if parser is None:
-            parser = urllib.robotparser.RobotFileParser()
+            parser = BlankLineSafeRobotFileParser()
             parser.set_url(urljoin(root, "/robots.txt"))
             try:
                 parser.read()

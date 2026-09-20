@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from jobagg.db import JobDatabase
 from jobagg.filters.query import search_collected_jobs
 from jobagg.filters.saved_searches import (
@@ -32,6 +32,9 @@ from jobagg.scoring import (
 )
 
 from job_api.config import ApiSettings, load_settings
+from job_api.listing_inventory import listing_inventory
+from job_api.publication_gate import PublicationGateMiddleware
+from job_api.attachments import list_job_attachments, download_job_attachment
 from job_api.auth import FailedAuthLimiter, require_lan_auth
 from job_api.models import (
     ApplicationRecord,
@@ -56,6 +59,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         version="0.1.0",
         dependencies=[Depends(require_lan_auth(settings, auth_limiter))],
     )
+
+    app.add_middleware(PublicationGateMiddleware, state_path=settings.db_path.parent / ".jobagg-publication-state.json")
 
     def db() -> JobDatabase:
         return JobDatabase(settings.db_path)
@@ -108,6 +113,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             payload["results"] = results
         _annotate_result_url_trust(payload)
         return SearchResponse(**payload)
+
+    @app.get("/api/job-attachment")
+    def job_attachment(job_key: str, attachment_id: str):
+        _require_db(settings.db_path, settings.repo_root)
+        return download_job_attachment(settings.db_path, job_key, attachment_id)
 
     @app.get("/api/job-detail")
     def job_detail_query(job_key: str) -> dict[str, Any]:
@@ -191,6 +201,17 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             )]
         return {"recent_source_runs": recent_runs}
 
+    @app.get("/api/listing-inventory")
+    def published_listing_inventory(
+        source: str | None = Query(default=None, min_length=1, max_length=200),
+        pending_only: bool = False,
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        return listing_inventory(
+            settings.db_path, source=source, pending_only=pending_only, limit=limit, offset=offset
+        )
+
     @app.get("/api/sources")
     def sources() -> dict[str, Any]:
         _require_db(settings.db_path, settings.repo_root)
@@ -260,14 +281,22 @@ def _job_detail_payload(
     job_key: str,
 ) -> dict[str, Any]:
     _require_db(db_path, repo_root)
-    job_key = unquote(job_key)
+    # Framework routing already decodes URL components. Some canonical keys
+    # deliberately retain percent-encoded source slugs, so prefer their exact
+    # identity before supporting callers that pass another encoded form.
     job = database.get_job(job_key)
     if job is None:
+        decoded_key = unquote(job_key)
+        if decoded_key != job_key:
+            job = database.get_job(decoded_key)
+    if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown job_key: {job_key}")
+    job_key = str(job["job_key"])
     job["locations"] = list(database.iter_vacancy_locations(job_key))
     job["classification"] = _job_classification(db_path, job_key)
     job["source_features"] = _job_source_features(db_path, job_key)
     job["deadline_info"] = _deadline_info(job)
+    job["attachments"] = list_job_attachments(db_path, job_key)
     job["display_sections"] = _job_display_sections(job)
     return _annotate_url_trust(job)
 

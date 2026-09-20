@@ -7,6 +7,183 @@ default:
   max_jobs_per_source: 1000
 
 domains:
+  jpn01.safelinks.protection.outlook.com:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  unesco.sharepoint.com:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  unicef.sharepoint.com:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  unu.edu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.oecd-ilibrary.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  # Reviewed attachment origins: preserve robots and conservative pacing.
+  articles.unesco.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  asp.icc-cpi.int:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  cdn.who.int:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  cernbox.cern.ch:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  commission.europa.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  downloads.unido.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  en.unesco.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  euaa.europa.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  europass.europa.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  i.unu.edu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  interagencystandingcommittee.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  jobs.osce.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  talent.osce.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  unesdoc.unesco.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  unsdg.un.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  webapps.ifad.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.amla.europa.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.eiopa.europa.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.fao.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.icc-cpi.int:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.ifad.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.ilo.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.itu.int:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.paho.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.un.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.undp.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.unesco.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.uneval.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.unevaluation.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.unicef.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.unido.org:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  www.who.int:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
+  # Public hosts discovered during full-list/detail reconciliation. These
+  # explicit entries preserve the default crawler rules and pacing.
+  api012.successfactors.eu:
+    honor_robots_txt: true
+  performancemanager5.successfactors.eu:
+    honor_robots_txt: true
+  api8.successfactors.com:
+    honor_robots_txt: true
+  performancemanager8.successfactors.com:
+    honor_robots_txt: true
+  aa293.referrals.selectminds.com:
+    honor_robots_txt: true
+  amla.gestmax.eu:
+    honor_robots_txt: true
+  careers.easa.europa.eu:
+    honor_robots_txt: true
+  careers.euaa.europa.eu:
+    honor_robots_txt: true
+  curia.europa.eu:
+    honor_robots_txt: true
+  data.europa.eu:
+    honor_robots_txt: true
+  ec.europa.eu:
+    honor_robots_txt: true
+  eiopa.gestmax.eu:
+    honor_robots_txt: true
+  erecruitment.eulisa.europa.eu:
+    honor_robots_txt: true
+  euosha.gestmax.eu:
+    honor_robots_txt: true
+  eur-lex.europa.eu:
+    honor_robots_txt: true
+  eurojust.tal.net:
+    honor_robots_txt: true
+  f4e-jobs.gestmax.eu:
+    honor_robots_txt: true
+  jobs.echa.europa.eu:
+    honor_robots_txt: true
+  microsite.frontex.europa.eu:
+    honor_robots_txt: true
+  vacancies.eda.europa.eu:
+    honor_robots_txt: true
+  uvpprdpublicstorage01.blob.core.windows.net:
+    honor_robots_txt: true
+  www.consilium.europa.eu:
+    honor_robots_txt: true
+  www.cor.europa.eu:
+    honor_robots_txt: true
+  www.enisa.europa.eu:
+    honor_robots_txt: true
+  www.etf.europa.eu:
+    honor_robots_txt: true
+  www.euaa.europa.eu:
+    honor_robots_txt: true
+  www.euda.europa.eu:
+    honor_robots_txt: true
+  www.euipo.europa.eu:
+    honor_robots_txt: true
+  www.europol.europa.eu:
+    honor_robots_txt: true
+  www.eurofound.europa.eu:
+    honor_robots_txt: true
+  www.sesarju.eu:
+    honor_robots_txt: true
+
   # Every host referenced by organizations.yaml should have an explicit entry
   # here so sync behavior does not accidentally depend on the default policy.
   wd3.myworkdaysite.com:
@@ -353,3 +530,11 @@ domains:
     honor_robots_txt: false
     min_delay_seconds: 2.0
     override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+  estar.adb.org:
+    honor_robots_txt: true
+  secure.dc7.pageuppeople.com:
+    honor_robots_txt: true
+  thedocs.worldbank.org:
+    honor_robots_txt: true
+  drive.google.com:
+    honor_robots_txt: true

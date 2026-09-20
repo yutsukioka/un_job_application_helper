@@ -1,6 +1,8 @@
 import json
 import re
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from jobagg.adapters.avature import AvatureAdapter
 from jobagg.adapters.base import AdapterContext
@@ -29,12 +31,22 @@ from jobagg.models import OrganizationSource
 
 
 class FakeResponse:
-    def __init__(self, payload=None, *, text=None, headers=None, status_code=200, url="https://example.org/api"):
+    def __init__(
+        self,
+        payload=None,
+        *,
+        text=None,
+        headers=None,
+        status_code=200,
+        url="https://example.org/api",
+        content=None,
+    ):
         self.payload = payload
         self.text = text if text is not None else json.dumps(payload)
         self.headers = headers or {}
         self.status_code = status_code
         self.url = url
+        self.content = content if content is not None else self.text.encode()
 
     def json(self):
         return self.payload
@@ -714,6 +726,17 @@ def test_oracle_hcm_falls_back_to_undp_listing_when_oracle_dns_fails(monkeypatch
 
 
 def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monkeypatch):
+    # Keep this public-listing fixture before its saved closing date. The
+    # fallback behavior must not depend on the day the regression suite runs.
+    from datetime import datetime
+
+    class FixtureDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 1, tzinfo=tz)
+
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm.datetime", FixtureDateTime)
+
     class FakeOracleHTTP:
         def __init__(self):
             self.get_calls = []
@@ -1219,6 +1242,81 @@ def test_static_detail_parser_uses_json_ld_and_deadline_text():
     assert jobs[0].closes_at.isoformat() == "2026-05-24T00:00:00+00:00"
 
 
+def test_static_html_detail_fetch_extracts_pdf_text(monkeypatch):
+    class FakePdfPage:
+        def extract_text(self):
+            return """
+            Associate Press Officer
+            Application Deadline: 24 May 2026
+            Responsibilities: Coordinate public information, media monitoring,
+            stakeholder communication, drafting, publication review, and event
+            support for tribunal outreach and external relations.
+            """
+
+    class FakePdfReader:
+        def __init__(self, stream):
+            assert stream.read(4) == b"%PDF"
+            self.pages = [FakePdfPage()]
+
+    class FakePdfHTTP:
+        def get(self, url, *, headers=None):
+            return FakeResponse(
+                text="%PDF-1.7 binary placeholder",
+                headers={"Content-Type": "application/pdf"},
+                url=url,
+                content=b"%PDF fake test content",
+            )
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=FakePdfReader))
+    adapter = StaticHTMLAdapter(
+        AdapterContext(source=source("static_html"), http=FakePdfHTTP())
+    )
+
+    job = adapter.fetch_detail_for_listing_item(
+        {
+            "href": "https://example.org/vacancy.pdf",
+            "external_id": "VA-1",
+            "title": "Associate Press Officer",
+        }
+    )
+
+    assert job is not None
+    assert job.external_id == "VA-1"
+    assert job.title == "Associate Press Officer"
+    assert job.description is not None
+    assert "Coordinate public information" in job.description
+    assert "%PDF" not in job.description
+    assert job.closes_at.isoformat() == "2026-05-24T00:00:00+00:00"
+
+
+def test_itlos_link_filter_keeps_only_vacancy_announcement_pdfs():
+    org = source(
+        "static_html",
+        parser="public_links",
+        job_link_hints=["/fileadmin/itlos/documents/registry/VA/"],
+        fetch_details=False,
+    )
+
+    jobs = StaticHTMLAdapter(
+        AdapterContext(source=org, http=JobAggHTTPClient())
+    )._parse_generic_links(
+        """
+        <a href="/fileadmin/itlos/documents/registry/VA/VA_2026_001_Associate_Press_Officer_P-2_En.pdf">
+          Associate Press Officer
+        </a>
+        <a href="/fileadmin/itlos/documents/registry/JPO/Guidelines_JPO_Eng.pdf">
+          Guidelines concerning the Junior Professional Officer Programme
+        </a>
+        <a href="/en/main/the-registry/employment-opportunities/">Employment opportunities</a>
+        """,
+        "https://www.itlos.org/en/main/the-registry/employment-opportunities/",
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Associate Press Officer"
+    assert jobs[0].external_id == "VA_2026_001_Associate_Press_Officer_P-2_En.pdf"
+
+
 def test_static_html_adapter_reports_cloudflare_block_page():
     adapter = StaticHTMLAdapter(
         AdapterContext(
@@ -1276,7 +1374,7 @@ def test_static_html_adapter_rejects_zero_links_without_empty_marker():
 
 
 def test_ipu_static_html_accepts_structural_empty_fixture():
-    fixture = Path("tests/fixtures/ipu/current_empty_2026_05.html").read_text(encoding="utf-8")
+    fixture = (Path(__file__).parent / "fixtures/ipu/current_empty_2026_05.html").read_text(encoding="utf-8")
     adapter = StaticHTMLAdapter(
         AdapterContext(
             source=_ipu_source(),
@@ -1291,7 +1389,7 @@ def test_ipu_static_html_accepts_structural_empty_fixture():
 
 
 def test_ipu_static_html_parses_synthetic_positive_fixture():
-    fixture = Path("tests/fixtures/ipu/synthetic_one_vacancy.html").read_text(encoding="utf-8")
+    fixture = (Path(__file__).parent / "fixtures/ipu/synthetic_one_vacancy.html").read_text(encoding="utf-8")
     adapter = StaticHTMLAdapter(
         AdapterContext(
             source=_ipu_source(),
@@ -1922,8 +2020,12 @@ def test_custom_html_fetches_detail_for_selective_refresh():
 def test_peoplesoft_fetches_detail_for_selective_refresh():
     html = """
     <html>
-      <head><title>PeopleSoft Role</title></head>
-      <body><main><p>PeopleSoft detail body.</p></main></body>
+      <body>
+        <span class="ps_box-value" id="HRS_SCH_WRK2_HRS_JOB_OPENING_ID">123</span>
+        <span class="ps_box-value" id="HRS_SCH_WRK2_POSTING_TITLE">PeopleSoft Role</span>
+        <span class="ps-text" id="HRS_SCH_WRK_DESCR100$0lbl">Job Role</span>
+        <span class="ps_box-value" id="HRS_SCH_PSTDSC_DESCRLONG$0"><p>PeopleSoft detail body.</p></span>
+      </body>
     </html>
     """
     adapter = PeopleSoftAdapter(

@@ -83,6 +83,12 @@ _TRANSIENT_RUN_MARKERS = (
     "connection aborted",
     "connection refused",
     "temporarily unavailable",
+    "incompleteread",
+    "gaierror",
+    "name or service not known",
+    "nodename nor servname provided",
+    "getaddrinfo failed",
+    "temporary failure in name resolution",
 )
 _BLOCKED_RUN_MARKERS = ("http 401", "http 403", "forbidden", "blocked", "captcha")
 
@@ -172,6 +178,7 @@ def sync_source(
         _record_list_breaker_failure(db, bounded_source, result.diagnostics, error=exc)
         return _finish_result(db, result)
 
+    listing_observed_at = datetime.now(tz=UTC)
     result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
     jobs = _exclude_configured_jobs(bounded_source, jobs)
     seen_job_keys = {job.identity_key() for job in jobs}
@@ -211,6 +218,10 @@ def sync_source(
         return _finish_result(db, result)
 
     counts = db.upsert_jobs(jobs)
+    db.record_listing_observation(
+        source.id, seen_job_keys, observed_at=listing_observed_at,
+        inventory_complete=result.diagnostics.pagination_complete,
+    )
     result.inserted = counts["inserted"]
     result.updated = counts["updated"]
     result.unchanged = counts["unchanged"]
@@ -275,6 +286,7 @@ def sync_source_with_selective_details(
         _record_list_breaker_failure(db, bounded_source, result.diagnostics, error=exc)
         return _finish_result(db, result)
 
+    listing_observed_at = datetime.now(tz=UTC)
     result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
     listing_jobs = _exclude_configured_jobs(bounded_source, listing_jobs)
     seen_job_keys = {job.identity_key() for job in listing_jobs}
@@ -326,6 +338,7 @@ def sync_source_with_selective_details(
     )
     cutoff = datetime.now(tz=UTC) + timedelta(days=deadline_refresh_days)
     jobs = []
+    persisted_detail_counts = {"inserted": 0, "updated": 0, "unchanged": 0}
     detail_attempts = 0
     detail_failures = 0
     detail_skipped = 0
@@ -392,14 +405,9 @@ def sync_source_with_selective_details(
             continue
 
         if _listing_payload_satisfies_detail(bounded_source, job):
-            db.record_detail_backlog_attempt(
-                job_key=job_key,
-                source_id=source.id,
-                status="complete",
-                listing_hash=listing_hash,
-            )
+            change = _persist_completed_detail(db, job, job, listing_hash)
+            persisted_detail_counts[change] += 1
             listing_payload_detail_completions += 1
-            jobs.append(job)
             continue
 
         backlog = db.queue_detail_backlog_item(
@@ -473,7 +481,11 @@ def sync_source_with_selective_details(
         detail_attempts += 1
         attempt_started_at = time.monotonic()
         try:
-            detail_job = fetch_detail(job.raw)
+            detail_item = job.raw
+            if bounded_source.id == "eu_careers_static":
+                from jobagg.adapters.eu_primary_refresh import reviewed_previous_item
+                detail_item = reviewed_previous_item(db, job)
+            detail_job = fetch_detail(detail_item)
             elapsed = time.monotonic() - attempt_started_at
             if detail_job is None:
                 detail_failures += 1
@@ -605,12 +617,8 @@ def sync_source_with_selective_details(
                     )
                 jobs.append(job)
                 continue
-            db.record_detail_backlog_attempt(
-                job_key=job_key,
-                source_id=source.id,
-                status="complete",
-                listing_hash=listing_hash,
-            )
+            change = _persist_completed_detail(db, job, detail_job, listing_hash)
+            persisted_detail_counts[change] += 1
             LOGGER.info(
                 "%s detail %s/%s job=%s status=ok elapsed=%.2fs next_wait=%.1fs",
                 source.id,
@@ -620,7 +628,6 @@ def sync_source_with_selective_details(
                 elapsed,
                 detail_pacer.min_delay_seconds,
             )
-            jobs.append(detail_job)
             continue
         except Exception as exc:
             elapsed = time.monotonic() - attempt_started_at
@@ -707,7 +714,7 @@ def sync_source_with_selective_details(
             jobs.append(job)
             continue
 
-    result.fetched = len(jobs)
+    result.fetched = len(listing_jobs)
     _apply_detail_diagnostics(
         result,
         detail_attempts,
@@ -744,6 +751,12 @@ def sync_source_with_selective_details(
     if result.diagnostics is not None and latest_detail_breaker is not None:
         result.diagnostics.detail_breaker_state = str(latest_detail_breaker.get("state") or "closed")
     counts = db.upsert_jobs(jobs)
+    for change, count in persisted_detail_counts.items():
+        counts[change] += count
+    db.record_listing_observation(
+        source.id, seen_job_keys, observed_at=listing_observed_at,
+        inventory_complete=result.diagnostics.pagination_complete,
+    )
     result.inserted = counts["inserted"]
     result.updated = counts["updated"]
     result.unchanged = counts["unchanged"]
@@ -764,6 +777,30 @@ def sync_source_with_selective_details(
     else:
         result.closed = excluded_closed
     return _finish_result(db, result)
+
+
+def _persist_completed_detail(
+    db: JobDatabase,
+    listing_job,
+    detail_job,
+    listing_hash: str,
+) -> str:
+    """Commit the exact detail and its completion flag in one transaction.
+
+    A later request or interrupted batch must never leave a completed backlog
+    pointing at a missing or older body. Checkpoint each successful detail.
+    """
+    if detail_job.identity_key() != listing_job.identity_key():
+        raise ValueError("detail identity does not match its listing")
+    with db.connection_scope():
+        change = db.upsert_job(detail_job)
+        db.record_detail_backlog_attempt(
+            job_key=listing_job.identity_key(),
+            source_id=listing_job.source_id,
+            status="complete",
+            listing_hash=listing_hash,
+        )
+    return change
 
 
 def _needs_detail_refresh(
@@ -808,7 +845,18 @@ def _detail_queue_reason(
     backlog_status = str(backlog.get("detail_status") or "") if backlog else ""
     backlog_hash = str(backlog.get("listing_hash_at_detail_fetch") or "") if backlog else ""
     current = db.get_job(job_key)
-    if backlog_status in {"adapter_failed", "blocked_by_circuit_breaker"} and (
+    if refresh_all_details:
+        # Queue intent must precede cache/permanent-failure suppression. The
+        # caller still enforces persisted cooldowns, breakers, and run budgets.
+        return "refresh_requested"
+    if backlog_status in {
+        "adapter_failed",
+        "blocked_by_circuit_breaker",
+        "pending",
+        "permanent_failed",
+        "skipped",
+        "transient_failed",
+    } and (
         _listing_payload_satisfies_detail(source, listing_job)
     ):
         return "listing_payload_detail_complete"
@@ -832,6 +880,17 @@ def _detail_queue_reason(
         quality_reason = detail_quality_requeue_reason(quality_status)
         if quality_reason is not None:
             return quality_reason
+    if source.ats_family == "smartrecruiters" and current is not None:
+        variants = listing_job.raw.get("_smartrecruiters_listing_variants")
+        if isinstance(variants, list) and variants:
+            from jobagg.adapters.smartrecruiters import variant_manifest_hash
+            current_raw = current.get("raw") or {}
+            expected_ids = {str(v.get("id")) for v in variants}
+            retained = current_raw.get("_smartrecruiters_public_variants") or []
+            retained_ids = {str(v.get("id")) for v in retained if isinstance(v, dict)}
+            if (retained_ids != expected_ids or
+                    current_raw.get("_smartrecruiters_variant_manifest_sha256") != variant_manifest_hash(variants)):
+                return "public_language_variants_missing_or_changed"
     if backlog_status == "complete" and backlog_hash == listing_hash and not _detail_record_stale(
         backlog,
         source,
@@ -854,8 +913,6 @@ def _detail_queue_reason(
         return "required_detail_missing"
     if _detail_record_stale(backlog, source):
         return "stale"
-    if refresh_all_details and backlog_status != "complete":
-        return "refresh_requested"
     if _closing_needs_detail_refresh(current.get("closes_at"), cutoff):
         return "stale"
     return None
@@ -864,6 +921,16 @@ def _detail_queue_reason(
 def _listing_payload_satisfies_detail(source: OrganizationSource, job) -> bool:
     if not _optional_bool(source.extra.get("listing_payload_is_detail_complete")):
         return False
+    if source.ats_family == "oracle_hcm":
+        raw = getattr(job, "raw", None) or {}
+        if not any(
+            str(raw.get(key) or "").strip()
+            for key in (
+                "ExternalDescriptionStr", "Description",
+                "ExternalResponsibilitiesStr", "ExternalQualificationsStr",
+            )
+        ):
+            return False
     return (
         detail_quality_status(
             title=getattr(job, "title", None),
@@ -1049,6 +1116,7 @@ def _diagnostics_for_skipped_list(
 
 def _with_list_probe_page_cap(source: OrganizationSource) -> OrganizationSource:
     extra = dict(source.extra)
+    extra["_list_probe_page_cap"] = True
     extra["max_pages"] = 1
     extra["fallback_max_pages"] = 1
     return replace(source, extra=extra)
@@ -1100,12 +1168,25 @@ def _record_list_breaker_success(
 ) -> None:
     if diagnostics is None:
         return
+    # A capped probe proves availability, not completeness. Keep its lifecycle
+    # diagnostics unchanged, but allow a full listing fetch on the next run.
+    successful_probe = (
+        source.extra.get("_list_probe_page_cap") is True
+        and bool(jobs)
+        and diagnostics.pages_fetched == 1
+        and diagnostics.pagination_complete is False
+        and diagnostics.list_error_count == 0
+        and not diagnostics.blocked
+        and not diagnostics.transient_error
+        and diagnostics.scope_validation_status in {"passed", "not_applicable"}
+        and diagnostics.run_classification == "inconclusive"
+    )
     if (
         diagnostics.pagination_complete is True
         and diagnostics.scope_validation_status in {None, "passed", "not_applicable"}
         and (jobs or _verified_zero_fetch(diagnostics))
         and diagnostics.run_classification in {None, "ok", "ok_empty"}
-    ):
+    ) or successful_probe:
         diagnostics.list_breaker_state = "closed"
         db.set_source_breaker(
             source_id=source.id,
@@ -1113,7 +1194,7 @@ def _record_list_breaker_success(
             state="closed",
             failure_count=0,
             success_count=1,
-            reason="healthy list run",
+            reason="successful capped list probe" if successful_probe else "healthy list run",
         )
 
 
@@ -1452,7 +1533,7 @@ def _http_client_for_source(
     )
     max_retries = _optional_int(source.extra.get("max_retries"))
     backoff_base_seconds = _optional_float(source.extra.get("backoff_base_seconds"))
-    tls_verify = _optional_bool(source.extra.get("tls_verify"))
+    tls_verify = _optional_bool(source.extra["tls_verify"]) if source.extra.get("tls_verify") is not None else True
     default_headers = {}
     cookie_header = str(source.extra.get("cookie_header") or "").strip()
     if cookie_header:
@@ -1569,27 +1650,7 @@ def _is_transient_detail_error(exc: Exception) -> bool:
     text = repr(exc).casefold()
     if "http 401" in text or "http 403" in text or "forbidden" in text:
         return False
-    return any(
-        pattern in text
-        for pattern in (
-            "http 429",
-            "too many requests",
-            "http 500",
-            "http 502",
-            "http 503",
-            "http 504",
-            "service unavailable",
-            "gateway timeout",
-            "timed out",
-            "timeout",
-            "remote end closed connection",
-            "remotedisconnected",
-            "connection reset",
-            "connection aborted",
-            "connection refused",
-            "temporarily unavailable",
-        )
-    )
+    return any(pattern in text for pattern in _TRANSIENT_RUN_MARKERS)
 
 
 def _optional_bool(value: object) -> bool:
@@ -1682,16 +1743,18 @@ def _finalize_list_diagnostics(
             diagnostics.health_status = "issue" if _empty_policy_requires_verification(source) else "warning"
             diagnostics.empty_reason = diagnostics.empty_reason or "unverified_zero"
             diagnostics.run_classification = "inconclusive"
-    elif diagnostics.pagination_complete is False:
-        diagnostics.health_status = "issue"
-        diagnostics.run_classification = "inconclusive"
-        if not any("pagination incomplete" in error for error in result.errors):
-            result.errors.append(f"{source.id}: pagination incomplete")
     elif diagnostics.health_status is None:
         diagnostics.health_status = "ok"
         diagnostics.run_classification = diagnostics.run_classification or "ok"
     elif diagnostics.run_classification is None:
         diagnostics.run_classification = _classification_from_health(diagnostics)
+    # An empty partial feed is still incomplete. Its placeholder must not
+    # bypass the error used by schedulers to distinguish success from failure.
+    if diagnostics.pagination_complete is False:
+        diagnostics.health_status = "issue"
+        diagnostics.run_classification = "inconclusive"
+        if not any("pagination incomplete" in error for error in result.errors):
+            result.errors.append(f"{source.id}: pagination incomplete")
 
 
 def _mark_list_failure(

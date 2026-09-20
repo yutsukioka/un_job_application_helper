@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.db import JobDatabase
@@ -18,6 +18,14 @@ from jobagg.pipelines.bundles import (
 from jobagg.pipelines.consolidation import consolidate_bundle_databases
 from jobagg.robots import RobotsPolicy
 from jobagg.scheduler import _bundle_health_sidecar, _refresh_existing_health_report_after_consolidation, main
+
+
+def _fresh_observed_at() -> datetime:
+    return datetime.now(tz=UTC)
+
+
+def _stale_observed_at() -> datetime:
+    return datetime.now(tz=UTC) - timedelta(days=30)
 
 
 @register_adapter
@@ -434,10 +442,10 @@ def test_consolidate_bundle_databases_preserves_detail_and_breaker_metadata(tmp_
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                observed_at=_fresh_observed_at(),
             ),
         ),
-        observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+        observed_at=_fresh_observed_at(),
     )
 
     consolidate_bundle_databases(output_dir=output)
@@ -596,6 +604,8 @@ def test_consolidation_health_refresh_recomputes_open_backlog_counts(tmp_path):
 def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_rows(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
+    # Both notices remain open; only source observation age distinguishes them.
+    future_deadline = datetime.now(UTC) + timedelta(days=30)
     source = OrganizationSource(
         id="isa_inspira_split",
         name="International Seabed Authority",
@@ -618,7 +628,7 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
             title="Stale Split Role",
             external_id="279000",
             apply_url="https://careers.un.org/jobSearchDescription/279000?language=en",
-            closes_at="2026-07-30",
+            closes_at=future_deadline,
         )
     )
     stale_db.add_source_run(
@@ -633,10 +643,10 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=datetime(2026, 6, 12, tzinfo=UTC),
+                observed_at=_stale_observed_at(),
             ),
         ),
-        observed_at=datetime(2026, 6, 12, tzinfo=UTC),
+        observed_at=_stale_observed_at(),
     )
     fresh_db = JobDatabase(output / "un_jobs.sqlite3")
     fresh_db.initialize()
@@ -646,7 +656,7 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
             title="Fresh Role",
             external_id="280000",
             apply_url="https://careers.un.org/jobSearchDescription/280000?language=en",
-            closes_at="2026-07-30",
+            closes_at=future_deadline,
         )
     )
     fresh_db.add_source_run(
@@ -661,10 +671,10 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                observed_at=_fresh_observed_at(),
             ),
         ),
-        observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+        observed_at=_fresh_observed_at(),
     )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -723,10 +733,10 @@ def test_consolidate_bundle_databases_keeps_inconclusive_source_rows_open_withou
                 publishability_classification="source_inconclusive",
                 scope_validation_status="passed",
                 missing_transition_allowed=False,
-                observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                observed_at=_fresh_observed_at(),
             ),
         ),
-        observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+        observed_at=_fresh_observed_at(),
     )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -814,7 +824,7 @@ def test_consolidate_bundle_databases_ages_stale_sources_against_wall_clock(tmp_
     assert row["consolidation_status"] == "stale_source_flagged"
 
 
-def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_aliases(tmp_path):
+def test_consolidate_bundle_databases_keeps_cross_source_rows_without_verified_alias_mapping(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
     canonical_source = OrganizationSource(
@@ -842,7 +852,7 @@ def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_alia
             title="Duplicated Role",
             external_id="279100",
             apply_url="https://careers.un.org/jobSearchDescription/279100?language=en",
-            closes_at="2026-07-30",
+            closes_at="2099-07-30",
             description=description,
         )
         db.upsert_job(job)
@@ -870,17 +880,17 @@ def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_alia
                     run_classification="ok",
                     publishability_classification="ok",
                     missing_transition_allowed=True,
-                    observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                    observed_at=_fresh_observed_at(),
                 ),
             ),
-            observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+            observed_at=_fresh_observed_at(),
         )
 
     result = consolidate_bundle_databases(output_dir=output)
 
-    assert result.current_count == 1
+    assert result.current_count == 2
     current_rows = json.loads((output / "all_jobs_current.json").read_text(encoding="utf-8"))
-    assert [row["source_id"] for row in current_rows] == ["un_inspira"]
+    assert {row["source_id"] for row in current_rows} == {"un_inspira", "mirror_inspira"}
     with sqlite3.connect(output / "all_jobs.sqlite3") as conn:
         conn.row_factory = sqlite3.Row
         duplicate = conn.execute(
@@ -889,12 +899,9 @@ def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_alia
         ).fetchone()
         alias = conn.execute("SELECT * FROM consolidated_job_aliases").fetchone()
 
-    assert duplicate["status"] == "duplicate"
-    assert duplicate["duplicate_of_job_key"] == "un_inspira:279100"
-    assert duplicate["consolidation_status"] == "duplicate_quarantined"
-    assert alias["duplicate_job_key"] == "mirror_inspira:279100"
-    assert alias["canonical_job_key"] == "un_inspira:279100"
-    assert alias["reason"] == "same_apply_url"
+    assert duplicate["status"] == "open"
+    assert duplicate["duplicate_of_job_key"] is None
+    assert alias is None
 
 
 def test_consolidate_bundle_databases_keeps_cross_source_external_id_collisions(tmp_path):
@@ -943,10 +950,10 @@ def test_consolidate_bundle_databases_keeps_cross_source_external_id_collisions(
                     run_classification="ok",
                     publishability_classification="ok",
                     missing_transition_allowed=True,
-                    observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                    observed_at=_fresh_observed_at(),
                 ),
             ),
-            observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+            observed_at=_fresh_observed_at(),
         )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -1050,10 +1057,10 @@ def test_consolidate_bundle_databases_marks_detail_quality_deadlines_and_trusted
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                observed_at=_fresh_observed_at(),
             ),
         ),
-        observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+        observed_at=_fresh_observed_at(),
     )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -1131,8 +1138,8 @@ def test_consolidate_bundles_health_report_includes_consolidated_only_stale_sour
         extra={"output_slug": "stale"},
     )
     for source, observed_at in (
-        (fresh_source, datetime(2026, 6, 29, tzinfo=UTC)),
-        (stale_source, datetime(2026, 6, 12, tzinfo=UTC)),
+        (fresh_source, _fresh_observed_at()),
+        (stale_source, _stale_observed_at()),
     ):
         external_id = "A1" if source.id == "fresh_source" else "A2"
         db = JobDatabase(output / f"{source.extra['output_slug']}_jobs.sqlite3")

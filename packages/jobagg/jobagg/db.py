@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable
@@ -9,10 +10,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from jobagg.detail_quality import DETAIL_QUALITY_COMPLETE, detail_quality_status
 from jobagg.hashing import ensure_job_hash, posting_fingerprint
 from jobagg.models import ChangeEvent, JobRecord, SourceRunDiagnostics, SyncResult
+from jobagg.normalize import clean_text
+from jobagg.oracle_public import public_description_parts
 
 
 def _dt(value: datetime | None) -> str | None:
@@ -50,9 +54,28 @@ def _is_past_closing_date(value: str | None) -> bool:
 
 
 class JobDatabase:
-    def __init__(self, path: str | Path = "jobagg.sqlite3") -> None:
+    def __init__(self, path: str | Path = "jobagg.sqlite3", *, read_only: bool = False) -> None:
         self.path = Path(path)
+        self.read_only = read_only
         self._persistent_conn: sqlite3.Connection | None = None
+
+    def _open_connection(self) -> sqlite3.Connection:
+        if self.read_only:
+            # mode=ro preserves committed WAL visibility without requesting a
+            # journal-mode change. immutable=1 would incorrectly ignore a WAL.
+            conn = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)
+            conn.execute("PRAGMA query_only=ON")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        try:
+            if not self.read_only:
+                self._apply_pragmas(conn)
+        except BaseException:
+            conn.close()
+            raise
+        return conn
 
     @staticmethod
     def _apply_pragmas(conn: sqlite3.Connection) -> None:
@@ -71,11 +94,8 @@ class JobDatabase:
             # row and so all writes share one transaction.
             yield self._persistent_conn
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
+        conn = self._open_connection()
         try:
-            self._apply_pragmas(conn)
             yield conn
             conn.commit()
         finally:
@@ -94,10 +114,7 @@ class JobDatabase:
             # Already inside a scope; just yield the existing connection.
             yield self._persistent_conn
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        self._apply_pragmas(conn)
+        conn = self._open_connection()
         self._persistent_conn = conn
         try:
             yield conn
@@ -168,6 +185,28 @@ class JobDatabase:
                     new_hash TEXT,
                     observed_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS attachment_blobs (
+                    content_sha256 TEXT PRIMARY KEY,
+                    media_type TEXT,
+                    size_bytes INTEGER NOT NULL,
+                    content BLOB NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS job_attachments (
+                    attachment_id TEXT PRIMARY KEY,
+                    job_key TEXT NOT NULL REFERENCES jobs(job_key),
+                    source_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    final_url TEXT,
+                    label TEXT,
+                    category TEXT,
+                    required_for_complete_text INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    content_sha256 TEXT REFERENCES attachment_blobs(content_sha256),
+                    extracted_text TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_job_attachments_job ON job_attachments(job_key);
 
                 CREATE TABLE IF NOT EXISTS vacancy_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1045,11 +1084,1215 @@ class JobDatabase:
             [tuple(row[column] for column in columns) for row in rows],
         )
 
+    @staticmethod
+    def _unv_bound_public_detail(raw: dict[str, Any], external_id: str | None, description: str | None) -> bool:
+        if (raw.get("_unv_record_kind") != "detail" or not str(external_id or "").isdigit()
+                or str(raw.get("id")) != str(external_id)):
+            return False
+        digest = hashlib.sha256(" ".join(str(description or "").split()).encode()).hexdigest()
+        proof = raw.get("_unv_public_text_verification", {})
+        if not isinstance(proof, dict) or type(proof.get("complete")) is not bool:
+            return False
+        if proof["complete"] and not isinstance(raw.get("_unv_public_render_context"), dict):
+            return False
+        return bool(description) and all(
+            isinstance(raw.get(key), dict) and raw[key].get("complete") is proof["complete"]
+            and raw[key].get("normalized_description_sha256") == digest
+            for key in ("_unv_public_text_verification", "_jobagg_main_text_verification")
+        )
+
+    @staticmethod
+    def _europol_bound_public_detail(raw: dict[str, Any], current: sqlite3.Row) -> bool:
+        node = raw.get("europol_public_vacancy")
+        resolution = raw.get("_eu_official_field_resolution")
+        if (raw.get("parser") != "eu_official_detail" or not isinstance(node, dict)
+                or not isinstance(resolution, dict) or resolution.get("record_kind") != "detail"
+                or resolution.get("provider") != "europol_public_vacancy"
+                or resolution.get("utc_resolved") is not True or node.get("type") != "vacancy"):
+            return False
+        external_id = str(current["external_id"] or "")
+        def compact(value):
+            return "".join(c for c in str(value).casefold() if c.isalnum())
+        url = urlsplit(str(raw.get("official_vacancy_url") or ""))
+        path = f"/work-with-us/careers/open-vacancies/vacancy/{node.get('id')}"
+        if (type(node.get("id")) is not int or raw.get("external_id") != external_id
+                or compact(node.get("referenceNumber")) != compact(external_id)
+                or clean_text(node.get("title")) != clean_text(current["title"])
+                or url.scheme != "https" or url.netloc != "www.europol.europa.eu"
+                or url.path != path or node.get("alias") != path or url.query or url.fragment
+                or current["apply_url"] != url.geturl()
+                or not clean_text(node.get("body")) or not clean_text(raw.get("official_notice_text"))
+                or clean_text(node.get("body")) != clean_text(raw.get("official_notice_text"))
+                or clean_text(raw.get("official_notice_text")) not in (clean_text(current["description"]) or "")):
+            return False
+        for node_key, resolution_key, column in (
+            ("published", "published_epoch", "posted_at"), ("deadline", "deadline_epoch", "closes_at"),
+        ):
+            value = node.get(node_key)
+            if (type(value) is not int or not 946684800 <= value < 4102444800
+                    or resolution.get(resolution_key) != value
+                    or _parse_dt(current[column]) != datetime.fromtimestamp(value, UTC)):
+                return False
+        return bool(raw.get("detail_html")) and resolution.get("public_timezone") == current["closes_tz"]
+
+    @staticmethod
+    def _echa_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        """Retain the observed public Download/PDF claim without guessing UTC."""
+        import html
+        import re
+
+        proof = raw.get("_eu_official_field_resolution", {})
+        primary = raw.get("_eu_reviewed_primary_extraction", {})
+        download = raw.get("_echa_public_download_response", {})
+        if not all(isinstance(value, dict) for value in (proof, primary, download)):
+            return False
+        reference = str(proof.get("public_reference") or "")
+        identity = reference.lower().replace("/", "-")
+        body = raw.get("official_notice_text")
+        pdf = urlsplit(str(raw.get("official_vacancy_url") or ""))
+        entry = urlsplit(str(raw.get("official_wrapper_url") or ""))
+        action = "https://jobs.echa.europa.eu/psc/pshrrcr/EMPLOYEE/HRMS/c/HRS_HRAM.HRS_APP_SCHJOB.GBL"
+        if (not re.fullmatch(r"ECHA/(?:TA|CA)/\d{4}/\d{2}", reference)
+                or str(row["external_id"]) != identity or raw.get("external_id") != identity
+                or raw.get("parser") != "eu_official_detail"
+                or proof.get("record_kind") != "detail" or proof.get("provider") != "echa_public_notice_pdf"
+                or not isinstance(body, str) or not body or row["description"] != body
+                or primary.get("text_sha256") != hashlib.sha256(body.encode()).hexdigest()
+                or type(primary.get("page_count")) is not int or primary["page_count"] < 1
+                or not re.fullmatch(r"[0-9a-f]{64}", str(primary.get("content_sha256") or ""))
+                or download.get("url") != action
+                or not all(re.fullmatch(r"[0-9a-f]{64}", str(download.get(key) or "")) for key in ("sha256", "body_sha256"))
+                or pdf.scheme != "https" or pdf.netloc != "jobs.echa.europa.eu"
+                or not pdf.path.startswith("/psc/pshrrcr/view/") or not pdf.path.endswith(".pdf")
+                or not pdf.path.rsplit("/", 1)[-1].startswith(reference.replace("/", "-") + "_")
+                or pdf.query or pdf.fragment or raw.get("detail_fetch_url") != pdf.geturl()
+                or pdf.geturl() not in raw.get("required_attachment_urls", [])
+                or pdf.geturl() not in html.unescape(str(raw.get("detail_html") or ""))
+                or entry.scheme != "https" or entry.netloc != "jobs.echa.europa.eu"
+                or entry.path != "/psp/pshrrcr/EMPLOYEE/HRMS/c/HRS_HRAM.HRS_APP_SCHJOB.GBL"
+                or entry.query != "FOCUS=Applicant" or entry.fragment or row["apply_url"] != entry.geturl()
+                or proof.get("posting_time_resolved") is not False or proof.get("utc_resolved") is not False
+                or any(row[key] is not None for key in ("posted_at", "closes_at", "closes_at_local", "closes_tz"))):
+            return False
+        public = " ".join(body.split())
+        labels = (
+            ("Job Title", "Function Group/Grade", "public_title", "title"),
+            ("Location", "Publication Date", "public_location", "location"),
+            ("Publication Date", "Deadline for Applications", "public_publication_date", None),
+            ("Deadline for Applications", "Indicative number of candidates on the reserve list", "public_deadline", None),
+        )
+        for begin, end, key, column in labels:
+            match = re.search(re.escape(begin) + r" (.*?) " + re.escape(end), public)
+            if not match or match[1] != proof.get(key) or (column and row[column] != match[1]):
+                return False
+        contract = re.search(r"Function Group/Grade (Temporary Agent|Contract Agent), ((?:AD|AST|FG)\s*\d+)\b", public)
+        return ("Reference number " + reference in public and bool(contract)
+                and row["employment_type"] == contract[1] == proof.get("public_contract_type")
+                and re.sub(r"\s+", "", contract[2]) == proof.get("official_grade"))
+
+    @staticmethod
+    def _eurlex_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        """Keep the full official notice and only its source-explicit fields."""
+        from jobagg.adapters.eurlex_public import render_public_notice
+        from jobagg.models import OrganizationSource
+
+        proof = raw.get("_eu_official_field_resolution")
+        if (row["source_id"] != "eu_careers_static" or raw.get("parser") != "eu_official_detail"
+                or not isinstance(proof, dict) or proof.get("record_kind") != "detail"
+                or proof.get("provider") != "eurlex_official_public_notice"
+                or str(raw.get("external_id")) != str(row["external_id"])
+                or not isinstance(raw.get("detail_html"), str)):
+            return False
+        try:
+            expected = render_public_notice(
+                OrganizationSource("eu_careers_static", "EU Careers", "static_html", "https://eu-careers.europa.eu"),
+                raw["detail_html"], page_url=raw.get("official_vacancy_url", ""),
+                external_id=str(row["external_id"]), summary_url=raw.get("detail_url", ""),
+                expected_title=row["title"], summary_metadata=raw.get("summary_metadata"),
+            )
+        except (ValueError, TypeError, AttributeError, KeyError):
+            return False
+        if proof != expected.raw["_eu_official_field_resolution"]:
+            return False
+        if any(row[key] != getattr(expected, key) for key in (
+            "title", "description", "department", "location", "employment_type", "apply_url", "source_url",
+            "closes_at_local", "closes_tz",
+        )):
+            return False
+        if _parse_dt(row["posted_at"]) != expected.posted_at or _parse_dt(row["closes_at"]) != expected.closes_at:
+            return False
+        return all(raw.get(key) == expected.raw.get(key) for key in (
+            "official_notice_text", "detail_html", "detail_url", "detail_fetch_url", "official_vacancy_url",
+            "required_attachment_urls", "grade", "institution", "identity_verification",
+        ))
+
+    @staticmethod
+    def _eu_reviewed_pdf_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        """Reproduce separately reviewed EUIPO/EUDA fields from ordered pages."""
+        from jobagg.adapters.eu_primary_public import render_public_notice
+        from jobagg.models import OrganizationSource
+        if row["source_id"] != "eu_careers_static" or raw.get("parser") != "eu_official_detail":
+            return False
+        try:
+            expected = render_public_notice(
+                OrganizationSource("eu_careers_static", "EU Careers", "static_html", "https://eu-careers.europa.eu"),
+                external_id=str(row["external_id"]), summary_url=raw.get("detail_url"),
+                primary_url=raw.get("official_vacancy_url"), page_units=raw.get("public_primary_page_units"),
+                document_proof=raw.get("public_primary_document_proof"),
+                required_attachment_urls=raw.get("required_attachment_urls"),
+                source_conflicts=raw.get("reviewed_source_content_conflicts"),
+            )
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            return False
+        if any(row[key] != getattr(expected, key) for key in (
+            "external_id", "title", "description", "location", "department", "employment_type",
+            "source_url", "apply_url", "closes_at_local", "closes_tz",
+        )):
+            return False
+        if _parse_dt(row["posted_at"]) != expected.posted_at or _parse_dt(row["closes_at"]) != expected.closes_at:
+            return False
+        return all(raw.get(key) == value for key, value in expected.raw.items())
+
+    @staticmethod
+    def _eu_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        """Bind recognized official field claims to the retained source/body."""
+        resolution = raw.get("_eu_official_field_resolution")
+        if not isinstance(resolution, dict) or resolution.get("record_kind") != "detail":
+            return False
+        provider = resolution.get("provider")
+        if provider == "europol_public_vacancy":
+            return JobDatabase._europol_bound_public_detail(raw, row)
+        if provider == "echa_public_notice_pdf":
+            return JobDatabase._echa_bound_public_detail(raw, row)
+        if provider == "eurlex_official_public_notice":
+            return JobDatabase._eurlex_bound_public_detail(raw, row)
+        if provider in {"euipo_reviewed_primary_pdf", "euda_reviewed_primary_pdf"}:
+            return JobDatabase._eu_reviewed_pdf_bound_public_detail(raw, row)
+        if provider not in {"sesar_official_vacancy_pdf", "enisa_official_wrapper_and_pdf", "eda_public_notice_api"}:
+            return False
+        from jobagg.adapters.eda_public import render_public_notice
+        from jobagg.adapters.static_html import _enisa_public_wrapper, _sesar_notice_section
+        from jobagg.models import OrganizationSource
+        from zoneinfo import ZoneInfo
+        import re
+
+        def compact(value):
+            return "".join(c for c in str(value).casefold() if c.isalnum())
+        external_id = str(row["external_id"] or "")
+        notice = clean_text(raw.get("official_notice_text"))
+        url = urlsplit(str(raw.get("official_vacancy_url") or ""))
+        pdf_proof = raw.get("_eu_reviewed_primary_extraction", {})
+        public_pdf = (url.path.lower().endswith(".pdf")
+                      and url.geturl() in raw.get("required_attachment_urls", [])
+                      and raw.get("identity_verification") == "official_link_and_title_or_reference")
+        if pdf_proof and (not isinstance(pdf_proof, dict)
+                          or pdf_proof.get("text_sha256") != hashlib.sha256(str(raw.get("official_notice_text") or "").encode()).hexdigest()):
+            return False
+        if (raw.get("parser") != "eu_official_detail" or not external_id
+                or not (raw.get("detail_html") or public_pdf) or not notice
+                or notice not in (clean_text(row["description"]) or "")
+                or row["apply_url"] != url.geturl() or url.scheme != "https"):
+            return False
+        if provider == "eda_public_notice_api":
+            try:
+                expected = render_public_notice(
+                    OrganizationSource("eu_careers_static", "EU", "static_html", "https://eu-careers.europa.eu"),
+                    raw.get("eda_public_notice"), page_url=url.geturl(), external_id=external_id,
+                    expected_title=row["title"], summary_html=raw.get("summary_html", ""),
+                    summary_url=raw.get("detail_url", ""),
+                )
+            except (ValueError, TypeError, AttributeError, KeyError):
+                return False
+            return (resolution == expected.raw["_eu_official_field_resolution"]
+                    and all(row[key] == getattr(expected, key) for key in (
+                        "title", "description", "department", "location", "employment_type", "closes_at_local", "closes_tz"))
+                    and raw["detail_html"] == expected.raw["detail_html"]
+                    and raw.get("detail_fetch_url") == expected.raw["detail_fetch_url"]
+                    and row["posted_at"] is None and row["closes_at"] is None)
+        if raw.get("external_id") != external_id or compact(external_id) not in compact(notice):
+            return False
+        if provider == "sesar_official_vacancy_pdf":
+            directory = raw.get("official_directory_notice")
+            if not isinstance(directory, dict) or url.hostname != "www.sesarju.eu":
+                return False
+            try:
+                observed = _sesar_notice_section(directory["section_html"], directory["directory_url"], external_id)
+            except (ValueError, TypeError, KeyError):
+                return False
+            contract = re.search(r"\b(?:Administrator|Assistant)\s*[-–—]\s*(TA\s*2\s*\(\s*[a-z]\s*\))\s*[-–—]\s*((?:AD|AST)\s*\d{1,2})\b", notice, re.I)
+            expected_contract = re.sub(r"\s+", " ", contract[1]).strip() if contract else None
+            return (observed == directory and directory["notice_url"] == url.geturl()
+                    and row["employment_type"] == expected_contract
+                    and resolution.get("employment_type") == expected_contract
+                    and resolution.get("contract_type_resolved") is bool(contract)
+                    and resolution.get("public_contract_phrase") == (contract[0] if contract else None)
+                    and resolution.get("official_grade") == (re.sub(r"\s+", "", contract[2]).upper() if contract else None))
+        wrapper = raw.get("enisa_public_wrapper")
+        if (not isinstance(wrapper, dict) or url.hostname != "www.enisa.europa.eu"
+                or urlsplit(str(raw.get("official_wrapper_url"))).hostname != "www.enisa.europa.eu"
+                or not url.path.lower().endswith(".pdf") or not isinstance(wrapper.get("fields"), dict)
+                or wrapper.get("title") != row["title"] or compact(row["title"]) not in compact(notice)
+                or not clean_text(wrapper.get("text"))
+                or clean_text(wrapper["text"]) not in (clean_text(row["description"]) or "")):
+            return False
+        fields = wrapper["fields"]
+        try:
+            sections = wrapper["sections_html"]
+            reparsed = _enisa_public_wrapper("<main>" + "".join(sections[key] for key in ("title", "body", "how_to_apply")) + "</main>")
+        except (KeyError, TypeError, ValueError):
+            return False
+        if reparsed != wrapper:
+            return False
+        if (resolution.get("public_fields") != fields
+                or any(row[column] != fields.get(label) for column, label in (
+                    ("department", "area"), ("location", "place of employment"), ("employment_type", "type of contract")))):
+            return False
+        deadline = fields.get("deadline for applications", "")
+        match = re.fullmatch(r"(\d{2}/\d{2}/\d{4}) at (\d{2}:\d{2}:\d{2}) Greek time", deadline, re.I)
+        if resolution.get("public_deadline") != deadline or resolution.get("utc_resolved") is not bool(match):
+            return False
+        if not match:
+            return all(row[key] is None for key in ("closes_at", "closes_at_local", "closes_tz"))
+        local = datetime.strptime(match[1] + " " + match[2], "%d/%m/%Y %H:%M:%S").replace(tzinfo=ZoneInfo("Europe/Athens"))
+        return (_parse_dt(row["closes_at"]) == local.astimezone(UTC)
+                and row["closes_at_local"] == local.isoformat() and row["closes_tz"] == "Europe/Athens")
+
+    @staticmethod
+    def _osce_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        from jobagg.adapters.static_html import parse_detail_page
+        from jobagg.models import OrganizationSource
+        url = urlsplit(str(raw.get("href") or ""))
+        if (raw.get("parser") != "static_detail" or not raw.get("detail_html")
+                or url.scheme != "https" or url.hostname != "vacancies.osce.org"
+                or not url.path.startswith("/jobs/") or url.query or url.fragment
+                or row["apply_url"] != url.geturl()):
+            return False
+        try:
+            expected = parse_detail_page(
+                OrganizationSource("osce_custom_html", "OSCE", "static_html", "https://vacancies.osce.org"),
+                raw["detail_html"], url.geturl(),
+            )
+        except (ValueError, TypeError, KeyError):
+            return False
+        return (raw.get("_osce_public_field_resolution") == expected.raw.get("_osce_public_field_resolution")
+                and all(row[key] == getattr(expected, key) for key in (
+                    "external_id", "title", "description", "department", "location", "employment_type",
+                    "closes_at_local", "closes_tz"))
+                and all(raw.get(key) == expected.raw.get(key) for key in ("grade", "contract_type"))
+                and row["posted_at"] is None and row["closes_at"] is None)
+
+    @staticmethod
+    def _wipo_bound_public_detail(raw: dict[str, Any], external_id: str | None,
+                                  title: str | None, description: str | None,
+                                  employment_type: str | None) -> bool:
+        resolution = raw.get("_taleo_public_metadata_resolution", {})
+        if not isinstance(resolution, dict) or resolution.get("kind") != "paired_public_dom_bindings":
+            return False
+        from jobagg.adapters.base import AdapterContext
+        from jobagg.adapters.taleo import TaleoAdapter
+        from jobagg.models import OrganizationSource
+        from urllib.parse import parse_qs
+        url = str(raw.get("_taleo_detail_url") or "")
+        parsed_url = urlsplit(url)
+        if (raw.get("_taleo_record_kind") != "detail" or not raw.get("detail_html")
+                or parsed_url.scheme != "https" or parsed_url.netloc != "wipo.taleo.net"
+                or parse_qs(parsed_url.query).get("job") != [str(external_id)]):
+            raise ValueError("WIPO public detail metadata lacks its matching source URL/identity")
+        adapter = TaleoAdapter(AdapterContext(
+            OrganizationSource("wipo_taleo", "WIPO", "taleo", "https://wipo.taleo.net"), None))
+        expected = adapter.parse_detail_html(raw["detail_html"], url)
+        if (expected.external_id != external_id or expected.title != title or expected.description != description
+                or expected.employment_type != employment_type
+                or expected.raw.get("_taleo_flat") != raw.get("_taleo_flat")
+                or expected.raw.get("_taleo_public_metadata_resolution") != resolution):
+            raise ValueError("WIPO public metadata differs from its captured HTML fields or body")
+        return True
+
+    @staticmethod
+    def _iom_contract_detail(raw: dict[str, Any], external_id: str | None) -> bool:
+        resolution = raw.get("_oracle_contract_resolution")
+        if not isinstance(resolution, dict):
+            return False
+        from jobagg.adapters.oracle_hcm import _flex_value
+        contract = raw.get("ContractType") or _flex_value(raw, "Contract Type")
+        field = "ContractType" if raw.get("ContractType") else "requisitionFlexFields.Contract Type" if contract else None
+        if (resolution.get("record_kind") != "detail" or str(raw.get("Id")) != str(external_id)
+                or resolution.get("public_contract_type") != contract
+                or resolution.get("resolved") is not bool(contract) or resolution.get("source_field") != field):
+            raise ValueError("IOM contract resolution differs from its public identity or fields")
+        return True
+
+    @staticmethod
+    def _labelled_notice_bound_public_detail(source_id: str, raw: dict[str, Any], row: Any) -> bool:
+        """Validate normalized public fields against their exact source body."""
+        import re
+        from jobagg.adapters.base import AdapterContext
+        from jobagg.models import OrganizationSource
+        marker = {"unu_recruitee": ("_unu_public_field_resolution", "unu_rendered_public_fields"),
+                  "itu_successfactors": ("_itu_public_field_resolution", "itu_labelled_public_notice"),
+                  "paho_workday": ("_paho_public_field_resolution", "paho_labelled_public_notice"),
+                  "cern_custom_html": ("_cern_public_field_resolution", "cern_labelled_public_notice"),
+                  "idb_successfactors": ("_idb_public_field_resolution", "idb_labelled_public_notice"),
+                  "ebrd_successfactors": ("_ebrd_public_field_resolution", "ebrd_labelled_public_notice"),
+                  "unops_avature": ("_avature_posting_time_resolution", "unops_labelled_public_notice"),
+                  "worldbank_csod": ("_worldbank_public_field_resolution", "worldbank_public_jobposting"),
+                  "icc_successfactors_legacy": ("_legacy_public_field_resolution", "successfactors_legacy_public_page"),
+                  "afdb_successfactors_legacy": ("_legacy_public_field_resolution", "successfactors_legacy_public_page")}.get(source_id)
+        resolution = raw.get(marker[0]) if marker else None
+        if (not isinstance(resolution, dict) or resolution.get("record_kind") != "detail"
+                or resolution.get("provider") != marker[1]):
+            return False
+        if source_id == "unu_recruitee":
+            from jobagg.adapters.static_html import parse_detail_page
+            html_text, detail_url = raw.get("detail_html"), row["source_url"]
+            url = urlsplit(str(detail_url or ""))
+            if (not isinstance(html_text, str) or raw.get("parser") != "recruitee_public_detail_tab"
+                    or url.scheme != "https" or url.netloc != "careers.unu.edu" or url.query or url.fragment
+                    or url.path != "/o/" + str(row["external_id"]) or row["apply_url"] != detail_url):
+                return False
+            expected = parse_detail_page(OrganizationSource(
+                source_id, "UNU", "unu_recruitee", "https://careers.unu.edu/"), html_text, detail_url)
+            keys = tuple(expected.raw)
+        elif source_id == "unops_avature":
+            from jobagg.adapters.avature import AvatureAdapter
+            html_text, detail_url = raw.get("detail_html"), raw.get("_detail_url")
+            url = urlsplit(str(detail_url or ""))
+            if (not isinstance(html_text, str) or not isinstance(detail_url, str)
+                    or url.scheme != "https" or url.netloc != "careers.unops.org" or url.query or url.fragment
+                    or not re.fullmatch(r"/careersmarketplace/JobDetail/[^/]+/" + re.escape(str(row["external_id"])), url.path)
+                    or row["apply_url"] != detail_url or row["source_url"] != detail_url):
+                return False
+            expected = AvatureAdapter(AdapterContext(OrganizationSource(
+                source_id, "UNOPS", "avature", "https://careers.unops.org"), None)).parse_detail_html(html_text, detail_url)
+            keys = ("_avature_posting_time_resolution", "avature_fields", "_avature_deadline_resolution",
+                    "_avature_field_resolution", "_avature_competency_text_resolution")
+        elif source_id == "itu_successfactors":
+            from jobagg.adapters.itu_public import apply_public_fields
+            from jobagg.adapters.successfactors_rmk import _detail_description, _detail_title, _job_id_from_url
+            from jobagg.normalize import build_job
+            url = urlsplit(str(raw.get("detail_url") or ""))
+            html_text = raw.get("detail_html")
+            if (raw.get("parser") != "successfactors_detail" or not isinstance(html_text, str)
+                    or url.scheme != "https" or url.netloc != "jobs.itu.int"
+                    or not url.path.startswith("/job/") or url.query or url.fragment
+                    or _job_id_from_url(url.geturl()) != row["external_id"]
+                    or row["apply_url"] != url.geturl() or row["source_url"] != url.geturl()):
+                return False
+            expected = apply_public_fields(build_job(
+                OrganizationSource(source_id, "ITU", "successfactors_rmk", "https://jobs.itu.int"),
+                title=_detail_title(html_text), external_id=row["external_id"],
+                description=_detail_description(html_text), apply_url=url.geturl(), raw={},
+            ), html_text)
+            keys = ("_itu_public_field_resolution", "itu_public_fields", "grade", "contract_type", "position_number")
+        elif source_id in {"idb_successfactors", "ebrd_successfactors"}:
+            if source_id == "idb_successfactors":
+                from jobagg.adapters.idb_public import apply_public_fields
+                name, host = "IDB", "https://jobs.iadb.org"
+                keys = ("_idb_public_field_resolution", "company", "contract_type")
+            else:
+                from jobagg.adapters.ebrd_public import apply_public_fields
+                name, host = "EBRD", "https://jobs.ebrd.com"
+                keys = ("_ebrd_public_field_resolution", "company", "contract_type", "requisition_id")
+            from jobagg.adapters.successfactors_rmk import _detail_description, _detail_title
+            from jobagg.normalize import build_job
+            html_text, detail_url = raw.get("detail_html"), raw.get("detail_url")
+            if (raw.get("parser") != "successfactors_detail" or not isinstance(html_text, str)
+                    or not isinstance(detail_url, str) or row["apply_url"] != detail_url or row["source_url"] != detail_url):
+                return False
+            expected = apply_public_fields(build_job(
+                OrganizationSource(source_id, name, "successfactors_rmk", host),
+                title=_detail_title(html_text), external_id=row["external_id"],
+                description=_detail_description(html_text), apply_url=row["apply_url"],
+                source_url=row["source_url"], raw={"detail_url": detail_url},
+            ), html_text)
+        elif source_id == "worldbank_csod":
+            from jobagg.adapters.worldbank_public import render_public_notice
+            posting, detail_url = raw.get("worldbank_public_jobposting"), raw.get("detail_url")
+            if (raw.get("_worldbank_record_kind") != "detail" or not isinstance(posting, dict)
+                    or raw.get("detail_html") != posting.get("Description") or not isinstance(detail_url, str)
+                    or row["apply_url"] != detail_url or row["source_url"] != detail_url):
+                return False
+            expected = render_public_notice(
+                OrganizationSource(source_id, "World Bank", "csod", "https://worldbankgroup.csod.com"),
+                posting, page_url=detail_url, external_id=str(row["external_id"]), expected_title=row["title"],
+                listing_raw=raw.get("worldbank_listing_metadata"), public_page_sha256=raw.get("public_page_sha256"),
+            )
+            keys = ("_worldbank_record_kind", "_worldbank_public_field_resolution", "worldbank_public_jobposting",
+                    "grade", "company", "sector", "recruitment_type", "term_duration", "required_languages", "preferred_languages")
+        elif source_id in {"icc_successfactors_legacy", "afdb_successfactors_legacy"}:
+            from jobagg.adapters.legacy_public import render_public_notice
+            html_text, detail_url = raw.get("detail_html"), raw.get("detail_url")
+            if (raw.get("parser") != "successfactors_legacy_public" or not isinstance(html_text, str)
+                    or not isinstance(detail_url, str) or row["apply_url"] != detail_url or row["source_url"] != detail_url):
+                return False
+            expected = render_public_notice(
+                OrganizationSource(source_id, "Public legacy source", "successfactors_legacy", detail_url),
+                html_text, page_url=detail_url, external_id=str(row["external_id"]), expected_title=row["title"],
+            )
+            keys = ("_legacy_public_field_resolution", "legacy_public_notice_html", "grade", "contract_type")
+        elif source_id == "paho_workday":
+            from jobagg.adapters.workday import WorkdayAdapter
+            info = raw.get("jobPostingInfo")
+            if not isinstance(info, dict):
+                return False
+            url = urlsplit(str(info.get("externalUrl") or ""))
+            identity = info.get("jobReqId") or info.get("jobPostingId") or info.get("id")
+            if (url.scheme != "https" or url.netloc != "paho.wd5.myworkdayjobs.com"
+                    or not url.path.startswith("/pahocareers/job/") or url.query or url.fragment
+                    or str(identity) != str(row["external_id"])
+                    or url.path.rsplit("/", 1)[-1] != info.get("jobPostingId")
+                    or not re.search("_" + re.escape(str(identity)) + r"(?:-\d+)?$", url.path)
+                    or row["apply_url"] != url.geturl() or row["source_url"] != url.geturl()):
+                return False
+            expected = WorkdayAdapter(AdapterContext(OrganizationSource(
+                source_id, "PAHO", "workday", "https://paho.wd5.myworkdayjobs.com/pahocareers"), None)).parse_detail(
+                    {"jobPostingInfo": info})
+            keys = ("_paho_public_field_resolution",)
+        elif source_id == "cern_custom_html":
+            from jobagg.adapters.static_html import parse_detail_page
+            url = urlsplit(str(raw.get("href") or ""))
+            if (raw.get("parser") != "static_detail" or not isinstance(raw.get("detail_html"), str)
+                    or url.scheme != "https" or url.netloc != "careers.cern"
+                    or not re.fullmatch(r"/jobs/[^/]+/", url.path) or url.query or url.fragment
+                    or row["apply_url"] != url.geturl() or row["source_url"] != url.geturl()):
+                return False
+            expected = parse_detail_page(OrganizationSource(
+                source_id, "CERN", "custom_html", "https://careers.cern"), raw["detail_html"], url.geturl())
+            keys = ("_cern_public_field_resolution", "grade", "contract_type")
+        else:
+            return False
+        return (all(raw.get(key) == expected.raw.get(key) for key in keys)
+                and all(row[key] == getattr(expected, key) for key in (
+                    "external_id", "title", "description", "location", "department", "employment_type",
+                    "closes_at_local", "closes_tz"))
+                and _parse_dt(row["posted_at"]) == expected.posted_at
+                and _parse_dt(row["closes_at"]) == expected.closes_at)
+
+    def _merge_labelled_public_observation(self, job: JobRecord, current: sqlite3.Row,
+                                         current_raw: dict[str, Any]) -> bool:
+        marker = {"unu_recruitee": "_unu_public_field_resolution",
+                  "itu_successfactors": "_itu_public_field_resolution",
+                  "paho_workday": "_paho_public_field_resolution",
+                  "cern_custom_html": "_cern_public_field_resolution",
+                  "idb_successfactors": "_idb_public_field_resolution",
+                  "ebrd_successfactors": "_ebrd_public_field_resolution",
+                  "unops_avature": "_avature_posting_time_resolution",
+                  "worldbank_csod": "_worldbank_public_field_resolution",
+                  "icc_successfactors_legacy": "_legacy_public_field_resolution",
+                  "afdb_successfactors_legacy": "_legacy_public_field_resolution"}.get(job.source_id)
+        if marker is None:
+            return False
+        incoming_detail = marker in job.raw
+        prior_detail = marker in current_raw
+        if not incoming_detail and not prior_detail:
+            return False
+        if current["source_id"] != job.source_id or current["external_id"] != job.external_id:
+            raise ValueError("Labelled public field retention requires matching source and identity")
+        if incoming_detail:
+            row = {key: getattr(job, key) for key in (
+                "external_id", "title", "description", "location", "department", "employment_type",
+                "apply_url", "source_url", "closes_at_local", "closes_tz",
+            )}
+            row.update(posted_at=_dt(job.posted_at), closes_at=_dt(job.closes_at))
+            if not self._labelled_notice_bound_public_detail(job.source_id, job.raw, row):
+                raise ValueError("Labelled incoming public fields lack a matching source/body binding")
+            if job.source_id == "unops_avature" and "_avature_previous_posting_observation" not in job.raw:
+                if isinstance(current_raw.get("_avature_previous_posting_observation"), dict):
+                    job.raw["_avature_previous_posting_observation"] = current_raw["_avature_previous_posting_observation"]
+                elif current["posted_at"] != _dt(job.posted_at):
+                    prior_html = current_raw.get("detail_html")
+                    prior_fields = current_raw.get("avature_fields", {})
+                    job.raw["_avature_previous_posting_observation"] = {
+                        "posted_at": current["posted_at"],
+                        "public_fields": {key: prior_fields[key] for key in ("Posted", "Posting Start Date") if key in prior_fields},
+                        "detail_html_sha256": hashlib.sha256(prior_html.encode()).hexdigest() if isinstance(prior_html, str) else None,
+                        "raw_json_sha256": hashlib.sha256(current["raw_json"].encode()).hexdigest(),
+                        "superseded_reason": "Public posting precision is owned by the new source-bound detail observation.",
+                    }
+            if job.source_id in {"icc_successfactors_legacy", "afdb_successfactors_legacy"}:
+                if "_legacy_xml_listing_snapshot" not in job.raw:
+                    if isinstance(current_raw.get("_legacy_xml_listing_snapshot"), dict):
+                        job.raw["_legacy_xml_listing_snapshot"] = current_raw["_legacy_xml_listing_snapshot"]
+                    elif current_raw.get("parser") == "successfactors_xml":
+                        job.raw["_legacy_xml_listing_snapshot"] = {
+                            key: current_raw.get(key) for key in ("reqid", "jobtitle", "jobdescription", "detail_html")
+                        }
+            for key in ("attachments", "_jobagg_listing_verification"):
+                if key not in job.raw and key in current_raw:
+                    job.raw[key] = current_raw[key]
+            if "attachment_verification" not in job.raw and isinstance(current_raw.get("attachment_verification"), dict):
+                proof = dict(current_raw["attachment_verification"])
+                if (job.description != current["description"]
+                        or any(job.raw.get(key) != current_raw.get(key) for key in ("detail_html", "jobPostingInfo"))):
+                    proof.update(complete=False, discovery_complete=False,
+                                 invalidated_reason="job_content_changed_requires_attachment_reverification")
+                job.raw["attachment_verification"] = proof
+            if job.source_id in {"idb_successfactors", "ebrd_successfactors", "unops_avature", "icc_successfactors_legacy", "afdb_successfactors_legacy", "worldbank_csod"}:
+                proof = job.raw.get("attachment_verification")
+                if isinstance(proof, dict) and (proof.get("complete") is not False or proof.get("discovery_complete") is not False):
+                    job.raw["attachment_verification"] = {
+                        **proof, "complete": False, "discovery_complete": False,
+                        "invalidated_reason": "public_detail_refresh_requires_attachment_reverification",
+                    }
+            return True
+        if job.source_id == "unu_recruitee":
+            url = urlsplit(str(job.raw.get("href") or ""))
+            listing = (not job.raw.get("detail_html") and job.raw.get("parser") == "public_links"
+                       and str(job.raw.get("external_id")) == job.external_id
+                       and url.scheme == "https" and url.netloc == "careers.unu.edu" and not url.query and not url.fragment
+                       and url.path == "/o/" + job.external_id and job.apply_url == url.geturl() and job.source_url == url.geturl())
+        elif job.source_id == "unops_avature":
+            from jobagg.adapters.avature import _job_id_from_url
+            url = urlsplit(str(job.raw.get("_detail_url") or ""))
+            listing = (not job.raw.get("detail_html") and bool(job.raw.get("listing_html"))
+                       and url.scheme == "https" and url.netloc == "careers.unops.org" and not url.query and not url.fragment
+                       and url.path.startswith("/careersmarketplace/JobDetail/")
+                       and _job_id_from_url(url.geturl()) == job.external_id
+                       and job.source_url == url.geturl() and job.apply_url == url.geturl())
+        elif job.source_id == "itu_successfactors":
+            from jobagg.adapters.successfactors_rmk import _job_id_from_url
+            url = urlsplit(str(job.raw.get("detail_url") or ""))
+            listing = (not job.raw.get("detail_html") and bool(job.raw.get("listing_html"))
+                       and url.scheme == "https" and url.netloc == "jobs.itu.int"
+                       and url.path.startswith("/job/") and not url.query and not url.fragment
+                       and _job_id_from_url(url.geturl()) == job.external_id and job.apply_url == url.geturl())
+        elif job.source_id in {"idb_successfactors", "ebrd_successfactors"}:
+            from jobagg.adapters.successfactors_rmk import _job_id_from_url
+            url = urlsplit(str(job.raw.get("detail_url") or ""))
+            host = "jobs.iadb.org" if job.source_id == "idb_successfactors" else "jobs.ebrd.com"
+            listing = (not job.raw.get("detail_html")
+                       and (bool(job.raw.get("listing_html"))
+                            or (job.source_id == "idb_successfactors" and job.raw.get("parser") == "browser_inventory"))
+                       and url.scheme == "https" and url.netloc == host
+                       and url.path.startswith("/job/") and not url.query and not url.fragment
+                       and _job_id_from_url(url.geturl()) == job.external_id
+                       and job.apply_url == url.geturl() and job.source_url == url.geturl())
+        elif job.source_id == "worldbank_csod":
+            from jobagg.adapters.csod import CSODAdapter
+            from jobagg.adapters.base import AdapterContext
+            from jobagg.models import OrganizationSource
+            adapter = CSODAdapter(AdapterContext(OrganizationSource(
+                job.source_id, "World Bank", "csod", "https://worldbankgroup.csod.com"), None))
+            exact_url = f"https://worldbankgroup.csod.com/ux/ats/careersite/1/home/requisition/{job.external_id}?c=worldbankgroup"
+            listing = (job.raw.get("_worldbank_record_kind") == "listing"
+                       and not job.raw.get("worldbank_public_jobposting")
+                       and adapter._external_id(job.raw) == job.external_id
+                       and job.source_url == exact_url and job.apply_url == exact_url)
+        elif job.source_id in {"icc_successfactors_legacy", "afdb_successfactors_legacy"}:
+            from urllib.parse import parse_qs
+            from jobagg.adapters.legacy_public import _SOURCES
+            host, company = _SOURCES[job.source_id]
+            url = urlsplit(str(job.source_url or ""))
+            query = parse_qs(url.query, keep_blank_values=True)
+            listing = (job.raw.get("parser") == "successfactors_xml"
+                       and str(job.raw.get("reqid")) == str(job.external_id)
+                       and url.scheme == "https" and url.hostname == host and url.path == "/career"
+                       and not url.username and not url.password and url.port in (None, 443) and not url.fragment
+                       and query.get("company") == [company] and query.get("career_ns") == ["job_listing"]
+                       and query.get("career_job_req_id") == [str(job.external_id)]
+                       and job.apply_url == url.geturl())
+        elif job.source_id == "paho_workday":
+            from jobagg.adapters.workday import WorkdayAdapter
+            from jobagg.adapters.base import AdapterContext
+            from jobagg.models import OrganizationSource
+            listing_job = WorkdayAdapter(AdapterContext(OrganizationSource(
+                "paho_workday", "PAHO", "workday", "https://paho.wd5.myworkdayjobs.com/pahocareers"), None)).parse_listing_item(job.raw)
+            listing = (not job.raw.get("jobPostingInfo") and bool(job.raw.get("externalPath"))
+                       and listing_job.external_id == job.external_id)
+        else:
+            url = urlsplit(str(job.raw.get("href") or ""))
+            listing = (not job.raw.get("detail_html") and job.raw.get("parser") in (None, "public_links")
+                       and str(job.raw.get("external_id")) == job.external_id
+                       and url.scheme == "https" and url.netloc == "careers.cern"
+                       and url.path.rstrip("/").rsplit("/", 1)[-1] == job.external_id
+                       and job.apply_url == url.geturl())
+        if not listing:
+            if job.source_id in {"unu_recruitee", "idb_successfactors", "ebrd_successfactors", "unops_avature", "icc_successfactors_legacy", "afdb_successfactors_legacy", "worldbank_csod"}:
+                raise ValueError("Public listing refresh lacks a matching source/identity binding")
+            return False
+        if not self._labelled_notice_bound_public_detail(job.source_id, current_raw, current):
+            raise ValueError("Labelled retained public fields lack a matching source/body binding")
+        observation_key = {"unu_recruitee": "_unu_listing_observation", "itu_successfactors": "_itu_listing_observation", "paho_workday": "_paho_listing_observation",
+                           "cern_custom_html": "_cern_listing_observation", "idb_successfactors": "_idb_listing_observation",
+                           "ebrd_successfactors": "_ebrd_listing_observation",
+                           "unops_avature": "_avature_listing_observation",
+                           "worldbank_csod": "_worldbank_listing_observation",
+                           "icc_successfactors_legacy": "_legacy_listing_observation",
+                           "afdb_successfactors_legacy": "_legacy_listing_observation"}[job.source_id]
+        incoming = {key: value for key, value in job.raw.items() if key != observation_key}
+        listing_proof = incoming.get("_jobagg_listing_verification")
+        observation = {
+            "raw": incoming, "normalized": {key: getattr(job, key) for key in (
+                "title", "location", "department", "employment_type", "apply_url", "source_url", "closes_at_local", "closes_tz",
+            )}, "posted_at": _dt(job.posted_at), "closes_at": _dt(job.closes_at),
+            "observed_at": listing_proof.get("observed_at") if isinstance(listing_proof, dict) else None,
+        }
+        job.raw = {**current_raw, observation_key: observation}
+        if isinstance(listing_proof, dict):
+            job.raw["_jobagg_listing_verification"] = listing_proof
+        for key in ("title", "location", "department", "employment_type", "description", "apply_url", "source_url", "closes_at_local", "closes_tz"):
+            setattr(job, key, current[key])
+        job.posted_at, job.closes_at = _parse_dt(current["posted_at"]), _parse_dt(current["closes_at"])
+        return True
+
+    @staticmethod
+    def _workday_precision_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        from jobagg.adapters.workday_precision import MARKER, SOURCES, instant, precision_resolution
+        source_id = row["source_id"]
+        if source_id not in SOURCES or MARKER not in raw or not isinstance(raw.get("jobPostingInfo"), dict):
+            return False
+        info = raw["jobPostingInfo"]
+        try:
+            expected = precision_resolution(source_id, info)
+        except (ValueError, TypeError, KeyError):
+            return False
+        if expected is None or raw[MARKER] != expected:
+            return False
+        deadline = expected["deadline"]
+        return (row["external_id"] == expected["external_id"]
+                and row["source_url"] == expected["source_url"] == row["apply_url"]
+                and row["title"] == clean_text(info.get("title") or info.get("jobTitle"))
+                and row["description"] == clean_text(info.get("jobDescription") or info.get("description"))
+                and _parse_dt(row["posted_at"]) == instant(expected["posting"]["posted_at"])
+                and _parse_dt(row["closes_at"]) == instant(deadline["closes_at"])
+                and row["closes_at_local"] == deadline["closes_at_local"]
+                and row["closes_tz"] == deadline["closes_tz"])
+
+    def _merge_workday_precision_observation(self, job: JobRecord, current: sqlite3.Row,
+                                           current_raw: dict[str, Any]) -> bool:
+        from jobagg.adapters.workday_precision import MARKER, SOURCES
+        if job.source_id not in SOURCES or (MARKER not in job.raw and MARKER not in current_raw):
+            return False
+        if (job.source_id != current["source_id"] or job.external_id != current["external_id"]
+                or job.ats_family != "workday"):
+            raise ValueError("Workday precision retention requires the same source and identity")
+        if MARKER in job.raw:
+            row = {key: getattr(job, key) for key in (
+                "source_id", "external_id", "title", "description", "source_url", "apply_url",
+                "closes_at_local", "closes_tz",
+            )}
+            row.update(posted_at=_dt(job.posted_at), closes_at=_dt(job.closes_at))
+            if not self._workday_precision_bound_public_detail(job.raw, row):
+                raise ValueError("Incoming Workday dates lack an exact source/body/precision binding")
+            previous_key = "_workday_previous_date_observation"
+            if previous_key not in job.raw:
+                if previous_key in current_raw:
+                    job.raw[previous_key] = current_raw[previous_key]
+                elif any(row[key] != current[key] for key in ("posted_at", "closes_at", "closes_at_local", "closes_tz")):
+                    job.raw[previous_key] = {
+                        "dates": {key: current[key] for key in ("posted_at", "closes_at", "closes_at_local", "closes_tz")},
+                        "raw_json_sha256": hashlib.sha256(current["raw_json"].encode()).hexdigest(),
+                        "source_claims": {key: current_raw[key] for key in (MARKER, "_workday_deadline_resolution") if key in current_raw},
+                        "scope": "previous_stored_observation_not_current_deadline",
+                    }
+            for key in ("attachments", "_jobagg_listing_verification"):
+                if key not in job.raw and key in current_raw:
+                    job.raw[key] = current_raw[key]
+            proof = job.raw.get("attachment_verification", current_raw.get("attachment_verification"))
+            if isinstance(proof, dict):
+                if (job.description != current["description"] or job.raw.get("jobPostingInfo") != current_raw.get("jobPostingInfo")):
+                    proof = {**proof, "complete": False, "discovery_complete": False,
+                             "invalidated_reason": "job_content_changed_requires_attachment_reverification"}
+                job.raw["attachment_verification"] = proof
+            return True
+        if job.raw.get("jobPostingInfo"):
+            raise ValueError("New Workday detail must resolve its own date precision")
+        from jobagg.adapters.base import AdapterContext
+        from jobagg.adapters.workday import WorkdayAdapter
+        from jobagg.models import OrganizationSource
+        listing = WorkdayAdapter(AdapterContext(OrganizationSource(
+            job.source_id, job.source_id, "workday", SOURCES[job.source_id]), None)).parse_listing_item(job.raw)
+        if (not job.raw.get("externalPath") or listing.external_id != job.external_id
+                or listing.source_url != job.source_url or listing.apply_url != job.apply_url
+                or job.source_url != current["source_url"] or job.apply_url != current["apply_url"]
+                or not self._workday_precision_bound_public_detail(current_raw, current)):
+            raise ValueError("Workday listing retention lacks an exact source/identity/date binding")
+        observation_key = "_workday_listing_observation"
+        incoming = {key: value for key, value in job.raw.items() if key != observation_key}
+        listing_proof = incoming.get("_jobagg_listing_verification")
+        job.raw = {**current_raw, observation_key: {
+            "raw": incoming,
+            "normalized": {key: getattr(job, key) for key in ("title", "location", "department", "employment_type")},
+            "posted_at": _dt(job.posted_at),
+            "observed_at": listing_proof.get("observed_at") if isinstance(listing_proof, dict) else None,
+        }}
+        if isinstance(listing_proof, dict):
+            job.raw["_jobagg_listing_verification"] = listing_proof
+        for key in ("title", "description", "location", "department", "employment_type", "source_url", "apply_url", "closes_at_local", "closes_tz"):
+            setattr(job, key, current[key])
+        job.posted_at, job.closes_at = _parse_dt(current["posted_at"]), _parse_dt(current["closes_at"])
+        return True
+
+    @staticmethod
+    def _eu_primary_metadata_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        from jobagg.eu_primary_metadata_observation import bound_public_metadata
+        return bound_public_metadata(raw, row)
+
+    def _merge_eu_primary_metadata_observation(self, job: JobRecord, current: sqlite3.Row,
+                                             current_raw: dict[str, Any]) -> bool:
+        from jobagg.adapters.eu_primary_metadata import FIELDS, MARKER
+        incoming = MARKER in job.raw
+        listing = job.raw.get("parser") == "eu_careers_open_vacancies"
+        if not incoming and not (listing and MARKER in current_raw):
+            return False
+        if (job.source_id != "eu_careers_static" or current["source_id"] != job.source_id
+                or str(current["external_id"]) != str(job.external_id)):
+            raise ValueError("EU primary metadata requires matching source and identity")
+        if incoming:
+            row = {key: getattr(job, key) for key in (
+                "source_id", "external_id", "source_url", "apply_url", "description", *FIELDS,
+            )}
+            if not self._eu_primary_metadata_bound_public_detail(job.raw, row):
+                raise ValueError("EU primary metadata lacks its exact source/body/provenance binding")
+            for key in ("attachments", "_jobagg_listing_verification"):
+                if key not in job.raw and key in current_raw:
+                    job.raw[key] = current_raw[key]
+            proof = job.raw.get("attachment_verification", current_raw.get("attachment_verification"))
+            if isinstance(proof, dict):
+                proof = dict(proof)
+                if proof.get("complete") is not False or proof.get("discovery_complete") is not False:
+                    proof.update(complete=False, discovery_complete=False,
+                                 invalidated_reason="public_detail_refresh_requires_attachment_reverification")
+                job.raw["attachment_verification"] = proof
+            return True
+        if not self._eu_primary_metadata_bound_public_detail(current_raw, current):
+            raise ValueError("Retained EU primary metadata lacks its source/body/provenance binding")
+        if (str(job.raw.get("external_id")) != str(job.external_id)
+                or job.source_url != current["source_url"] or job.apply_url != current["source_url"]
+                or job.raw.get("href") != current["source_url"]
+                or job.raw.get("detail_html") or job.raw.get("official_notice_text")):
+            raise ValueError("EU primary metadata listing lacks its exact source/identity binding")
+        observation_key = "_eu_primary_metadata_listing_observation"
+        payload = {key: value for key, value in job.raw.items() if key != observation_key}
+        listing_proof = payload.get("_jobagg_listing_verification")
+        observation = {
+            "raw": payload,
+            "normalized": {key: getattr(job, key) for key in FIELDS if key not in {"posted_at", "closes_at"}},
+            "posted_at": _dt(job.posted_at), "closes_at": _dt(job.closes_at),
+            "observed_at": listing_proof.get("observed_at") if isinstance(listing_proof, dict) else None,
+            "wrapper_text_metadata_reconciled": False,
+        }
+        job.raw = {**current_raw, observation_key: observation}
+        if isinstance(listing_proof, dict):
+            job.raw["_jobagg_listing_verification"] = listing_proof
+        for key in ("title", "location", "department", "employment_type", "description", "apply_url",
+                    "source_url", "closes_at_local", "closes_tz"):
+            setattr(job, key, current[key])
+        job.posted_at, job.closes_at = _parse_dt(current["posted_at"]), _parse_dt(current["closes_at"])
+        return True
+
+    @staticmethod
+    def _eu_primary_text_bound_public_detail(raw: dict[str, Any], row: Any) -> bool:
+        from jobagg.eu_primary_observation import bound_public_text
+        return bound_public_text(raw, row)
+
+    def _merge_eu_primary_text_observation(self, job: JobRecord, current: sqlite3.Row,
+                                         current_raw: dict[str, Any]) -> bool:
+        """Keep reviewed PDF text and its evidence together on an EU list refresh."""
+        from jobagg.eu_primary_observation import MARKER
+        incoming = MARKER in job.raw
+        listing = job.raw.get("parser") == "eu_careers_open_vacancies"
+        if not incoming and not (listing and MARKER in current_raw):
+            # A fresh independently parsed detail owns its new observation;
+            # this spacing-only proof never overrides a new detail producer.
+            return False
+        if (job.source_id != "eu_careers_static" or current["source_id"] != job.source_id
+                or str(current["external_id"]) != str(job.external_id)):
+            raise ValueError("EU primary text retention requires matching source and identity")
+        if incoming:
+            row = {key: getattr(job, key) for key in (
+                "source_id", "external_id", "title", "description", "department", "location", "employment_type",
+                "apply_url", "source_url", "posted_at", "closes_at", "closes_at_local", "closes_tz",
+            )}
+            if not self._eu_primary_text_bound_public_detail(job.raw, row):
+                raise ValueError("EU primary text observation lacks its source/body/provenance binding")
+            for key in ("attachments", "_jobagg_listing_verification"):
+                if key not in job.raw and key in current_raw:
+                    job.raw[key] = current_raw[key]
+            proof = job.raw.get("attachment_verification", current_raw.get("attachment_verification"))
+            if isinstance(proof, dict):
+                job.raw["attachment_verification"] = dict(proof)
+                if proof.get("complete") is not False or proof.get("discovery_complete") is not False:
+                    job.raw["attachment_verification"].update(
+                        complete=False, discovery_complete=False,
+                        invalidated_reason="public_detail_refresh_requires_attachment_reverification",
+                    )
+            return True
+        if not self._eu_primary_text_bound_public_detail(current_raw, current):
+            raise ValueError("EU retained primary text observation has an invalid provenance binding")
+        if (str(job.raw.get("external_id")) != str(job.external_id)
+                or job.source_url != current["source_url"] or job.apply_url != current["source_url"]
+                or job.raw.get("href") != current["source_url"]
+                or job.raw.get("detail_html") or job.raw.get("official_notice_text")):
+            raise ValueError("EU primary text listing refresh lacks its exact source/identity binding")
+        observation_key = "_eu_primary_pdf_listing_observation"
+        payload = {key: value for key, value in job.raw.items() if key != observation_key}
+        listing_proof = payload.get("_jobagg_listing_verification")
+        observation = {
+            "raw": payload,
+            "normalized": {key: getattr(job, key) for key in (
+                "title", "location", "department", "employment_type", "apply_url", "source_url",
+                "closes_at_local", "closes_tz",
+            )},
+            "posted_at": _dt(job.posted_at), "closes_at": _dt(job.closes_at),
+            "observed_at": listing_proof.get("observed_at") if isinstance(listing_proof, dict) else None,
+            "metadata_completeness_certified": False,
+        }
+        job.raw = {**current_raw, observation_key: observation}
+        if isinstance(listing_proof, dict):
+            job.raw["_jobagg_listing_verification"] = listing_proof
+        for key in ("title", "location", "department", "employment_type", "description", "apply_url",
+                    "source_url", "closes_at_local", "closes_tz"):
+            setattr(job, key, current[key])
+        job.posted_at, job.closes_at = _parse_dt(current["posted_at"]), _parse_dt(current["closes_at"])
+        return True
+
+    def _merge_verified_public_observation(self, job: JobRecord, current: sqlite3.Row,
+                                          current_raw: dict[str, Any]) -> bool:
+        """Keep one coherent public detail observation across explicit summaries."""
+        is_unv = job.source_id == "unv_uvp" and job.ats_family == "unv"
+        recognized_eu = {"europol_public_vacancy", "sesar_official_vacancy_pdf", "echa_public_notice_pdf",
+                         "enisa_official_wrapper_and_pdf", "eda_public_notice_api", "eurlex_official_public_notice",
+                         "euipo_reviewed_primary_pdf", "euda_reviewed_primary_pdf"}
+        incoming_eu = job.raw.get("_eu_official_field_resolution", {})
+        prior_eu = current_raw.get("_eu_official_field_resolution", {})
+        is_eu_detail = (job.source_id == "eu_careers_static" and isinstance(incoming_eu, dict)
+                        and incoming_eu.get("provider") in recognized_eu)
+        is_eu_list = (job.source_id == "eu_careers_static"
+                      and job.raw.get("parser") == "eu_careers_open_vacancies"
+                      and isinstance(prior_eu, dict) and prior_eu.get("provider") in recognized_eu)
+        is_osce_detail = (job.source_id == "osce_custom_html"
+                          and isinstance(job.raw.get("_osce_public_field_resolution"), dict))
+        is_osce_list = (job.source_id == "osce_custom_html"
+                        and job.raw.get("parser") in {"public_links", "browser_inventory"}
+                        and not job.raw.get("detail_html")
+                        and isinstance(current_raw.get("_osce_public_field_resolution"), dict))
+        if not any((is_unv, is_eu_list, is_eu_detail, is_osce_list, is_osce_detail)):
+            return False
+        if current["source_id"] != job.source_id or str(current["external_id"]) != str(job.external_id):
+            raise ValueError("Public detail retention requires the same source and external ID")
+        if is_eu_detail or is_osce_detail:
+            incoming_row = {key: getattr(job, key) for key in (
+                "source_id", "external_id", "title", "description", "department", "location", "employment_type",
+                "apply_url", "source_url", "closes_at_local", "closes_tz",
+            )}
+            incoming_row.update(posted_at=_dt(job.posted_at), closes_at=_dt(job.closes_at))
+            binding = self._osce_bound_public_detail if is_osce_detail else self._eu_bound_public_detail
+            if not binding(job.raw, incoming_row):
+                raise ValueError("EU incoming official detail fields are not bound to its identity and body")
+            # A fresh official observation owns even explicitly unknown fields.
+            # Attachment bytes remain available; changed discovery inputs cannot
+            # inherit their previous completeness certificate.
+            for key in ("attachments", "_jobagg_listing_verification"):
+                if key not in job.raw and key in current_raw:
+                    job.raw[key] = current_raw[key]
+            if "attachment_verification" not in job.raw and isinstance(current_raw.get("attachment_verification"), dict):
+                verification = dict(current_raw["attachment_verification"])
+                if (job.description != current["description"]
+                        or any(job.raw.get(key) != current_raw.get(key) for key in (
+                            "detail_html", "official_vacancy_url", "required_attachment_urls", "official_directory_notice",
+                            "enisa_public_wrapper", "eda_public_notice", "europol_public_vacancy"))):
+                    verification.update(complete=False, discovery_complete=False,
+                                        invalidated_reason="job_content_changed_requires_attachment_reverification")
+                job.raw["attachment_verification"] = verification
+            return True
+        if is_unv:
+            current_bound = self._unv_bound_public_detail(current_raw, job.external_id, current["description"])
+            current_proof = current_raw.get("_unv_public_text_verification", {})
+            kind = job.raw.get("_unv_record_kind")
+            if (kind == "listing" and current_raw.get("_unv_record_kind") == "detail"
+                    and isinstance(current_proof, dict) and current_proof and not current_bound):
+                raise ValueError("UNV current public detail proof is not bound to its identity and body")
+            if str(job.raw.get("id")) != str(job.external_id):
+                raise ValueError("UNV observation identity does not match its external ID")
+            if kind == "detail":
+                incoming_bound = self._unv_bound_public_detail(job.raw, job.external_id, job.description)
+                if not incoming_bound:
+                    raise ValueError("UNV incoming detail proof is not bound to its identity and body")
+                resolution = job.raw.get("_unv_deadline_resolution", {})
+                if resolution.get("kind") not in {"known_instant", "unknown"}:
+                    raise ValueError("UNV detail deadline resolution is missing")
+                if resolution["kind"] == "unknown":
+                    job.closes_at = job.closes_at_local = job.closes_tz = None
+                elif (job.closes_at != _parse_dt(resolution.get("utc")) or job.closes_at is None
+                      or job.closes_tz != "UTC"
+                      or job.closes_at_local != job.closes_at.astimezone(UTC).replace(tzinfo=None).isoformat()):
+                    raise ValueError("UNV detail deadline differs from its public resolution")
+                # A new full observation owns its entire flat public field group.
+                # Retain document bytes, but context/body changes invalidate discovery.
+                if "attachments" not in job.raw and "attachments" in current_raw:
+                    job.raw["attachments"] = current_raw["attachments"]
+                if "_jobagg_listing_verification" not in job.raw and "_jobagg_listing_verification" in current_raw:
+                    job.raw["_jobagg_listing_verification"] = current_raw["_jobagg_listing_verification"]
+                if not isinstance(job.raw.get("attachment_verification"), dict) and isinstance(current_raw.get("attachment_verification"), dict):
+                    verification = dict(current_raw["attachment_verification"])
+                    def discovery(raw):
+                        # Full flat payload includes HTML link targets and the
+                        # public render context, not just extracted visible text.
+                        return {key: value for key, value in raw.items()
+                                if key not in {"attachments", "attachment_verification", "_unv_listing_observation"}
+                                and not key.startswith("_jobagg_")
+                                and key not in {"_unv_public_text_verification", "_unv_public_field_provenance"}}
+                    if clean_text(job.description) != clean_text(current["description"]) or discovery(job.raw) != discovery(current_raw):
+                        verification.update(complete=False, discovery_complete=False,
+                                            invalidated_reason="job_content_changed_requires_attachment_reverification")
+                    job.raw["attachment_verification"] = verification
+                job.apply_url = job.source_url = f"https://app.unv.org/opportunities/{job.external_id}"
+                return True
+            if kind != "listing" or not current_bound:
+                return False
+            resolution = current_raw.get("_unv_deadline_resolution", {})
+            if resolution.get("kind") == "known_instant":
+                instant = _parse_dt(current["closes_at"])
+                if (instant != _parse_dt(resolution.get("utc")) or instant is None or current["closes_tz"] != "UTC"
+                        or current["closes_at_local"] != instant.astimezone(UTC).replace(tzinfo=None).isoformat()):
+                    raise ValueError("UNV retained deadline differs from its public resolution")
+            elif resolution.get("kind") == "unknown":
+                if any(current[key] is not None for key in ("closes_at", "closes_at_local", "closes_tz")):
+                    raise ValueError("UNV unknown deadline retained an unsupported normalized date")
+            else:
+                raise ValueError("UNV retained public deadline resolution is missing")
+            observation_key = "_unv_listing_observation"
+        else:
+            binding = self._osce_bound_public_detail if is_osce_list else self._eu_bound_public_detail
+            if not binding(current_raw, current):
+                raise ValueError("EU official public detail identity, body or field binding is invalid")
+            if str(job.raw.get("external_id")) != str(job.external_id):
+                raise ValueError("EU listing identity does not match its external ID")
+            if (is_eu_list and prior_eu.get("provider") in {"euipo_reviewed_primary_pdf", "euda_reviewed_primary_pdf"}
+                    and (job.source_url != current["source_url"] or job.apply_url != current["source_url"]
+                         or job.raw.get("href") != current["source_url"] or job.raw.get("official_notice_text"))):
+                raise ValueError("EU reviewed PDF listing lacks its exact source URL binding")
+            observation_key = "_osce_listing_observation" if is_osce_list else "_eu_listing_observation"
+        # Preserve the old observation's immutable capture times. The latest
+        # listing has a separate payload and never becomes detail provenance.
+        incoming = {key: value for key, value in job.raw.items()
+                    if key not in {observation_key, "_unv_retained_detail_observation"}}
+        listing_proof = incoming.get("_jobagg_listing_verification")
+        observation = {
+            "raw": incoming,
+            "normalized": {key: getattr(job, key) for key in (
+                "title", "location", "department", "employment_type", "apply_url", "source_url", "closes_at_local", "closes_tz",
+            )},
+            "posted_at": _dt(job.posted_at), "closes_at": _dt(job.closes_at),
+            "observed_at": listing_proof.get("observed_at") if isinstance(listing_proof, dict) else None,
+        }
+        job.raw = {**current_raw, observation_key: observation}
+        if is_unv:
+            from jobagg.adapters.unv_public import render_public
+
+            provided = {key: value for key, value in incoming.items()
+                        if not key.startswith("_") or key in {
+                            "_unv_public_render_context", "_unv_duty_station_response", "_unv_eligibility_criteria",
+                        }}
+            candidate = {**current_raw, **provided}
+            previous_text, previous_scope = render_public(current_raw)
+            candidate_text, candidate_scope = render_public(candidate)
+            public_changed = (
+                " ".join(str(candidate_text or "").split()) != " ".join(str(previous_text or "").split())
+                or candidate_scope.get("complete") != previous_scope.get("complete")
+            )
+            # Lookup expansion and equivalent date serialization are not new
+            # public content. Compare the observed UI projection, preserving
+            # HTML link targets and conditional fields, under retained context.
+            changed_fields = sorted(key for key, value in provided.items()
+                                    if value != current_raw.get(key)) if public_changed else []
+            observation["changed_detail_inputs"] = changed_fields
+            if public_changed:
+                reason = "listing_content_changed_requires_detail_reverification"
+                history_key = "_unv_retained_detail_observation"
+                if history_key not in job.raw:
+                    job.raw[history_key] = {
+                        "raw": {key: value for key, value in current_raw.items()
+                                if key not in {history_key, observation_key}},
+                        "description": current["description"],
+                        "normalized": {key: current[key] for key in (
+                            "title", "location", "department", "employment_type", "apply_url", "source_url",
+                            "posted_at", "closes_at", "closes_at_local", "closes_tz",
+                        )},
+                    }
+                for proof_key in ("_unv_public_text_verification", "_jobagg_main_text_verification"):
+                    proof = dict(current_raw[proof_key])
+                    proof.update(complete=False, invalidated_reason=reason,
+                                 missing=sorted(set([*proof.get("missing", []), reason])))
+                    job.raw[proof_key] = proof
+                observation["current_public_scope"] = "requires_detail_reverification"
+                if isinstance(current_raw.get("attachment_verification"), dict):
+                    job.raw["attachment_verification"] = {
+                        **current_raw["attachment_verification"], "complete": False, "discovery_complete": False,
+                        "invalidated_reason": "listing_content_changed_requires_detail_and_attachment_reverification",
+                    }
+        if isinstance(listing_proof, dict):
+            job.raw["_jobagg_listing_verification"] = listing_proof
+        for key in ("title", "location", "department", "employment_type", "description", "apply_url", "source_url", "closes_at_local", "closes_tz"):
+            setattr(job, key, current[key])
+        job.posted_at, job.closes_at = _parse_dt(current["posted_at"]), _parse_dt(current["closes_at"])
+        if is_unv:
+            job.apply_url = job.source_url = f"https://app.unv.org/opportunities/{job.external_id}"
+        return True
+
     def _merge_existing_detail_fields(self, job: JobRecord, current: sqlite3.Row) -> None:
         """Preserve detail-only fields when a listing-only sync omits them."""
 
         new_row_is_listing_only = self._new_row_is_listing_only(job.raw)
         current_raw = self._load_raw_json(current["raw_json"])
+        from jobagg.adapters.imo_public import MARKER as IMO_CALENDAR_MARKER, bound_public_date_fields, public_claims, restore_raw_public_claims
+        imo_calendar_fields = bound_public_date_fields(job.raw, job)
+        imo_calendar_resolution = job.raw.get(IMO_CALENDAR_MARKER) if imo_calendar_fields else None
+        imo_source_claims = public_claims(job.raw) if imo_calendar_fields else None
+        if self._merge_labelled_public_observation(job, current, current_raw):
+            return
+        if self._merge_workday_precision_observation(job, current, current_raw):
+            return
+        if self._merge_eu_primary_metadata_observation(job, current, current_raw):
+            return
+        if self._merge_eu_primary_text_observation(job, current, current_raw):
+            return
+        if self._merge_verified_public_observation(job, current, current_raw):
+            return
+        incoming_attachment_verification = job.raw.get("attachment_verification")
+        is_iom = job.source_id == "iom_oracle_hcm" and job.ats_family == "oracle_hcm"
+        incoming_iom_detail = is_iom and self._iom_contract_detail(job.raw, job.external_id)
+        current_iom_detail = is_iom and self._iom_contract_detail(current_raw, current["external_id"])
+        if (incoming_iom_detail or current_iom_detail) and (
+            current["source_id"] != job.source_id or str(current["external_id"]) != str(job.external_id)
+        ):
+            raise ValueError("IOM contract retention requires the same source and external ID")
+        incoming_iom_contract_fields = {key: job.raw[key] for key in (
+            "ContractType", "requisitionFlexFields", "_oracle_contract_resolution",
+        ) if key in job.raw}
+        oracle_full_fields = (
+            "ExternalDescriptionStr", "Description",
+            "ExternalResponsibilitiesStr", "ExternalQualificationsStr",
+        )
+        oracle_listing_only = job.ats_family == "oracle_hcm" and not any(
+            self._raw_has_value(job.raw.get(key)) for key in oracle_full_fields
+        )
+        current_has_detail = self._current_row_has_detail(current["raw_json"])
+        current_has_oracle_detail = job.ats_family == "oracle_hcm" and any(
+            self._raw_has_value(current_raw.get(key)) for key in oracle_full_fields
+        )
+        taleo_listing_only = job.ats_family == "taleo" and job.raw.get("_taleo_record_kind") == "listing"
+        incoming_taleo_detail = job.ats_family == "taleo" and self._taleo_record_is_detail(
+            job.raw, job.external_id
+        )
+        current_has_taleo_detail = job.ats_family == "taleo" and self._taleo_record_is_detail(
+            current_raw, current["external_id"]
+        )
+        incoming_wipo_detail = (job.source_id == "wipo_taleo" and incoming_taleo_detail
+                                and self._wipo_bound_public_detail(job.raw, job.external_id, job.title, job.description, job.employment_type))
+        current_wipo_detail = (job.source_id == "wipo_taleo" and current_has_taleo_detail
+                               and self._wipo_bound_public_detail(current_raw, current["external_id"], current["title"], current["description"], current["employment_type"]))
+        if (incoming_wipo_detail or current_wipo_detail) and (
+            current["source_id"] != job.source_id or str(current["external_id"]) != str(job.external_id)
+        ):
+            raise ValueError("WIPO public field retention requires the same source and external ID")
+        incoming_wipo_employment = job.employment_type
+        incoming_taleo_flat = job.raw.get("_taleo_flat")
+        incoming_taleo_posting_resolution = job.raw.get("_taleo_posting_time_resolution")
+        clear_incoming_posted_at = (
+            incoming_taleo_detail and isinstance(incoming_taleo_posting_resolution, dict)
+            and incoming_taleo_posting_resolution.get("kind") in {"public_calendar_date_only", "unknown_timezone"}
+        )
+        incoming_resolution = job.raw.get("_taleo_deadline_resolution")
+        current_resolution = current_raw.get("_taleo_deadline_resolution")
+        clear_resolution_kinds = {"open_ended", "unknown_timezone", "unparsed"}
+        incoming_ilo_resolution = job.raw.get("_ilo_deadline_resolution")
+        current_ilo_resolution = current_raw.get("_ilo_deadline_resolution")
+        incoming_ilo_detail = (
+            job.source_id == "ilo_successfactors" and isinstance(incoming_ilo_resolution, dict)
+            and incoming_ilo_resolution.get("record_kind") == "detail"
+            and self._raw_has_value(job.raw.get("detail_html"))
+        )
+        current_has_ilo_detail = (
+            job.source_id == "ilo_successfactors" and isinstance(current_ilo_resolution, dict)
+            and current_ilo_resolution.get("record_kind") == "detail"
+            and self._raw_has_value(current_raw.get("detail_html"))
+        )
+        ilo_listing_only = job.source_id == "ilo_successfactors" and not incoming_ilo_detail
+        incoming_avature_resolution = job.raw.get("_avature_deadline_resolution")
+        current_avature_resolution = current_raw.get("_avature_deadline_resolution")
+        incoming_avature_detail = (
+            job.source_id == "unops_avature" and isinstance(incoming_avature_resolution, dict)
+            and incoming_avature_resolution.get("record_kind") == "detail"
+            and self._raw_has_value(job.raw.get("detail_html"))
+        )
+        avature_listing_only = job.source_id == "unops_avature" and not incoming_avature_detail
+        current_has_avature_detail = (
+            job.source_id == "unops_avature" and isinstance(current_avature_resolution, dict)
+            and current_avature_resolution.get("record_kind") == "detail"
+            and self._raw_has_value(current_raw.get("detail_html"))
+        )
+        incoming_workday_resolution = job.raw.get("_workday_deadline_resolution")
+        current_workday_resolution = current_raw.get("_workday_deadline_resolution")
+        recognized_workday = job.source_id in {"wfp_workday", "unhcr_workday", "wto_workday"}
+        incoming_workday_detail = (
+            recognized_workday and isinstance(incoming_workday_resolution, dict)
+            and incoming_workday_resolution.get("record_kind") == "detail"
+            and isinstance(job.raw.get("jobPostingInfo"), dict)
+            and self._raw_has_value(job.raw["jobPostingInfo"].get("jobDescription"))
+        )
+        current_has_workday_detail = (
+            recognized_workday and isinstance(current_workday_resolution, dict)
+            and current_workday_resolution.get("record_kind") == "detail"
+            and isinstance(current_raw.get("jobPostingInfo"), dict)
+            and self._raw_has_value(current_raw["jobPostingInfo"].get("jobDescription"))
+        )
+        workday_listing_only = recognized_workday and not incoming_workday_detail
+        prior_workday_timezone_evidence = None
+        if current_has_workday_detail:
+            if current_workday_resolution.get("utc_resolved") is True and current_workday_resolution.get("public_timezone"):
+                prior_workday_timezone_evidence = {
+                    key: current_workday_resolution.get(key) for key in (
+                        "public_calendar_date", "public_timezone", "closes_tz",
+                    )
+                }
+            elif isinstance(current_workday_resolution.get("retained_timezone_evidence"), dict):
+                prior_workday_timezone_evidence = current_workday_resolution["retained_timezone_evidence"]
+            if prior_workday_timezone_evidence and not all(
+                prior_workday_timezone_evidence.get(key)
+                for key in ("public_calendar_date", "public_timezone", "closes_tz")
+            ):
+                prior_workday_timezone_evidence = None
+        clear_incoming_deadline = (
+            incoming_taleo_detail and isinstance(incoming_resolution, dict)
+            and incoming_resolution.get("kind") in clear_resolution_kinds
+        ) or (incoming_ilo_detail and incoming_ilo_resolution.get("utc_resolved") is False) or (
+            incoming_avature_detail and incoming_avature_resolution.get("utc_resolved") is False
+        ) or (incoming_workday_detail and incoming_workday_resolution.get("utc_resolved") is False)
+        preserve_cleared_deadline = (
+            taleo_listing_only and current_has_taleo_detail and isinstance(current_resolution, dict)
+            and current_resolution.get("kind") in clear_resolution_kinds
+        ) or (ilo_listing_only and current_has_ilo_detail and current_ilo_resolution.get("utc_resolved") is False) or (
+            avature_listing_only and current_has_avature_detail and current_avature_resolution.get("utc_resolved") is False
+        ) or (workday_listing_only and current_has_workday_detail and current_workday_resolution.get("utc_resolved") is False)
+        preserve_detail_dates = (
+            (new_row_is_listing_only or oracle_listing_only)
+            and (current_has_detail or current_has_oracle_detail)
+        ) or (taleo_listing_only and current_has_taleo_detail) or (ilo_listing_only and current_has_ilo_detail) or (
+            avature_listing_only and current_has_avature_detail
+        ) or (workday_listing_only and current_has_workday_detail)
+        if incoming_taleo_detail or incoming_ilo_detail or incoming_avature_detail or incoming_workday_detail:
+            preserve_detail_dates = False
+        listing_date_observation = {
+            "posted_at": _dt(job.posted_at),
+            "closes_at": _dt(job.closes_at),
+            "closes_at_local": job.closes_at_local,
+            "closes_tz": job.closes_tz,
+        }
+        oracle_date_keys = {
+            "posted_at": ("PostedDate", "ExternalPostedStartDate"),
+            "closes_at": ("ExternalPostedEndDate", "PostingEndDate"),
+        }
+        if preserve_detail_dates and oracle_listing_only:
+            listing_date_observation["raw_oracle_dates"] = {
+                key: job.raw[key]
+                for keys in oracle_date_keys.values() for key in keys
+                if key in job.raw
+            }
+        if taleo_listing_only and current_has_taleo_detail:
+            listing_date_observation["raw_taleo_flat"] = incoming_taleo_flat
+            listing_date_observation["raw_taleo_detail_url"] = job.raw.get("_taleo_detail_url")
         new_quality = detail_quality_status(
             title=job.title,
             description=job.description,
@@ -1061,19 +2304,165 @@ class JobDatabase:
             raw=current_raw,
         )
         job.raw = self._merge_existing_raw_detail_fields(job.raw, current["raw_json"])
-        if job.department is None:
-            job.department = current["department"]
-        if job.employment_type is None:
+        if incoming_iom_detail:
+            # The successful detail response owns this complete public field
+            # group, including omitted/null Contract Type. Do not revive a
+            # stale contract through generic raw-field fallback.
+            for key in ("ContractType", "requisitionFlexFields", "_oracle_contract_resolution"):
+                if key in incoming_iom_contract_fields:
+                    job.raw[key] = incoming_iom_contract_fields[key]
+                else:
+                    job.raw.pop(key, None)
+            job.employment_type = clean_text(job.raw["_oracle_contract_resolution"]["public_contract_type"])
+        elif current_iom_detail and oracle_listing_only:
+            job.raw["_oracle_listing_contract_observation"] = incoming_iom_contract_fields
+            for key in ("ContractType", "requisitionFlexFields", "_oracle_contract_resolution"):
+                if key in current_raw:
+                    job.raw[key] = current_raw[key]
+                else:
+                    job.raw.pop(key, None)
             job.employment_type = current["employment_type"]
-        if job.posted_at is None:
+        if ilo_listing_only and current_has_ilo_detail:
+            job.raw["_ilo_deadline_resolution"] = current_ilo_resolution
+            for key in ("ilo_public_fields", "_ilo_field_resolution", "grade", "contract_type"):
+                if key not in job.raw and key in current_raw:
+                    job.raw[key] = current_raw[key]
+        if workday_listing_only and current_has_workday_detail:
+            job.raw["_workday_deadline_resolution"] = current_workday_resolution
+        if incoming_taleo_detail and isinstance(incoming_taleo_flat, dict):
+            # A complete new structured detail owns its field set. Do not fill
+            # absent/newly open-ended metadata from the previous full payload.
+            job.raw["_taleo_flat"] = dict(incoming_taleo_flat)
+        if taleo_listing_only and current_has_taleo_detail:
+            for key in (
+                "_taleo_flat", "_taleo_record_kind", "detail_url", "_taleo_detail_url",
+                "_taleo_deadline_resolution", "_taleo_deadline_timezone_evidence",
+                "_taleo_deadline_open_ended", "_taleo_posting_time_resolution",
+                "_taleo_public_metadata_resolution", "_taleo_public_binding_capture",
+                "_taleo_previous_detail_representation",
+            ):
+                if key in current_raw:
+                    job.raw[key] = current_raw[key]
+                else:
+                    job.raw.pop(key, None)
+        if incoming_wipo_detail:
+            # An omitted public contract field is unknown. Keep the prior
+            # listing classification inspectable without publishing it as a
+            # field of this newer complete public detail observation.
+            if job.employment_type != current["employment_type"]:
+                job.raw["_wipo_previous_employment_observation"] = {
+                    "employment_type": current["employment_type"],
+                    "raw_json_sha256": hashlib.sha256(str(current["raw_json"] or "").encode()).hexdigest(),
+                    "last_seen_at": current["last_seen_at"], "scope": "previous_stored_observation",
+                }
+            elif "_wipo_previous_employment_observation" in current_raw:
+                job.raw["_wipo_previous_employment_observation"] = current_raw["_wipo_previous_employment_observation"]
+        elif taleo_listing_only and current_wipo_detail:
+            job.raw["_wipo_listing_employment_observation"] = {
+                "employment_type": incoming_wipo_employment, "raw_taleo_flat": incoming_taleo_flat,
+            }
+            job.employment_type = current["employment_type"]
+            if "_wipo_previous_employment_observation" in current_raw:
+                job.raw["_wipo_previous_employment_observation"] = current_raw["_wipo_previous_employment_observation"]
+        if avature_listing_only and current_has_avature_detail:
+            for key in ("avature_fields", "_avature_deadline_resolution", "_avature_field_resolution",
+                        "_avature_competency_text_resolution"):
+                if key in current_raw:
+                    job.raw[key] = current_raw[key]
+        if preserve_detail_dates:
+            # Keep the fresh list observation inspectable without allowing its
+            # date-only fields to masquerade as retained full-detail metadata.
+            if "_jobagg_listing_date_observation" not in job.raw:
+                job.raw["_jobagg_listing_date_observation"] = listing_date_observation
+            if oracle_listing_only:
+                for field, keys in oracle_date_keys.items():
+                    if current[field] is None:
+                        continue
+                    for key in keys:
+                        if key in current_raw:
+                            job.raw[key] = current_raw[key]
+                        else:
+                            job.raw.pop(key, None)
+        if current_raw.get("parser") == "successfactors_detail":
+            # Older RMK details retained a parser marker but not full HTML.
+            # Preserve that historical provenance separately from the incoming
+            # listing's own parser; a long generic listing is never sufficient.
+            job.raw["_jobagg_retained_detail_parser"] = "successfactors_detail"
+        avature_field_resolution = job.raw.get("_avature_field_resolution", {})
+        clear_unobserved_avature_department = incoming_avature_detail and avature_field_resolution.get("department_observed") is False
+        if clear_unobserved_avature_department:
+            job.department = None
+        elif job.department is None:
+            job.department = current["department"]
+        if job.employment_type is None and not (incoming_iom_detail or incoming_wipo_detail):
+            job.employment_type = current["employment_type"]
+        if clear_incoming_posted_at:
+            job.posted_at = None
+        elif taleo_listing_only and current_has_taleo_detail:
+            # Explicitly unknown public posting time remains unknown after a
+            # listing contributes an unsupported date-only midnight.
             job.posted_at = _parse_dt(current["posted_at"])
-        if job.closes_at is None:
+        elif job.posted_at is None or (preserve_detail_dates and current["posted_at"] is not None):
+            job.posted_at = _parse_dt(current["posted_at"])
+        if clear_incoming_deadline:
+            job.closes_at = None
+            if (
+                incoming_workday_detail and current_has_workday_detail
+                and incoming_workday_resolution.get("kind") == "public_calendar_date_only"
+                and not job.closes_tz and prior_workday_timezone_evidence
+                and prior_workday_timezone_evidence["public_calendar_date"] == incoming_workday_resolution.get("public_calendar_date")
+            ):
+                # A proven zone for the same public calendar date may survive
+                # an omitted clock. The missing cutoff still has no UTC value.
+                job.closes_tz = prior_workday_timezone_evidence["closes_tz"]
+                job.raw["_workday_deadline_resolution"] = {
+                    **incoming_workday_resolution, "closes_tz": job.closes_tz,
+                    "retained_timezone_evidence": dict(prior_workday_timezone_evidence),
+                }
+        elif preserve_detail_dates and (current["closes_at"] is not None or preserve_cleared_deadline):
             job.closes_at = _parse_dt(current["closes_at"])
-        if job.closes_at_local is None and "closes_at_local" in current.keys():
+            job.closes_at_local = current["closes_at_local"] if "closes_at_local" in current.keys() else None
+            job.closes_tz = current["closes_tz"] if "closes_tz" in current.keys() else None
+        elif job.closes_at is None:
+            job.closes_at = _parse_dt(current["closes_at"])
+        if not clear_incoming_deadline and job.closes_at_local is None and "closes_at_local" in current.keys():
             job.closes_at_local = current["closes_at_local"]
-        if job.closes_tz is None and "closes_tz" in current.keys():
+        if not clear_incoming_deadline and job.closes_tz is None and "closes_tz" in current.keys():
             job.closes_tz = current["closes_tz"]
-        if job.description is None:
+        # Date-only public claims explicitly clear unsupported old UTC values.
+        for key, value in imo_calendar_fields.items():
+            setattr(job, key, value)
+        if imo_calendar_resolution:
+            restore_raw_public_claims(job.raw, imo_source_claims)
+            job.raw[IMO_CALENDAR_MARKER] = imo_calendar_resolution
+        if oracle_listing_only and any(
+            self._raw_has_value(current_raw.get(key)) for key in oracle_full_fields
+        ):
+            # Oracle's list summary can pass generic text quality. Rebuild a
+            # known summary or expand a contained fragment from retained raw.
+            # Older rows can also have richer main text than their retained raw
+            # fields: a listing refresh must not shorten that saved detail.
+            # A fresh full-detail observation still replaces older content.
+            parts = public_description_parts(
+                job.raw.get("ShortDescription") or job.raw.get("ShortDescriptionStr"),
+                current_raw.get("ExternalDescriptionStr") or current_raw.get("Description"),
+                current_raw.get("ExternalResponsibilitiesStr"),
+                current_raw.get("ExternalQualificationsStr"),
+            )
+            rebuilt = clean_text("\n\n".join(str(part) for part in parts if part))
+            current_text = clean_text(current["description"])
+            retained_summaries = {
+                clean_text(current_raw.get(key))
+                for key in ("ShortDescription", "ShortDescriptionStr")
+                if isinstance(current_raw.get(key), str)
+            }
+            if not current_text or current_text in retained_summaries or (rebuilt and current_text in rebuilt):
+                job.description = rebuilt
+            else:
+                job.description = current["description"]
+        elif taleo_listing_only and current_has_taleo_detail:
+            job.description = current["description"]
+        elif job.description is None:
             job.description = current["description"]
         elif (
             current["description"]
@@ -1083,6 +2472,32 @@ class JobDatabase:
             job.description = current["description"]
         elif new_row_is_listing_only and self._current_row_has_detail(current["raw_json"]):
             job.description = current["description"]
+
+        # Keep captured documents across ordinary listing/detail refreshes.
+        # A changed main body requires document discovery to be checked again;
+        # retained bytes remain evidence, not a fresh completeness certificate.
+        if not isinstance(incoming_attachment_verification, dict) and isinstance(
+            current_raw.get("attachment_verification"), dict
+        ):
+            verification = dict(current_raw["attachment_verification"])
+            discovery_inputs_changed = any(
+                (self._raw_has_value(job.raw.get(key)) or self._raw_has_value(current_raw.get(key)))
+                and job.raw.get(key) != current_raw.get(key)
+                for key in (
+                    "detail_html", "ExternalDescriptionStr", "Description",
+                    "ExternalResponsibilitiesStr", "ExternalQualificationsStr",
+                    "jobPostingInfo", "jobAd", "_smartrecruiters_public_variants",
+                    "_jobagg_public_language_variants",
+                    "_jobagg_listing_date_observation", "_jobagg_retained_detail_parser",
+                    "PostedDate", "ExternalPostedStartDate", "ExternalPostedEndDate", "PostingEndDate",
+                    "_taleo_flat", "_taleo_record_kind", "_taleo_deadline_resolution",
+                    "_taleo_deadline_timezone_evidence", "_taleo_deadline_open_ended",
+                )
+            )
+            if clean_text(job.description) != clean_text(current["description"]) or discovery_inputs_changed:
+                verification.update(complete=False, discovery_complete=False,
+                                    invalidated_reason="job_content_changed_requires_attachment_reverification")
+            job.raw["attachment_verification"] = verification
 
     @staticmethod
     def _load_raw_json(current_raw_json: str | None) -> dict[str, Any]:
@@ -1119,6 +2534,15 @@ class JobDatabase:
             "ExternalResponsibilitiesStr",
             "ExternalQualificationsStr",
             "Description",
+            "attachments",
+            "attachment_verification",
+            "_jobagg_listing_verification",
+            "_jobagg_main_text_verification",
+            "_jobagg_retained_detail_parser",
+            "_jobagg_public_language_variants",
+            "_smartrecruiters_public_variants",
+            "_smartrecruiters_variant_manifest_sha256",
+            "jobAd",
         ):
             if not JobDatabase._raw_has_value(merged.get(key)) and JobDatabase._raw_has_value(
                 current_raw.get(key)
@@ -1145,8 +2569,27 @@ class JobDatabase:
 
     @staticmethod
     def _new_row_is_listing_only(raw: dict[str, Any]) -> bool:
-        return JobDatabase._raw_has_value(raw.get("listing_html")) and not JobDatabase._raw_has_value(
-            raw.get("detail_html")
+        return (
+            JobDatabase._raw_has_value(raw.get("listing_html"))
+            and not JobDatabase._raw_has_value(raw.get("detail_html"))
+            and raw.get("parser") != "successfactors_detail"
+            and raw.get("_taleo_record_kind") != "detail"
+        )
+
+    @staticmethod
+    def _taleo_record_is_detail(raw: dict[str, Any], external_id: str | None) -> bool:
+        if raw.get("_taleo_record_kind") == "detail":
+            return True
+        if raw.get("_taleo_record_kind") == "listing":
+            return False
+        flat = raw.get("_taleo_flat")
+        return (
+            JobDatabase._raw_has_value(raw.get("detail_url"))
+            and isinstance(flat, dict)
+            and flat.get("_taleo_parser") == "requisitionDescriptionInterface.fillList"
+            and bool(str(flat.get("Requisition Title") or "").strip())
+            and bool(external_id)
+            and str(flat.get("Job Number") or "").strip() == str(external_id).strip()
         )
 
     @staticmethod
@@ -1157,7 +2600,11 @@ class JobDatabase:
             return False
         if not isinstance(current_raw, dict):
             return False
-        return JobDatabase._raw_has_value(current_raw.get("detail_html"))
+        return (
+            JobDatabase._raw_has_value(current_raw.get("detail_html"))
+            or current_raw.get("parser") == "successfactors_detail"
+            or current_raw.get("_jobagg_retained_detail_parser") == "successfactors_detail"
+        )
 
     @staticmethod
     def _raw_has_value(value: Any) -> bool:
@@ -1234,6 +2681,50 @@ class JobDatabase:
             for job in jobs:
                 counts[self.upsert_job(job)] += 1
         return counts
+
+    def record_listing_observation(
+        self,
+        source_id: str,
+        observed_job_keys: set[str],
+        *,
+        observed_at: datetime,
+        inventory_complete: bool | None = None,
+        evidence_ref: str = "canonical_source_sync",
+        enabled: bool = True,
+    ) -> int:
+        """Bind current-list membership to a captured frame without closing jobs.
+
+        An incomplete frame proves the presence of returned jobs, but it cannot
+        prove the absence/closure of other retained jobs. Their history stays
+        intact while they stop being labelled as observed in the latest frame.
+        """
+        if observed_at.tzinfo is None:
+            raise ValueError("listing observation timestamp must be timezone-aware")
+        count = 0
+        with self.connection_scope() as conn:
+            rows = conn.execute(
+                "SELECT job_key, raw_json FROM jobs WHERE source_id = ?", (source_id,)
+            ).fetchall()
+            for row in rows:
+                raw = self._load_raw_json(row["raw_json"])
+                seen = enabled and row["job_key"] in observed_job_keys
+                raw["_jobagg_listing_verification"] = {
+                    "version": 1,
+                    "source_id": source_id,
+                    "observed_at": _dt(observed_at),
+                    "observed_in_latest_listing": seen,
+                    "inventory_complete": inventory_complete,
+                    "evidence_ref": evidence_ref,
+                    "reason": "observed" if seen else (
+                        "not_observed_in_latest_frame" if enabled else "disabled_source"
+                    ),
+                }
+                conn.execute(
+                    "UPDATE jobs SET raw_json = ? WHERE job_key = ?",
+                    (json.dumps(raw, ensure_ascii=False), row["job_key"]),
+                )
+                count += 1
+        return count
 
     def add_change_event(self, event: ChangeEvent, conn: sqlite3.Connection | None = None) -> None:
         def write(connection: sqlite3.Connection) -> None:
@@ -1485,9 +2976,9 @@ class JobDatabase:
     ) -> dict[str, Any]:
         """Create or refresh a queued detail item unless it is already complete.
 
-        Complete rows for the same listing hash are intentionally left untouched:
-        they represent an already-enriched unchanged posting and should not be
-        refetched by later selective-detail runs.
+        Complete rows for the same listing hash are left untouched unless
+        content quality or an explicit refresh requires another observation.
+        Existing cooldown timestamps are preserved when an item is requeued.
         """
 
         now = _dt(datetime.now(tz=UTC))
@@ -1501,6 +2992,7 @@ class JobDatabase:
                 and current["detail_status"] == "complete"
                 and current["listing_hash_at_detail_fetch"] == listing_hash
                 and not reason.startswith("detail_quality_")
+                and reason != "refresh_requested"
             ):
                 return dict(current)
             if current is None:
@@ -1859,9 +3351,9 @@ class JobDatabase:
             clauses.append("application_ready = 1")
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY source_id, title"
+        query += " ORDER BY source_id, title, job_key"
         with self.connect() as conn:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(query, tuple(params))
             for row in rows:
                 data = dict(row)
                 data["raw"] = json.loads(data.pop("raw_json") or "{}")
@@ -1984,42 +3476,46 @@ class JobDatabase:
             clauses.append("j.application_ready = 1")
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY j.source_id, j.title"
-        try:
-            with self.connect() as conn:
-                rows = conn.execute(query, tuple(params)).fetchall()
-        except sqlite3.OperationalError:
-            yield from self.iter_jobs(
-                source_id=source_id,
-                status=status,
-                trusted_current_only=trusted_current_only,
-                application_ready_only=application_ready_only,
-                history_only=history_only,
-            )
-            return
-        for row in rows:
-            data = dict(row)
-            data["raw"] = json.loads(data.pop("raw_json") or "{}")
-            for field_name in (
-                "unv_expertise_areas",
-                "secondary_mandate_families",
-                "capability_tags",
-                "quality_flags",
-            ):
-                if data.get(field_name):
-                    data[field_name] = json.loads(data[field_name])
-            for field_name in (
-                "occupational_evidence",
-                "mandate_evidence",
-                "capability_tag_scores",
-                "capability_tag_evidence",
-                "contract_group_evidence",
-                "seniority_evidence",
-            ):
-                if data.get(field_name):
-                    data[field_name] = json.loads(data[field_name])
-            data["needs_review"] = bool(data["needs_review"]) if data.get("needs_review") is not None else None
-            yield data
+        query += " ORDER BY j.source_id, j.title, j.job_key"
+        with self.connect() as conn:
+            try:
+                rows = conn.execute(query, tuple(params))
+            except sqlite3.OperationalError as exc:
+                # Legacy databases may lack classification columns. Do not
+                # disguise I/O, lock or corruption failures as a schema fallback.
+                if not str(exc).startswith(("no such table:", "no such column:")):
+                    raise
+                yield from self.iter_jobs(
+                    source_id=source_id,
+                    status=status,
+                    trusted_current_only=trusted_current_only,
+                    application_ready_only=application_ready_only,
+                    history_only=history_only,
+                )
+                return
+            for row in rows:
+                data = dict(row)
+                data["raw"] = json.loads(data.pop("raw_json") or "{}")
+                for field_name in (
+                    "unv_expertise_areas",
+                    "secondary_mandate_families",
+                    "capability_tags",
+                    "quality_flags",
+                ):
+                    if data.get(field_name):
+                        data[field_name] = json.loads(data[field_name])
+                for field_name in (
+                    "occupational_evidence",
+                    "mandate_evidence",
+                    "capability_tag_scores",
+                    "capability_tag_evidence",
+                    "contract_group_evidence",
+                    "seniority_evidence",
+                ):
+                    if data.get(field_name):
+                        data[field_name] = json.loads(data[field_name])
+                data["needs_review"] = bool(data["needs_review"]) if data.get("needs_review") is not None else None
+                yield data
 
     def upsert_vacancy_source_features(self, features: Any) -> None:
         from jobagg.classification.pipeline import feature_to_row

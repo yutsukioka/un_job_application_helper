@@ -130,19 +130,30 @@ def export_jobs(
     application_ready_only: bool = False,
     history_only: bool = False,
 ) -> None:
-    rows = list(
-        db.iter_jobs_with_classification(
-            source_id=source_id,
-            status=status,
-            trusted_current_only=trusted_current_only,
-            application_ready_only=application_ready_only,
-            history_only=history_only,
-        )
+    if output_format not in {"json", "csv"}:
+        raise ValueError(f"Unsupported export format: {output_format}")
+    rows = db.iter_jobs_with_classification(
+        source_id=source_id,
+        status=status,
+        trusted_current_only=trusted_current_only,
+        application_ready_only=application_ready_only,
+        history_only=history_only,
     )
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if output_format == "json":
-        path.write_text(json.dumps(rows, indent=2, ensure_ascii=True), encoding="utf-8")
+        # Exactly the existing json.dumps(list(rows), indent=2) encoding,
+        # while retaining only one database row at a time.
+        encoder = json.JSONEncoder(indent=2, ensure_ascii=True)
+        with path.open("w", encoding="utf-8") as handle:
+            handle.write("[")
+            first = True
+            for row in rows:
+                handle.write("\n  " if first else ",\n  ")
+                for chunk in encoder.iterencode(row):
+                    handle.write(chunk.replace("\n", "\n  "))
+                first = False
+            handle.write("]" if first else "\n]")
         return
     if output_format == "csv":
         with path.open("w", newline="", encoding="utf-8") as handle:
@@ -150,4 +161,3 @@ def export_jobs(
             writer.writeheader()
             writer.writerows(rows)
         return
-    raise ValueError(f"Unsupported export format: {output_format}")
