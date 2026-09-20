@@ -509,32 +509,26 @@ def test_real_outbound_failures_remain_fresh_pressure(tmp_path, monkeypatch, fai
     assert metrics["request_intervals"][0]["opener_entries"] == 1
 
 
-def test_postresponse_policy_denial_retains_actual_opener_entry(tmp_path, monkeypatch):
-    from email.message import Message
-    from io import BytesIO
-    from jobagg.http_safe import SafeHTTPPolicy
+def test_opener_policy_denial_retains_actual_opener_entry(tmp_path, monkeypatch):
+    from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError
 
     worker, _, _ = make_worker(tmp_path, monkeypatch, count=1, max_tasks=1)
     opens, resolutions, clients = [], [], []
 
-    class Response(BytesIO):
-        headers = Message()
-        status = 200
-
-        def geturl(self):
-            return "https://host0.example/wday/cxs/source0/External/jobs"
-
     class Opener:
         def open(self, request, **kwargs):
             opens.append(request.full_url)
-            return Response(b'{"total":0,"jobPostings":[]}')
+            assert request._jobagg_endpoint.addresses == ("93.184.216.34",)
+            # A redirect may fail policy after the original request entered
+            # the opener. This still counts as an outbound attempt.
+            raise SSRFProtectionError("Redirect resolves to a denied network")
 
     opener = Opener()
     monkeypatch.setattr(JobAggHTTPClient, "_build_opener", lambda *args: opener)
 
     def resolve(host):
         resolutions.append(host)
-        return ["93.184.216.34" if len(resolutions) == 1 else "127.0.0.1"]
+        return ["93.184.216.34"]
 
     def factory(source, policy):
         client = JobAggHTTPClient(min_delay_seconds=0, max_retries=0,
@@ -545,7 +539,7 @@ def test_postresponse_policy_denial_retains_actual_opener_entry(tmp_path, monkey
     worker.client_factory = factory
     report = worker.tick(execute=True)
     metrics = report["concurrency"]
-    assert len(opens) == 1 and len(resolutions) == 2
+    assert len(opens) == 1 and len(resolutions) == 1
     assert metrics["policy_holds"] == 1
     assert metrics["runtime_errors"] == metrics["transport_failures"] == metrics["new_access_blocks"] == 0
     assert metrics["local_policy_request_attempts"] == 0
