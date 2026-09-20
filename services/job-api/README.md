@@ -115,4 +115,5 @@ older `JOB_API_ALLOW_LAN`, `JOB_API_TOKEN`, `JOB_API_UNIX_SOCKET`, and
 `JOB_API_SCORING_ROOT` settings are superseded; use `ATLAS_ALLOW_LAN`, a private
 bearer-token source, and `JOB_API_STRATEGY_ROOT`. The `job-api` entry point delegates
 to the validated launcher. New saved-search names are validated, while existing
-stored identities remain available through exact conditional deletion.
+stored identities remain available through exact lookup, execution, ordinary
+deletion, and conditional deletion.

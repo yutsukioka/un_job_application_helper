@@ -33,6 +33,15 @@ DENIED_NETWORKS = tuple(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedEndpoint:
+    """Request-local numeric destinations; never resolve the hostname again to connect."""
+
+    host: str
+    port: int
+    addresses: tuple[str, ...]
+
+
 @dataclass(slots=True)
 class SafeHTTPPolicy:
     allowed_hosts: set[str] = field(default_factory=set)
@@ -43,6 +52,9 @@ class SafeHTTPPolicy:
         self.allowed_hosts = {_normalize_host(host) for host in self.allowed_hosts if host}
 
     def validate_url(self, url: str) -> str:
+        return self.resolve_url(url).host
+
+    def resolve_url(self, url: str) -> ValidatedEndpoint:
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"}:
             raise SSRFProtectionError("URL scheme is not allowed")
@@ -51,10 +63,21 @@ class SafeHTTPPolicy:
         host = _normalize_host(parsed.hostname)
         if self.allowed_hosts and host not in self.allowed_hosts:
             raise SSRFProtectionError("URL host is not in the organization allowlist")
-        for address in self._resolve_host(host):
+        if parsed.username is not None or parsed.password is not None:
+            raise SSRFProtectionError("URL credentials are not allowed")
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise SSRFProtectionError("URL port is invalid") from exc
+        addresses = tuple(dict.fromkeys(self._resolve_host(host)))
+        if not addresses:
+            raise SSRFProtectionError("URL host could not be resolved")
+        for address in addresses:
             if _is_denied_address(address):
                 raise SSRFProtectionError("URL resolves to a denied network")
-        return host
+            if "%" in address:
+                raise SSRFProtectionError("Scoped network addresses are not allowed")
+        return ValidatedEndpoint(host, port, addresses)
 
     def validate_redirect(self, from_url: str, location: str, *, redirect_count: int) -> str:
         if redirect_count > self.max_redirects:
@@ -112,6 +135,8 @@ def _is_denied_address(value: str) -> bool:
     address = _as_ip_address(value)
     if address is None:
         raise SSRFProtectionError("URL host could not be resolved")
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
     return any(address in network for network in DENIED_NETWORKS)
 
 

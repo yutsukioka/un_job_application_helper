@@ -5,6 +5,8 @@ from __future__ import annotations
 import errno
 import email.utils
 import gzip
+import http.client
+import ipaddress
 import json
 import random
 import socket
@@ -18,7 +20,7 @@ from http.cookiejar import CookieJar
 from dataclasses import dataclass
 from typing import Any
 
-from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError
+from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError, ValidatedEndpoint
 
 
 def verified_ssl_context() -> ssl.SSLContext:
@@ -66,6 +68,75 @@ _DEFAULT_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
 _RESPONSE_READ_CHUNK_BYTES = 64 * 1024
 
 
+def _connect_validated(endpoint: ValidatedEndpoint, timeout, source_address=None):
+    """Connect numeric sockets only; Host and TLS SNI remain on HTTPConnection."""
+    last_error = None
+    for address in endpoint.addresses:
+        family = socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
+        destination = (address, endpoint.port, 0, 0) if family == socket.AF_INET6 else (address, endpoint.port)
+        sock = None
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(destination)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            if sock is not None:
+                sock.close()
+    if last_error is not None:
+        raise last_error
+    raise SSRFProtectionError("No validated connection addresses")
+
+
+def _connection_factory(client, request, connection_class):
+    if client.safe_policy is None:
+        return connection_class
+    if request.has_proxy() or request._tunnel_host:
+        raise SSRFProtectionError("Proxies cannot be used with pinned HTTP destinations")
+    endpoint = getattr(request, "_jobagg_endpoint", None)
+    if endpoint is None:
+        endpoint = client.safe_policy.resolve_url(request.full_url)
+
+    def create(host, **kwargs):
+        connection = connection_class(host, **kwargs)
+        if connection.host.casefold().strip("[]") != endpoint.host or connection.port != endpoint.port:
+            raise SSRFProtectionError("Connection authority differs from validated URL")
+        # Override only this connection's TCP dialer. HTTPSConnection still wraps
+        # the socket with the original hostname and verified SSL context.
+        def dial(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+            if address != (connection.host, endpoint.port):
+                raise SSRFProtectionError("Connection destination changed after validation")
+            return _connect_validated(endpoint, timeout, source_address)
+        connection._create_connection = dial
+        return connection
+    return create
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+
+    def http_open(self, request):
+        return self.do_open(_connection_factory(self.client, request, http.client.HTTPConnection), request)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, client):
+        super().__init__(context=client._ssl_context)
+        self.client = client
+
+    def https_open(self, request):
+        return self.do_open(
+            _connection_factory(self.client, request, http.client.HTTPSConnection),
+            request, context=self._context,
+        )
+
+
 class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Check every destination before urllib follows it or forwards credentials."""
 
@@ -74,10 +145,12 @@ class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         count = getattr(req, '_jobagg_redirect_count', 0) + 1
+        endpoint = None
         if self.client.safe_policy is not None:
-            newurl = self.client.safe_policy.validate_redirect(
-                req.full_url, newurl, redirect_count=count
-            )
+            if count > self.client.safe_policy.max_redirects:
+                raise SSRFProtectionError("Too many redirects")
+            newurl = urllib.parse.urljoin(req.full_url, newurl)
+            endpoint = self.client.safe_policy.resolve_url(newurl)
         old = urllib.parse.urlsplit(req.full_url)
         new = urllib.parse.urlsplit(newurl)
         if old.scheme == 'https' and new.scheme != 'https':
@@ -86,6 +159,7 @@ class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
         if redirected is None:
             return None
         redirected._jobagg_redirect_count = count
+        redirected._jobagg_endpoint = endpoint
         old_origin = (old.scheme, old.hostname, old.port or (443 if old.scheme == 'https' else 80))
         new_origin = (new.scheme, new.hostname, new.port or (443 if new.scheme == 'https' else 80))
         if old_origin != new_origin:
@@ -148,10 +222,14 @@ class JobAggHTTPClient:
             or not self._ssl_context.check_hostname
         ):
             raise ValueError("HTTPS requires certificate and hostname verification")
+        # A proxy would perform its own destination resolution, bypassing pinning.
+        proxy = urllib.request.ProxyHandler({}) if self.safe_policy is not None else urllib.request.ProxyHandler()
         return urllib.request.build_opener(
+            proxy,
             urllib.request.HTTPCookieProcessor(self._cookie_jar),
             redirect_handler if redirect_handler is not None else _ValidatedRedirectHandler(self),
-            urllib.request.HTTPSHandler(context=self._ssl_context),
+            _PinnedHTTPHandler(self),
+            _PinnedHTTPSHandler(self),
         )
 
     def _request(
@@ -175,12 +253,12 @@ class JobAggHTTPClient:
         }
         request_headers.update(self.default_headers)
         request_headers.update(headers or {})
-        if self.safe_policy is not None:
-            self.safe_policy.validate_url(url)
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         for attempt in range(self.max_retries + 1):
+            if self.safe_policy is not None:
+                request._jobagg_endpoint = self.safe_policy.resolve_url(url)
             self._respect_min_delay(host)
             try:
                 self.last_request_diagnostics["stage"] = "connect_or_headers"
@@ -209,8 +287,6 @@ class JobAggHTTPClient:
                         response.headers.get("Content-Encoding"),
                         max_bytes=self.max_response_bytes,
                     )
-                    if self.safe_policy is not None:
-                        self.safe_policy.validate_url(response.geturl())
                     charset = response.headers.get_content_charset() or "utf-8"
                     text = decoded_bytes.decode(charset, errors="replace")
                     self._mark_request(host)

@@ -955,3 +955,21 @@ def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
 
     assert payload["total"] == 1
     assert payload["results"][0]["job_key"] == "un_inspira:current"
+
+
+@pytest.mark.parametrize("name", ["x" * 129, "  legacy search  "])
+def test_legacy_saved_search_runs_and_deletes_by_exact_identity(tmp_path: Path, name: str) -> None:
+    client = _client(tmp_path)
+    expected = _saved_search_snapshot(client)
+    expected["name"] = name
+    _settings(tmp_path).saved_searches_path.write_text(json.dumps(
+        {"version": 1, "saved_searches": {name: expected}}, ensure_ascii=True,
+    ))
+    from urllib.parse import quote
+    path = "/api/saved-searches/" + quote(name, safe="")
+    assert client.get("/api/saved-searches").json()[0]["name"] == name
+    response = client.post(path + "/run")
+    assert response.status_code == 200
+    assert "results" in response.json()
+    assert client.delete(path).json() == {"deleted": True}
+    assert client.get("/api/saved-searches").json() == []
