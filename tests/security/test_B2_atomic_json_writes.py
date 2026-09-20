@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "services" / "job-api"))
 
 from job_api import tracker  # noqa: E402
 from job_api.models import ApplicationRecord  # noqa: E402
+from jobagg.atomic_json_store import AtomicJsonStore
 from jobagg.filters import saved_searches  # noqa: E402
 from jobagg.filters.schemas import VacancySearchRequest  # noqa: E402
 
@@ -44,13 +45,13 @@ def test_B2_tracker_concurrent_upserts_preserve_all_records(
     monkeypatch,
 ) -> None:
     path = tmp_path / "tracker.json"
-    original_save = tracker._save
+    original_write = AtomicJsonStore._write_unlocked
 
-    def slow_save(target: Path, records: list[ApplicationRecord]) -> None:
+    def slow_write(store, document):
         time.sleep(0.01)
-        original_save(target, records)
+        return original_write(store, document)
 
-    monkeypatch.setattr(tracker, "_save", slow_save)
+    monkeypatch.setattr(AtomicJsonStore, "_write_unlocked", slow_write)
 
     def worker(index: int) -> None:
         tracker.upsert_record(
@@ -74,13 +75,13 @@ def test_B2_saved_search_concurrent_writes_preserve_all_searches(
     monkeypatch,
 ) -> None:
     path = tmp_path / "saved_searches.json"
-    original_write_store = saved_searches._write_store
+    original_write = AtomicJsonStore._write_unlocked
 
-    def slow_write_store(target: Path, data: dict[str, object]) -> None:
+    def slow_write(store, document):
         time.sleep(0.01)
-        original_write_store(target, data)
+        return original_write(store, document)
 
-    monkeypatch.setattr(saved_searches, "_write_store", slow_write_store)
+    monkeypatch.setattr(AtomicJsonStore, "_write_unlocked", slow_write)
 
     def worker(index: int) -> None:
         saved_searches.save_search(

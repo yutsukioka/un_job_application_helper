@@ -98,50 +98,46 @@ def listing_inventory(
                 return _unavailable(
                     "listing_publication_schema_unavailable", limit, offset
                 )
-        scope, params = (
-            ("WHERE source_id=?", [source]) if source is not None else ("", [])
-        )
+        # Optional filters remain bound parameters, never SQL fragments.
+        params = [source, source]
         count_row = conn.execute(
-            f"""SELECT count(*) AS tracked,
+            """SELECT count(*) AS tracked,
             COALESCE(sum(observed_in_latest_listing=1),0) AS observed_current,
             COALESCE(sum(observed_in_latest_listing=1 AND published_detail=0),0) AS detail_pending,
             COALESCE(sum(observed_in_latest_listing=1 AND published_detail=1),0) AS detail_published,
             COALESCE(sum(observed_in_latest_listing=0),0) AS absent_from_complete_frame,
             COALESCE(sum(observed_in_latest_listing IS NULL),0) AS presence_unknown
-            FROM live_listing_inventory {scope}""",
+            FROM live_listing_inventory WHERE (? IS NULL OR source_id=?)""",
             params,
         ).fetchone()
         frames = [
             dict(row)
             for row in conn.execute(
-                f"SELECT * FROM live_listing_frames {scope} ORDER BY source_id", params
+                "SELECT * FROM live_listing_frames WHERE (? IS NULL OR source_id=?) ORDER BY source_id", params
             )
         ]
-        where = ["i.observed_in_latest_listing=1"]
-        if source is not None:
-            where.append("i.source_id=?")
-        if pending_only:
-            where.append("i.published_detail=0")
         rows = conn.execute(
-            f"""SELECT i.*,
+            """SELECT i.*,
             j.job_key AS matched_job_key, j.org_id AS matched_org,
             CASE WHEN length(trim(COALESCE(j.description,'')))>0 THEN 1 ELSE 0 END AS matched_text
             FROM live_listing_inventory i
             LEFT JOIN jobs j ON j.job_key=i.canonical_job_key
                 AND j.source_id=i.source_id AND j.external_id=i.external_id
-            WHERE {" AND ".join(where)}
+            WHERE i.observed_in_latest_listing=1
+                AND (? IS NULL OR i.source_id=?)
+                AND (?=0 OR i.published_detail=0)
             ORDER BY i.source_id,i.external_id LIMIT ? OFFSET ?""",
-            [*params, limit, offset],
+            [*params, int(pending_only), limit, offset],
         ).fetchall()
         per_source = {
             row["source_id"]: dict(row)
             for row in conn.execute(
-                f"""SELECT source_id,
+                """SELECT source_id,
                 COALESCE(sum(observed_in_latest_listing=1),0) AS observed_current,
                 COALESCE(sum(observed_in_latest_listing=1 AND published_detail=0),0) AS detail_pending,
                 COALESCE(sum(observed_in_latest_listing=1 AND published_detail=1),0) AS detail_published,
                 COALESCE(sum(observed_in_latest_listing IS NULL),0) AS presence_unknown
-                FROM live_listing_inventory {scope} GROUP BY source_id""",
+                FROM live_listing_inventory WHERE (? IS NULL OR source_id=?) GROUP BY source_id""",
                 params,
             )
         }

@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
-import sys
-from dataclasses import asdict, replace
+import stat
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import unquote, urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from jobagg.atomic_json_store import AtomicJsonStoreError
 from jobagg.db import JobDatabase
 from jobagg.filters.query import search_collected_jobs
 from jobagg.filters.saved_searches import (
+    SavedSearch,
+    compare_and_remove_saved_search,
     get_saved_search,
     list_saved_searches,
     remove_saved_search,
@@ -24,43 +33,111 @@ from jobagg.filters.saved_searches import (
     validate_saved_search_name,
 )
 from jobagg.filters.schemas import VacancySearchRequest
-from jobagg.scoring import (
-    StrategyPathError,
-    load_strategy_signals,
-    resolve_strategy_signals_path,
-    score_jobs,
-)
+from jobagg.scoring import StrategySignals, score_jobs
+from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import CORSMiddleware
 
+from job_api.attachments import download_job_attachment, list_job_attachments
 from job_api.config import ApiSettings, load_settings
 from job_api.listing_inventory import listing_inventory
-from job_api.publication_gate import PublicationGateMiddleware
-from job_api.attachments import list_job_attachments, download_job_attachment
-from job_api.auth import FailedAuthLimiter, require_lan_auth
 from job_api.models import (
     ApplicationRecord,
     AssistantRunRequest,
     AssistantRunResult,
+    ConditionalDeleteResponse,
+    SavedSearchConditionalDeleteRequest,
     SavedSearchModel,
     SearchRequest,
     SearchResponse,
+    TrackerConditionalDeleteRequest,
 )
-from job_api.tracker import create_record, delete_record, list_records, upsert_record
+from job_api.private_access import (
+    PrivateAccessMiddleware,
+    load_private_access_policy,
+    private_access_rejection,
+)
+from job_api.publication_gate import PublicationGateMiddleware
+from job_api.tracker import (
+    compare_and_delete_record,
+    create_record,
+    delete_record,
+    list_records,
+    upsert_record,
+)
+
+_CONDITIONAL_DELETE_PATH = re.compile(
+    r"^/api/(?:saved-searches/[^/]+|tracker/[^/]+)/conditional-delete$"
+)
+_CONDITIONAL_IDENTIFIER_PREFIX = "~sha256-"
+_MAX_STRATEGY_BYTES = 1024 * 1024
+_STRATEGY_ERROR = "Strategy file is unavailable."
+_STRATEGY_TERM_LINE = re.compile(r"^\s*\d+\.\s*([^\u2b50\n]+?)\s*(?:[\u2b50]+)?\s*$")
+_CCOG_FULL = re.compile(r"\b\d\.[A-Za-z0-9]\.\d{2}\.\d{2}\b")
+_CCOG_FAMILY = re.compile(r"\b\d\.[A-Za-z0-9]\.\d{2}\b")
 
 
-# Denylist values for startup validation, not bind targets.
-LAN_BIND_HOSTS = {"0.0.0.0", "::", "[::]"}  # nosec B104
+def _conditional_identifier_segment(value: str) -> str:
+    identifier_bytes = value.encode("utf-16-be", errors="surrogatepass")
+    digest = hashlib.sha256(identifier_bytes).hexdigest()
+    return f"{_CONDITIONAL_IDENTIFIER_PREFIX}{digest}"
+
+
+def _conditional_identifier_matches(segment: str, expected: str) -> bool:
+    return segment == expected or segment == _conditional_identifier_segment(expected)
 
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    auth_limiter = FailedAuthLimiter()
-    app = FastAPI(
-        title="UN Job Application Helper API",
-        version="0.1.0",
-        dependencies=[Depends(require_lan_auth(settings, auth_limiter))],
+    private_access = load_private_access_policy()
+    strategy_root = Path(
+        os.environ.get("JOB_API_STRATEGY_ROOT", settings.repo_root / "private")
     )
+    app = FastAPI(title="UN Job Application Helper API", version="0.1.0")
+    app.add_middleware(
+        PublicationGateMiddleware,
+        state_path=settings.db_path.parent / ".jobagg-publication-state.json",
+    )
+    app.add_middleware(PrivateAccessMiddleware, policy=private_access)
+    if private_access.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(private_access.cors_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
-    app.add_middleware(PublicationGateMiddleware, state_path=settings.db_path.parent / ".jobagg-publication-state.json")
+    @app.exception_handler(RequestValidationError)
+    async def conditional_delete_validation_error(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> Any:
+        if request.method == "POST" and _CONDITIONAL_DELETE_PATH.fullmatch(
+            request.url.path
+        ):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Conditional delete request is invalid."},
+            )
+        return await request_validation_exception_handler(request, exc)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def conditional_delete_body_decode_error(
+        request: Request,
+        exc: StarletteHTTPException,
+    ) -> Any:
+        if (
+            request.method == "POST"
+            and _CONDITIONAL_DELETE_PATH.fullmatch(request.url.path)
+            and exc.status_code == 400
+            and exc.detail == "There was an error parsing the body"
+        ):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Conditional delete request is invalid."},
+            )
+        return await http_exception_handler(request, exc)
 
     def db() -> JobDatabase:
         return JobDatabase(settings.db_path)
@@ -70,7 +147,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if not settings.db_path.exists():
             return {
                 "status": "missing_db",
-                "db_path": _scrub_path(settings.db_path, settings.repo_root),
+                "db_path": None,
                 "schema_version": "unknown",
                 "open_jobs": 0,
                 "enabled_sources": 0,
@@ -78,11 +155,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             }
         with sqlite3.connect(settings.db_path) as conn:
             open_jobs = _scalar(conn, "SELECT COUNT(*) FROM jobs WHERE status = 'open'")
-            enabled_sources = _scalar(conn, "SELECT COUNT(DISTINCT source_id) FROM jobs")
+            enabled_sources = _scalar(
+                conn, "SELECT COUNT(DISTINCT source_id) FROM jobs"
+            )
             last_sync_at = _scalar(conn, "SELECT MAX(observed_at) FROM source_runs")
         return {
             "status": "ok",
-            "db_path": _scrub_path(settings.db_path, settings.repo_root),
+            "db_path": None,
             "schema_version": "jobagg-sqlite",
             "open_jobs": open_jobs,
             "enabled_sources": enabled_sources,
@@ -90,25 +169,28 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         }
 
     @app.post("/api/search", response_model=SearchResponse)
-    def search(request: SearchRequest) -> SearchResponse:
-        _require_db(settings.db_path, settings.repo_root)
-        job_request = _to_jobagg_request(request)
-        response = search_collected_jobs(db(), job_request, include_facets=request.include_facets)
-        payload = asdict(response)
-        payload["facet_labels"] = _facet_labels(settings.db_path, payload.get("facets") or {})
+    def search(request: SearchRequest, http_request: Request) -> SearchResponse:
         if request.score_against:
-            try:
-                signals_path = resolve_strategy_signals_path(
-                    request.score_against,
-                    root=settings.scoring_root,
-                    max_bytes=settings.scoring_max_bytes,
-                )
-            except StrategyPathError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            signals = load_strategy_signals(signals_path)
+            rejection = private_access_rejection(private_access, http_request.scope)
+            if rejection is not None:
+                status_code, detail = rejection
+                raise HTTPException(status_code=status_code, detail=detail)
+        _require_db(settings.db_path)
+        job_request = _to_jobagg_request(request)
+        response = search_collected_jobs(
+            db(), job_request, include_facets=request.include_facets
+        )
+        payload = asdict(response)
+        payload["facet_labels"] = _facet_labels(
+            settings.db_path, payload.get("facets") or {}
+        )
+        if request.score_against:
+            signals = _load_strategy_signals(strategy_root, request.score_against)
             results = score_jobs(payload["results"], signals)
             if request.min_score is not None:
-                results = [row for row in results if row.get("score", 0) >= request.min_score]
+                results = [
+                    row for row in results if row.get("score", 0) >= request.min_score
+                ]
                 payload["total"] = len(results)
             payload["results"] = results
         _annotate_result_url_trust(payload)
@@ -116,45 +198,52 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/job-attachment")
     def job_attachment(job_key: str, attachment_id: str):
-        _require_db(settings.db_path, settings.repo_root)
+        _require_db(settings.db_path)
         return download_job_attachment(settings.db_path, job_key, attachment_id)
 
     @app.get("/api/job-detail")
     def job_detail_query(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
+        return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/by-key")
     def job_detail_by_key(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
+        return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/{job_key}")
     def job_detail(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
+        return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/path/{job_key:path}")
     def job_detail_path(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
+        return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/facets")
     def facets() -> dict[str, dict[str, int]]:
-        _require_db(settings.db_path, settings.repo_root)
-        response = search_collected_jobs(db(), VacancySearchRequest(limit=0), include_facets=True)
+        _require_db(settings.db_path)
+        response = search_collected_jobs(
+            db(), VacancySearchRequest(limit=0), include_facets=True
+        )
         return response.facets
 
     @app.post("/api/facets")
     def filtered_facets(request: SearchRequest) -> dict[str, dict[str, int]]:
-        _require_db(settings.db_path, settings.repo_root)
-        response = search_collected_jobs(db(), _to_jobagg_request(request), include_facets=True)
+        _require_db(settings.db_path)
+        response = search_collected_jobs(
+            db(), _to_jobagg_request(request), include_facets=True
+        )
         return response.facets
 
     @app.get("/api/taxonomies")
     def taxonomies() -> dict[str, Any]:
-        _require_db(settings.db_path, settings.repo_root)
+        _require_db(settings.db_path)
         return _taxonomy_metadata(settings.db_path)
 
     @app.get("/api/saved-searches")
     def saved_searches() -> list[dict[str, Any]]:
-        return [search.to_dict() for search in list_saved_searches(settings.saved_searches_path)]
+        return [
+            search.to_dict()
+            for search in list_saved_searches(settings.saved_searches_path)
+        ]
 
     @app.post("/api/saved-searches")
     def upsert_saved_search(search: SavedSearchModel) -> dict[str, Any]:
@@ -169,7 +258,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.post("/api/saved-searches/{name}/run", response_model=SearchResponse)
     def run_saved_search(name: str) -> SearchResponse:
-        _require_db(settings.db_path, settings.repo_root)
+        _require_db(settings.db_path)
         name = _saved_search_name_or_400(name)
         try:
             saved = get_saved_search(settings.saved_searches_path, name)
@@ -177,7 +266,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         response = search_collected_jobs(db(), saved.request, include_facets=True)
         payload = asdict(response)
-        payload["facet_labels"] = _facet_labels(settings.db_path, payload.get("facets") or {})
+        payload["facet_labels"] = _facet_labels(
+            settings.db_path, payload.get("facets") or {}
+        )
         _annotate_result_url_trust(payload)
         return SearchResponse(**payload)
 
@@ -186,20 +277,53 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         name = _saved_search_name_or_400(name)
         return {"deleted": remove_saved_search(settings.saved_searches_path, name)}
 
+    @app.post(
+        "/api/saved-searches/{name}/conditional-delete",
+        response_model=ConditionalDeleteResponse,
+    )
+    def conditional_delete_saved_search(
+        name: str,
+        body: Annotated[Any, Body()],
+    ) -> ConditionalDeleteResponse:
+        try:
+            request = SavedSearchConditionalDeleteRequest.model_validate(body)
+        except ValidationError:
+            raise HTTPException(
+                status_code=422, detail="Conditional delete request is invalid."
+            ) from None
+        expected = request.expected
+        if not _conditional_identifier_matches(name, expected.name):
+            raise HTTPException(
+                status_code=400, detail="Conditional delete identity mismatch."
+            )
+        name = expected.name
+        expected_search = SavedSearch(
+            name=expected.name,
+            description=expected.description,
+            request=_to_jobagg_request(expected.request),
+            created_at=expected.created_at,
+            updated_at=expected.updated_at,
+        )
+        try:
+            outcome = compare_and_remove_saved_search(
+                settings.saved_searches_path,
+                name=name,
+                expected=expected_search,
+            )
+        except AtomicJsonStoreError:
+            raise HTTPException(
+                status_code=500, detail="Private-state store operation failed."
+            ) from None
+        if outcome == "mismatch":
+            raise HTTPException(
+                status_code=412, detail="Conditional delete precondition failed."
+            )
+        return ConditionalDeleteResponse(outcome=outcome)
+
     @app.get("/api/updates")
     def updates() -> dict[str, Any]:
-        _require_db(settings.db_path, settings.repo_root)
-        with sqlite3.connect(settings.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            recent_runs = [dict(row) for row in conn.execute(
-                """
-                SELECT source_id, fetched, inserted, updated, missing, closed, observed_at
-                FROM source_runs
-                ORDER BY observed_at DESC
-                LIMIT 25
-                """
-            )]
-        return {"recent_source_runs": recent_runs}
+        _require_db(settings.db_path)
+        return {"recent_source_runs": _recent_source_runs(settings.db_path)}
 
     @app.get("/api/listing-inventory")
     def published_listing_inventory(
@@ -209,22 +333,28 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         return listing_inventory(
-            settings.db_path, source=source, pending_only=pending_only, limit=limit, offset=offset
+            settings.db_path,
+            source=source,
+            pending_only=pending_only,
+            limit=limit,
+            offset=offset,
         )
 
     @app.get("/api/sources")
     def sources() -> dict[str, Any]:
-        _require_db(settings.db_path, settings.repo_root)
+        _require_db(settings.db_path)
         return {"sources": _source_summaries(settings.db_path)}
 
     @app.post("/api/sync/run")
     def run_sync() -> dict[str, str]:
-        raise HTTPException(status_code=501, detail="Sync orchestration is not exposed yet.")
+        raise HTTPException(
+            status_code=501, detail="Sync orchestration is not exposed yet."
+        )
 
     @app.get("/api/sync/runs")
     def sync_runs() -> list[dict[str, Any]]:
-        _require_db(settings.db_path, settings.repo_root)
-        return list(db().iter_source_runs())
+        _require_db(settings.db_path)
+        return _recent_source_runs(settings.db_path)
 
     @app.get("/api/tracker", response_model=list[ApplicationRecord])
     def tracker_records() -> list[ApplicationRecord]:
@@ -242,6 +372,47 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def remove_tracker_record(record_id: str) -> dict[str, bool]:
         return {"deleted": delete_record(settings.tracker_path, record_id)}
 
+    @app.post(
+        "/api/tracker/{record_id}/conditional-delete",
+        response_model=ConditionalDeleteResponse,
+    )
+    def conditional_delete_tracker_record(
+        record_id: str,
+        body: Annotated[Any, Body()],
+    ) -> ConditionalDeleteResponse:
+        try:
+            request = TrackerConditionalDeleteRequest.model_validate(body)
+            expected_payload = request.expected.model_dump()
+            expected = ApplicationRecord.model_validate(expected_payload)
+        except ValidationError:
+            raise HTTPException(
+                status_code=422, detail="Conditional delete request is invalid."
+            ) from None
+        if expected.model_dump(mode="json") != expected_payload:
+            raise HTTPException(
+                status_code=422, detail="Conditional delete request is invalid."
+            )
+        if not _conditional_identifier_matches(record_id, expected.id):
+            raise HTTPException(
+                status_code=400, detail="Conditional delete identity mismatch."
+            )
+        record_id = expected.id
+        try:
+            outcome = compare_and_delete_record(
+                settings.tracker_path,
+                record_id=record_id,
+                expected=expected,
+            )
+        except AtomicJsonStoreError:
+            raise HTTPException(
+                status_code=500, detail="Private-state store operation failed."
+            ) from None
+        if outcome == "mismatch":
+            raise HTTPException(
+                status_code=412, detail="Conditional delete precondition failed."
+            )
+        return ConditionalDeleteResponse(outcome=outcome)
+
     @app.post("/api/assistant/runs", response_model=AssistantRunResult)
     def create_assistant_run(request: AssistantRunRequest) -> AssistantRunResult:
         return AssistantRunResult(
@@ -255,7 +426,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
 
 def _to_jobagg_request(request: SearchRequest) -> VacancySearchRequest:
-    data = request.model_dump(exclude={"include_facets", "include_explain", "score_against", "min_score"})
+    data = request.model_dump(
+        exclude={"include_facets", "include_explain", "score_against", "min_score"}
+    )
     return VacancySearchRequest(**data)
 
 
@@ -266,24 +439,119 @@ def _saved_search_name_or_400(name: str) -> str:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _require_db(path: Path, repo_root: Path) -> None:
+def _require_db(path: Path) -> None:
     if not path.exists():
-        raise HTTPException(
-            status_code=503,
-            detail=f"Job database does not exist: {_scrub_path(path, repo_root)}",
+        raise HTTPException(status_code=503, detail="Job database is unavailable.")
+
+
+def _recent_source_runs(path: Path) -> list[dict[str, Any]]:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT source_id, fetched, inserted, updated, missing, closed,
+                       observed_at
+                FROM source_runs
+                ORDER BY observed_at DESC, id DESC
+                LIMIT 25
+                """
+            )
+        ]
+
+
+def _load_strategy_signals(root: Path, raw_path: str) -> StrategySignals:
+    try:
+        contents = _read_strategy_file(root, raw_path)
+        return _decode_strategy_signals(contents)
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail=_STRATEGY_ERROR) from None
+
+
+def _read_strategy_file(root: Path, raw_path: str) -> str:
+    resolved_root = root.resolve(strict=True)
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = resolved_root / candidate
+    candidate = Path(os.path.abspath(candidate))
+    relative = candidate.relative_to(resolved_root)
+    if not relative.parts:
+        raise ValueError(_STRATEGY_ERROR)
+
+    current = resolved_root
+    for part in relative.parts:
+        current /= part
+        if stat.S_ISLNK(current.lstat().st_mode):
+            raise ValueError(_STRATEGY_ERROR)
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = os.open(candidate, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > _MAX_STRATEGY_BYTES:
+            raise ValueError(_STRATEGY_ERROR)
+        chunks: list[bytes] = []
+        remaining = _MAX_STRATEGY_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        encoded = b"".join(chunks)
+        if len(encoded) > _MAX_STRATEGY_BYTES or len(encoded) != opened.st_size:
+            raise ValueError(_STRATEGY_ERROR)
+    finally:
+        os.close(descriptor)
+    return encoded.decode("utf-8")
+
+
+def _decode_strategy_signals(raw: str) -> StrategySignals:
+    text = raw.strip()
+    if text.startswith("{"):
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(_STRATEGY_ERROR)
+        return StrategySignals(
+            terms=_strategy_values(data.get("terms", [])),
+            ccog_codes=_strategy_values(data.get("ccog_codes", [])),
+            ccog_families=_strategy_values(data.get("ccog_families", [])),
         )
+
+    terms: list[str] = []
+    for line in raw.splitlines():
+        match = _STRATEGY_TERM_LINE.match(line)
+        if match:
+            term = match.group(1).strip(" -\u00b7:")
+            if term and term.casefold() not in {value.casefold() for value in terms}:
+                terms.append(term)
+    ccog_codes = sorted({match.group(0) for match in _CCOG_FULL.finditer(raw)})
+    ccog_families = sorted({match.group(0) for match in _CCOG_FAMILY.finditer(raw)})
+    covered = {".".join(code.split(".")[:3]) for code in ccog_codes}
+    return StrategySignals(
+        terms=terms,
+        ccog_codes=ccog_codes,
+        ccog_families=[family for family in ccog_families if family not in covered],
+    )
+
+
+def _strategy_values(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        raise ValueError(_STRATEGY_ERROR)
+    return [value for item in raw if (value := str(item).strip())]
 
 
 def _job_detail_payload(
-    db_path: Path,
-    repo_root: Path,
-    database: JobDatabase,
-    job_key: str,
+    db_path: Path, database: JobDatabase, job_key: str
 ) -> dict[str, Any]:
-    _require_db(db_path, repo_root)
-    # Framework routing already decodes URL components. Some canonical keys
-    # deliberately retain percent-encoded source slugs, so prefer their exact
-    # identity before supporting callers that pass another encoded form.
+    _require_db(db_path)
+    # Preserve canonical percent-encoded keys before trying compatibility decoding.
     job = database.get_job(job_key)
     if job is None:
         decoded_key = unquote(job_key)
@@ -309,7 +577,9 @@ def _annotate_result_url_trust(payload: dict[str, Any]) -> None:
 
 
 def _annotate_url_trust(row: dict[str, Any]) -> dict[str, Any]:
-    source_origin_host = _url_origin_host(row.get("source_url")) or _url_origin_host(row.get("apply_url"))
+    source_origin_host = _url_origin_host(row.get("source_url")) or _url_origin_host(
+        row.get("apply_url")
+    )
     row["apply_url_trust"] = _url_trust(row.get("apply_url"), source_origin_host)
     row["source_url_trust"] = _url_trust(row.get("source_url"), source_origin_host)
     return row
@@ -319,7 +589,9 @@ def _url_trust(value: object, source_origin_host: str | None) -> dict[str, Any]:
     origin_host = _url_origin_host(value)
     return {
         "origin_host": origin_host,
-        "matches_source_org": bool(origin_host and source_origin_host and origin_host == source_origin_host),
+        "matches_source_org": bool(
+            origin_host and source_origin_host and origin_host == source_origin_host
+        ),
     }
 
 
@@ -331,26 +603,6 @@ def _url_origin_host(value: object) -> str | None:
     except ValueError:
         return None
     return host.lower() if host else None
-
-
-def _scrub_path(path: Path, repo_root: Path) -> str:
-    try:
-        resolved_path = path.expanduser().resolve(strict=False)
-        resolved_root = repo_root.expanduser().resolve(strict=False)
-    except (OSError, RuntimeError):
-        return _opaque_path_id(path)
-    try:
-        relative = resolved_path.relative_to(resolved_root)
-    except ValueError:
-        return _opaque_path_id(resolved_path)
-    if relative == Path("."):
-        return "<repo>"
-    return f"<repo>/{relative.as_posix()}"
-
-
-def _opaque_path_id(path: Path) -> str:
-    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
-    return f"<path:{digest}>"
 
 
 def _scalar(conn: sqlite3.Connection, query: str) -> Any:
@@ -383,12 +635,18 @@ def _taxonomy_metadata(db_path: Path) -> dict[str, Any]:
 
 def _values(conn: sqlite3.Connection, query: str) -> list[str]:
     try:
-        return [row["value"] for row in conn.execute(query) if row["value"] not in (None, "")]
+        return [
+            row["value"]
+            for row in conn.execute(query)
+            if row["value"] not in (None, "")
+        ]
     except sqlite3.Error:
         return []
 
 
-def _facet_labels(db_path: Path, facets: dict[str, dict[str, int]]) -> dict[str, dict[str, str]]:
+def _facet_labels(
+    db_path: Path, facets: dict[str, dict[str, int]]
+) -> dict[str, dict[str, str]]:
     labels: dict[str, dict[str, str]] = {}
     if not facets:
         return labels
@@ -529,15 +787,39 @@ def _job_display_sections(job: dict[str, Any]) -> list[dict[str, Any]]:
     }
     description = str(job.get("description") or "").strip()
     if description and _clean_display_text(description) not in existing_bodies:
-        structured = _structured_description_sections(description, str(job.get("ats_family") or ""))
-        sections.extend(structured or [{"title": "Full Description", "body": _clean_display_text(description)}])
-    sections.append({"title": "Job Record", "rows": _display_rows(job, exclude={"raw", "locations", "classification", "source_features", "deadline_info", "display_sections"})})
+        structured = _structured_description_sections(
+            description, str(job.get("ats_family") or "")
+        )
+        sections.extend(
+            structured
+            or [{"title": "Full Description", "body": _clean_display_text(description)}]
+        )
+    sections.append(
+        {
+            "title": "Job Record",
+            "rows": _display_rows(
+                job,
+                exclude={
+                    "raw",
+                    "locations",
+                    "classification",
+                    "source_features",
+                    "deadline_info",
+                    "display_sections",
+                },
+            ),
+        }
+    )
     if job.get("classification"):
-        sections.append({"title": "Classification", "rows": _display_rows(job["classification"])})
+        sections.append(
+            {"title": "Classification", "rows": _display_rows(job["classification"])}
+        )
     if job.get("locations"):
         sections.append({"title": "Locations", "body": _pretty_json(job["locations"])})
     if job.get("source_features"):
-        sections.append({"title": "Source Features", "rows": _display_rows(job["source_features"])})
+        sections.append(
+            {"title": "Source Features", "rows": _display_rows(job["source_features"])}
+        )
     if raw:
         sections.append({"title": "Raw Source Data", "body": _pretty_json(raw)})
     return sections
@@ -612,7 +894,9 @@ _COMMON_DESCRIPTION_HEADINGS = (
 )
 
 
-def _structured_description_sections(description: str, ats_family: str) -> list[dict[str, Any]]:
+def _structured_description_sections(
+    description: str, ats_family: str
+) -> list[dict[str, Any]]:
     del ats_family
     text = _clean_display_text(description)
     if not text:
@@ -640,7 +924,9 @@ def _structured_description_sections(description: str, ats_family: str) -> list[
     return sections
 
 
-def _append_detail_section(sections: list[dict[str, Any]], title: str, body: str) -> None:
+def _append_detail_section(
+    sections: list[dict[str, Any]], title: str, body: str
+) -> None:
     clean_body = body.strip()
     if not clean_body:
         return
@@ -698,7 +984,9 @@ def _source_deadline_text(raw: dict[str, Any]) -> str | None:
             for key, child in value.items():
                 next_path = f"{path}.{key}" if path else str(key)
                 if _deadline_key(str(key)) and child not in (None, "", [], {}):
-                    candidates.append(f"{_display_label(str(key))}: {_display_value(child)}")
+                    candidates.append(
+                        f"{_display_label(str(key))}: {_display_value(child)}"
+                    )
                 visit(child, next_path)
         elif isinstance(value, list):
             for item in value:
@@ -725,7 +1013,9 @@ def _deadline_key(key: str) -> bool:
     )
 
 
-def _display_rows(data: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, str]]:
+def _display_rows(
+    data: dict[str, Any], *, exclude: set[str] | None = None
+) -> list[dict[str, str]]:
     exclude = exclude or set()
     rows: list[dict[str, str]] = []
     for key in sorted(data):
@@ -791,7 +1081,9 @@ def _source_summaries(db_path: Path) -> list[dict[str, Any]]:
                 "observed_at": diagnostic.get("observed_at"),
                 "detail_attempted": diagnostic.get("detail_attempted"),
                 "detail_failed": diagnostic.get("detail_failed"),
-                "missing_transition_allowed": bool(diagnostic.get("missing_transition_allowed"))
+                "missing_transition_allowed": bool(
+                    diagnostic.get("missing_transition_allowed")
+                )
                 if diagnostic.get("missing_transition_allowed") is not None
                 else None,
             }
@@ -823,7 +1115,10 @@ def _display_label(value: str) -> str:
     text = str(value).strip().replace("_", " ")
     if not text:
         return "Unknown"
-    return " ".join(word.upper() if len(word) <= 4 and word.isalpha() else word.capitalize() for word in text.split())
+    return " ".join(
+        word.upper() if len(word) <= 4 and word.isalpha() else word.capitalize()
+        for word in text.split()
+    )
 
 
 def _unv_category_labels() -> dict[str, str]:
@@ -851,50 +1146,10 @@ def _unv_volunteer_type_labels() -> dict[str, str]:
 app = create_app()
 
 
-def validate_bind_settings(host: str, settings: ApiSettings) -> None:
-    if host not in LAN_BIND_HOSTS:
-        return
-    if settings.allow_lan and (settings.api_token or settings.unix_socket):
-        return
-    raise ValueError(
-        "Refusing to bind job-api to 0.0.0.0 without explicit LAN hardening. "
-        "Set JOB_API_ALLOW_LAN=1 and configure either JOB_API_TOKEN for the "
-        "X-Job-Api-Token header or JOB_API_UNIX_SOCKET for Unix-socket mode."
-    )
+def main() -> None:
+    from job_api.launcher import main as launch
 
-
-def main(argv: list[str] | None = None) -> int:
-    import uvicorn
-
-    parser = argparse.ArgumentParser(description="Run the local job API service.")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to 127.0.0.1.")
-    parser.add_argument("--port", type=int, default=8765, help="Bind TCP port. Defaults to 8765.")
-    parser.add_argument(
-        "--unix-socket",
-        dest="unix_socket",
-        help="Bind uvicorn to a Unix domain socket instead of exposing a TCP port.",
-    )
-    parser.add_argument(
-        "--check-startup",
-        action="store_true",
-        help="Validate startup configuration and exit without starting uvicorn.",
-    )
-    args = parser.parse_args(argv)
-    settings = load_settings()
-    if args.unix_socket:
-        settings = replace(settings, unix_socket=Path(args.unix_socket))
-    try:
-        validate_bind_settings(args.host, settings)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    if args.check_startup:
-        return 0
-    if settings.unix_socket:
-        uvicorn.run("job_api.app:app", uds=str(settings.unix_socket), reload=False)
-    else:
-        uvicorn.run("job_api.app:app", host=args.host, port=args.port, reload=False)
-    return 0
+    launch()
 
 
 if __name__ == "__main__":

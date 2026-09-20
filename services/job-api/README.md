@@ -8,7 +8,7 @@ instead of making native clients call the `jobagg` CLI directly.
 ```bash
 python -m pip install -e packages/jobagg
 python -m pip install -e services/job-api
-job-api
+python -m job_api.launcher
 ```
 
 With uv, run the service project directly:
@@ -23,21 +23,62 @@ Defaults:
 - Saved searches: `private/jobagg/saved_searches.json`
 - Tracker: `private/jobagg/application_tracker.json`
 - URL: `http://127.0.0.1:8765`
+- Private access: direct loopback peers only
 
 Override paths with `JOB_API_DB`, `JOB_API_SAVED_SEARCHES`, and
 `JOB_API_TRACKER`.
 
-## LAN Exposure
+The validated launcher supports three private-access modes through
+`ATLAS_PRIVATE_API_MODE`: `loopback` (default), `token`, and `disabled`. There
+is no unauthenticated open mode. Saved-search, tracker, and assistant-run routes
+are private. The sync command and search requests that read a local
+`score_against` strategy file are also private. Public health, ordinary job
+search/detail, facets, taxonomies, source/update summaries, and sync status
+remain available.
 
-The service is loopback-only by default. Startup refuses `--host 0.0.0.0`
-unless the operator sets `JOB_API_ALLOW_LAN=1` and configures either
-`JOB_API_TOKEN` for the `X-Job-Api-Token` shared-secret header or
-`JOB_API_UNIX_SOCKET` for Unix-socket mode.
+An explicit `ATLAS_API_HOST=localhost` (including its case-insensitive and
+trailing-dot forms) is normalized to `127.0.0.1` before Uvicorn binds. Other
+hostnames are not trusted as loopback launch authority.
 
-`score_against` files are confined to `JOB_API_SCORING_ROOT`, which defaults
-to the repository `strategies/` directory. Files must be regular files under
-that root after symlink resolution and must not exceed
-`JOB_API_SCORING_MAX_BYTES` (default: 2097152).
+### Token-protected LAN launch
+
+LAN binding is opt-in and exposes public routes to the local network. Use an
+external permission-restricted token file and an explicit token mode:
+
+```bash
+umask 077
+TOKEN_FILE="$(mktemp "${TMPDIR:-/tmp}/atlas-private-api-token.XXXXXX")"
+openssl rand -base64 48 | tr -d '\n' > "$TOKEN_FILE"
+ATLAS_API_HOST=0.0.0.0 \
+ATLAS_ALLOW_LAN=1 \
+ATLAS_PRIVATE_API_MODE=token \
+ATLAS_PRIVATE_API_TOKEN_FILE="$TOKEN_FILE" \
+python -m job_api.launcher
+```
+
+Delete the external token file after stopping the service. The launcher rejects
+a LAN bind unless LAN opt-in, token mode, and one valid token source are all
+present. The validated launcher disables proxy-header trust and access logging.
+Direct Uvicorn invocation is unsupported, but the application still enforces
+private-route admission if the launcher is bypassed. Forwarding headers do not
+influence loopback admission, and loopback mode accepts only a loopback Host
+header to prevent browser DNS rebinding.
+
+Cross-origin browser access is disabled by default. Set
+`ATLAS_CORS_ORIGINS` to an exact comma-separated origin list when required.
+Wildcard origins are rejected. Unsafe private requests carrying browser
+metadata must be same-origin or come from an explicitly configured origin;
+browser-simple form encodings are rejected. Native loopback clients that send
+no browser-origin metadata remain supported.
+
+Strategy scoring accepts files only beneath `JOB_API_STRATEGY_ROOT`, which
+defaults to the repository's `private` directory. Strategy files are bounded
+to 1 MiB and symlinks and non-regular files are rejected. Public sync history
+is a bounded, error-free summary. LAN token mode does not provide transport
+encryption and is for temporary testing on a controlled network, not production
+remote access. See
+`docs/security/local_api_private_endpoint_security.md` for the operational
+policy.
 
 ## Endpoint Status
 
@@ -49,6 +90,8 @@ Implemented for MVP:
 - `GET /api/facets`
 - `POST /api/facets`
 - `GET /api/taxonomies`
+- `GET /api/listing-inventory`
+- `GET /api/job-attachment`
 - saved-search CRUD/run
 - `GET /api/updates`
 - `GET /api/sync/runs`
@@ -58,3 +101,18 @@ Contracted stubs:
 
 - `POST /api/sync/run`
 - `POST /api/assistant/runs`
+
+## Publication and compatibility
+
+Job database reads are gated while a publication generation is incomplete or
+changes during the response. Private-route admission runs before this gate;
+tracker and saved-search storage remain available independently of publication.
+The listing-inventory and stored public vacancy-attachment routes are public job
+data endpoints and use the same publication gate.
+
+The launcher and authentication contract is the `ATLAS_*` policy above. The
+older `JOB_API_ALLOW_LAN`, `JOB_API_TOKEN`, `JOB_API_UNIX_SOCKET`, and
+`JOB_API_SCORING_ROOT` settings are superseded; use `ATLAS_ALLOW_LAN`, a private
+bearer-token source, and `JOB_API_STRATEGY_ROOT`. The `job-api` entry point delegates
+to the validated launcher. New saved-search names are validated, while existing
+stored identities remain available through exact conditional deletion.

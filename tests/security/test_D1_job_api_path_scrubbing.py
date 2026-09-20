@@ -33,11 +33,11 @@ def test_D1_health_scrubs_repo_local_database_path(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["db_path"] == "<repo>/private/jobagg/output/all_jobs.sqlite3"
+    assert payload["db_path"] is None
     assert str(repo_root) not in response.text
 
 
-def test_D1_missing_database_error_uses_opaque_path_id(tmp_path: Path) -> None:
+def test_D1_missing_database_error_omits_path(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     db_path = tmp_path / "outside" / "all_jobs.sqlite3"
     settings = ApiSettings(
@@ -52,5 +52,5 @@ def test_D1_missing_database_error_uses_opaque_path_id(tmp_path: Path) -> None:
 
     assert response.status_code == 503
     detail = response.json()["detail"]
-    assert detail.startswith("Job database does not exist: <path:")
+    assert detail == "Job database is unavailable."
     assert str(tmp_path) not in response.text

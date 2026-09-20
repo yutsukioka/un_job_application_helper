@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, conint, conlist, constr, field_validator
 from jobagg.filters.saved_searches import validate_saved_search_name
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    conint,
+    conlist,
+    constr,
+    field_validator,
+)
 
 ShortText = constr(strip_whitespace=True, max_length=256)
 MediumText = constr(strip_whitespace=True, max_length=1024)
@@ -24,6 +32,11 @@ LimitInt = conint(gt=0, le=200)
 OffsetInt = conint(ge=0, le=100_000)
 
 
+StrictFiniteNumber = (
+    StrictInt | Annotated[float, Field(strict=True, allow_inf_nan=False)]
+)
+
+
 class SearchRequest(BaseModel):
     text: QueryText | None = None
     status: FilterList = Field(default_factory=lambda: ["open"])
@@ -33,7 +46,9 @@ class SearchRequest(BaseModel):
     cities: FilterList = Field(default_factory=list)
     countries_iso3: FilterList = Field(default_factory=list)
     regions: FilterList = Field(default_factory=list)
-    location_types: FilterList = Field(default_factory=lambda: ["primary", "duty_station", "outposted"])
+    location_types: FilterList = Field(
+        default_factory=lambda: ["primary", "duty_station", "outposted"]
+    )
     national_international: FilterList = Field(default_factory=list)
     contract_categories: FilterList = Field(default_factory=list)
     grade_systems: FilterList = Field(default_factory=list)
@@ -92,8 +107,21 @@ class SavedSearchModel(BaseModel):
         return validate_saved_search_name(value)
 
 
+ApplicationStatus = Literal[
+    "saved",
+    "interested",
+    "drafting",
+    "applied",
+    "interview",
+    "offer",
+    "rejected",
+    "withdrawn",
+]
+
+
 class ApplicationRecord(BaseModel):
-    id: ShortText
+    # Stored identities must round-trip exactly through conditional deletion.
+    id: str
     job_key: MediumText
     status: Literal[
         "saved",
@@ -108,6 +136,95 @@ class ApplicationRecord(BaseModel):
     notes: LongText = ""
     applied_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class SavedSearchStoredRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    text: str | None
+    status: list[str]
+    organizations: list[str]
+    source_ids: list[str]
+    ats_families: list[str]
+    cities: list[str]
+    countries_iso3: list[str]
+    regions: list[str]
+    location_types: list[str]
+    national_international: list[str]
+    contract_categories: list[str]
+    grade_systems: list[str]
+    grade_families: list[str]
+    grade_codes: list[str]
+    ccog_codes: list[str]
+    ccog_families: list[str]
+    occupational_family_codes: list[str]
+    occupational_medium_codes: list[str]
+    mandate_network_codes: list[str]
+    mandate_family_codes: list[str]
+    capability_tags: list[str]
+    contract_groups: list[str]
+    seniority_groups: list[str]
+    work_modalities: list[str]
+    volunteer_kinds: list[str]
+    unv_categories: list[str]
+    unv_volunteer_types: list[str]
+    closing_date_from: str | None
+    closing_date_to: str | None
+    posted_date_from: str | None
+    posted_date_to: str | None
+    min_location_confidence: StrictFiniteNumber
+    min_grade_confidence: StrictFiniteNumber
+    include_low_confidence: bool
+    exclude_expired_open: bool
+    limit: int
+    offset: int
+    sort: str
+
+
+class SavedSearchStoredSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: str
+    description: str | None
+    request: SavedSearchStoredRequest
+    created_at: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+
+
+class SavedSearchConditionalDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected: SavedSearchStoredSnapshot
+
+
+class StrictApplicationRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: str
+    job_key: str
+    status: ApplicationStatus
+    notes: str
+    applied_at: str | None
+    updated_at: str | None
+
+    @field_validator("id")
+    @classmethod
+    def validate_nonempty_id(cls, value: str) -> str:
+        if not value:
+            raise ValueError("identifier must not be empty")
+        return value
+
+
+class TrackerConditionalDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected: StrictApplicationRecord
+
+
+class ConditionalDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["deleted", "absent"]
 
 
 class AssistantRunRequest(BaseModel):

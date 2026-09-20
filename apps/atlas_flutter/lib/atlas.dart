@@ -2,6 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
+
+import 'src/cache_file_replacement.dart';
+import 'src/atlas_vault/canonical_json.dart' as vault_json;
+import 'src/atlas_vault/crypto.dart' as vault_crypto;
+import 'src/atlas_vault/payloads.dart' as vault_payloads;
+import 'src/atlas_vault/strict_values.dart' as vault_strict;
 
 enum DeadlineUrgency { neutral, soon, critical, passed, unknown }
 
@@ -1098,6 +1105,26 @@ final class AtlasLocalCacheSnapshot {
   final List<AtlasSourceSummary> sources;
   final DateTime? operationalDataLoadedAt;
 
+  bool get containsPrivateState {
+    return savedSearches.isNotEmpty || trackerRecords.isNotEmpty;
+  }
+
+  AtlasLocalCacheSnapshot withoutPrivateState() {
+    return AtlasLocalCacheSnapshot(
+      schemaVersion: schemaVersion,
+      baseURL: baseURL,
+      savedAt: savedAt,
+      searchRequest: searchRequest,
+      searchResponse: searchResponse,
+      cachedAllJobs: cachedAllJobs,
+      healthSummary: healthSummary,
+      cachedJobDetails: cachedJobDetails,
+      updateRuns: updateRuns,
+      sources: sources,
+      operationalDataLoadedAt: operationalDataLoadedAt,
+    );
+  }
+
   bool isStale({DateTime? now}) {
     return (now ?? DateTime.now()).difference(savedAt) > staleAfter;
   }
@@ -1141,12 +1168,85 @@ Map<String, AtlasJobDetail> _cachedJobDetailsFromJson(Object? json) {
   };
 }
 
+final class AtlasPrivateStatePlaintextWriteBlocked implements Exception {
+  const AtlasPrivateStatePlaintextWriteBlocked();
+
+  @override
+  String toString() => 'Private plaintext cache write blocked.';
+}
+
+final class AtlasLocalCacheMigrationException implements Exception {
+  const AtlasLocalCacheMigrationException();
+
+  @override
+  String toString() => 'Local cache migration operation failed.';
+}
+
+final class AtlasLocalCacheMigrationPrivateState {
+  AtlasLocalCacheMigrationPrivateState({
+    required List<AtlasSavedSearch> savedSearches,
+    required List<AtlasApplicationRecord> trackerRecords,
+    required this.privateSha256,
+    this.durablePrivateSha256,
+    this.legacyPrivateSha256,
+    this.retainedLegacyCachePresent = false,
+    this.cacheCleanupPending = false,
+    this.cacheCleanupComplete = false,
+    this.requiresPhysicalCleanup = false,
+    this.authorityBaseURL,
+    this.cachePresent = true,
+  }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
+       trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
+         trackerRecords,
+       );
+
+  final List<AtlasSavedSearch> savedSearches;
+  final List<AtlasApplicationRecord> trackerRecords;
+  final String? privateSha256;
+  final String? durablePrivateSha256;
+  final String? legacyPrivateSha256;
+  final bool retainedLegacyCachePresent;
+  final bool cacheCleanupPending;
+  final bool cacheCleanupComplete;
+  final bool requiresPhysicalCleanup;
+  final Uri? authorityBaseURL;
+  final bool cachePresent;
+
+  bool get containsPrivateState =>
+      savedSearches.isNotEmpty || trackerRecords.isNotEmpty;
+
+  @override
+  String toString() => 'AtlasLocalCacheMigrationPrivateState(<redacted>)';
+}
+
 final class AtlasLocalCacheStore {
-  AtlasLocalCacheStore({required this.file, DateTime Function()? now})
-    : _now = now ?? DateTime.now;
+  AtlasLocalCacheStore({
+    required this.file,
+    DateTime Function()? now,
+    bool Function()? privateStateProtectionActive,
+    Future<bool> Function()? retainedLegacyPrivateStateAdmission,
+    Future<void> Function()? prepareForClear,
+    Future<void> Function(Future<void> Function())? mutationCoordinator,
+  }) : _now = now ?? DateTime.now,
+       _privateStateProtectionActive =
+           privateStateProtectionActive ?? _privateStateProtectionDisabled,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _retainedLegacyPrivateStateAdmission =
+           retainedLegacyPrivateStateAdmission,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _prepareForClear = prepareForClear,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _mutationCoordinator = mutationCoordinator;
 
   final File file;
   final DateTime Function() _now;
+  final bool Function() _privateStateProtectionActive;
+  final Future<bool> Function()? _retainedLegacyPrivateStateAdmission;
+  final Future<void> Function()? _prepareForClear;
+  final Future<void> Function(Future<void> Function())? _mutationCoordinator;
 
   Future<AtlasLocalCacheSnapshot?> read() async {
     try {
@@ -1162,23 +1262,1155 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
-    await file.parent.create(recursive: true);
-    final temporaryFile = File('${file.path}.tmp');
-    final snapshotJson = snapshot.toJson();
-    final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
-    await temporaryFile.writeAsString(encoded, flush: true);
-    await temporaryFile.rename(file.path);
+    // Fail before waiting for a coordinator. The checks inside the coordinated
+    // write intentionally revalidate protection after asynchronous boundaries.
+    _requirePlaintextWriteAllowed(snapshot);
+    await _coordinateMutation(() => _writeUnderCoordinator(snapshot));
+  }
+
+  Future<void> _writeUnderCoordinator(AtlasLocalCacheSnapshot snapshot) async {
+    final temporaryFile = cacheReplacementTemporaryFile(file);
+    try {
+      await file.parent.create(recursive: true);
+      await recoverInterruptedCacheReplacement(file);
+      _requirePlaintextWriteAllowed(snapshot);
+      final snapshotJson = snapshot.toJson();
+      final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
+      _requirePlaintextWriteAllowed(snapshot);
+      await temporaryFile.writeAsString(encoded, flush: true);
+      _requirePlaintextWriteAllowed(snapshot);
+      await replaceCacheFile(targetFile: file, stagedFile: temporaryFile);
+    } catch (_) {
+      try {
+        if (await temporaryFile.exists()) {
+          await temporaryFile.delete();
+        }
+      } catch (_) {
+        // The fixed write failure remains authoritative.
+      }
+      rethrow;
+    }
   }
 
   Future<void> clear() async {
+    await _coordinateMutation(() async {
+      if (_prepareForClear != null) {
+        await file.parent.create(recursive: true);
+      }
+      await _prepareForClear?.call();
+      await deleteCacheReplacementArtifacts(file);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    });
+  }
+
+  Future<void> _coordinateMutation(Future<void> Function() operation) {
+    final coordinator = _mutationCoordinator;
+    if (coordinator == null) {
+      return operation();
+    }
+    return coordinator(operation);
+  }
+
+  Future<bool> containsPersistedPrivateState() async {
+    try {
+      if (await file.exists()) {
+        final decoded = jsonDecode(await file.readAsString());
+        final value = _map(decoded);
+        if (value == null) {
+          return true;
+        }
+        if (_persistedPrivateListIsPresent(value['saved_searches']) ||
+            _persistedPrivateListIsPresent(value['tracker_records'])) {
+          return true;
+        }
+      }
+      return await _retainedLegacyPrivateStateAdmission?.call() ?? false;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<AtlasLocalCacheMigrationPrivateState>
+  readPrivateStateForMigration() async {
+    try {
+      if (!await file.exists()) {
+        return AtlasLocalCacheMigrationPrivateState(
+          savedSearches: const <AtlasSavedSearch>[],
+          trackerRecords: const <AtlasApplicationRecord>[],
+          privateSha256: null,
+          cachePresent: false,
+        );
+      }
+      final value = await _readStrictMigrationCache();
+      return _migrationPrivateState(value);
+    } on AtlasLocalCacheMigrationException {
+      rethrow;
+    } catch (_) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+
+  Future<void> removePrivateStateForMigration({
+    required String expectedPrivateSha256,
+  }) async {
+    final temporaryFile = cacheReplacementTemporaryFile(file);
+    try {
+      if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedPrivateSha256)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      final current = await _readStrictMigrationCache();
+      final currentPrivate = await _migrationPrivateState(current);
+      if (currentPrivate.privateSha256 != expectedPrivateSha256) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      final publicBefore = Map<String, Object?>.from(current)
+        ..remove('saved_searches')
+        ..remove('tracker_records');
+      final updated = Map<String, Object?>.from(current)
+        ..['saved_searches'] = <Object?>[]
+        ..['tracker_records'] = <Object?>[];
+      final encoded = vault_json.encodeCanonicalJson(updated);
+      try {
+        await file.parent.create(recursive: true);
+        await recoverInterruptedCacheReplacement(file);
+        await temporaryFile.writeAsBytes(encoded, flush: true);
+        await replaceCacheFile(targetFile: file, stagedFile: temporaryFile);
+      } finally {
+        encoded.fillRange(0, encoded.length, 0);
+      }
+      final restored = await _readStrictMigrationCache();
+      final restoredPrivate = await _migrationPrivateState(restored);
+      final publicAfter = Map<String, Object?>.from(restored)
+        ..remove('saved_searches')
+        ..remove('tracker_records');
+      if (restoredPrivate.privateSha256 != null ||
+          !_migrationJsonEquals(publicBefore, publicAfter)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    } on AtlasLocalCacheMigrationException {
+      await _deleteMigrationTemporaryFile(temporaryFile);
+      rethrow;
+    } catch (_) {
+      await _deleteMigrationTemporaryFile(temporaryFile);
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+
+  Future<Map<String, Object?>> _readStrictMigrationCache() async {
+    if (!await file.exists()) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final String source;
+    final Object? decoded;
+    try {
+      source = await file.readAsString();
+      _rejectMigrationDuplicateJsonKeys(source);
+      decoded = jsonDecode(source);
+    } catch (_) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (decoded is! Map) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final value = <String, Object?>{};
+    for (final entry in decoded.entries) {
+      if (entry.key is! String) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      value[entry.key as String] = entry.value;
+    }
+    const expectedKeys = <String>{
+      'schema_version',
+      'base_url',
+      'saved_at',
+      'search_request',
+      'search_response',
+      'cached_all_jobs',
+      'health_summary',
+      'saved_searches',
+      'tracker_records',
+      'cached_job_details',
+      'update_runs',
+      'sources',
+      'operational_data_loaded_at',
+    };
+    if (value.keys.length != expectedKeys.length ||
+        !value.keys.every(expectedKeys.contains) ||
+        value['schema_version'] is! int ||
+        value['schema_version'] !=
+            AtlasLocalCacheSnapshot.currentSchemaVersion ||
+        value['base_url'] is! String ||
+        AtlasAPIClient.normalizedBaseURL(value['base_url']! as String) ==
+            null ||
+        value['saved_at'] is! String ||
+        DateTime.tryParse(value['saved_at']! as String) == null ||
+        value['search_request'] is! Map ||
+        value['search_response'] is! Map ||
+        value['cached_all_jobs'] is! List ||
+        (value['health_summary'] != null && value['health_summary'] is! Map) ||
+        value['saved_searches'] is! List ||
+        value['tracker_records'] is! List ||
+        value['cached_job_details'] is! Map ||
+        value['update_runs'] is! List ||
+        value['sources'] is! List ||
+        (value['operational_data_loaded_at'] != null &&
+            (value['operational_data_loaded_at'] is! String ||
+                DateTime.tryParse(
+                      value['operational_data_loaded_at']! as String,
+                    ) ==
+                    null))) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    for (final list in <List>[
+      value['cached_all_jobs']! as List,
+      value['saved_searches']! as List,
+      value['tracker_records']! as List,
+      value['update_runs']! as List,
+      value['sources']! as List,
+    ]) {
+      if (list.any((item) => item is! Map)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    }
+    final details = value['cached_job_details']! as Map;
+    if (details.keys.any((key) => key is! String) ||
+        details.values.any((item) => item is! Map)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    _requireStrictMigrationPublicState(value);
+    return value;
+  }
+
+  Future<AtlasLocalCacheMigrationPrivateState> _migrationPrivateState(
+    Map<String, Object?> value,
+  ) async {
+    final savedSearches = <AtlasSavedSearch>[];
+    final trackerRecords = <AtlasApplicationRecord>[];
+    try {
+      for (final item in value['saved_searches']! as List) {
+        savedSearches.add(_strictMigrationSavedSearch(item));
+      }
+      for (final item in value['tracker_records']! as List) {
+        trackerRecords.add(_strictMigrationTrackerRecord(item));
+      }
+      final privateJson = <String, Object?>{
+        'saved_searches': <Object?>[
+          for (final search in savedSearches)
+            _canonicalMigrationSavedSearchJson(search),
+        ],
+        'tracker_records': <Object?>[
+          for (final record in trackerRecords)
+            _canonicalMigrationTrackerJson(record),
+        ],
+      };
+      String? digest;
+      if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
+        final bytes = vault_json.encodeCanonicalJson(privateJson);
+        try {
+          digest = await vault_crypto.atlasVaultSha256Hex(bytes);
+        } finally {
+          bytes.fillRange(0, bytes.length, 0);
+        }
+      }
+      return AtlasLocalCacheMigrationPrivateState(
+        savedSearches: savedSearches,
+        trackerRecords: trackerRecords,
+        privateSha256: digest,
+        authorityBaseURL: AtlasAPIClient.normalizedBaseURL(
+          value['base_url']! as String,
+        ),
+      );
+    } catch (_) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+
+  void _requirePlaintextWriteAllowed(AtlasLocalCacheSnapshot snapshot) {
+    if (_privateStateProtectionActive() && snapshot.containsPrivateState) {
+      throw const AtlasPrivateStatePlaintextWriteBlocked();
+    }
+  }
+}
+
+Future<void> _deleteMigrationTemporaryFile(File file) async {
+  try {
     if (await file.exists()) {
       await file.delete();
     }
-    final temporaryFile = File('${file.path}.tmp');
-    if (await temporaryFile.exists()) {
-      await temporaryFile.delete();
+  } catch (_) {
+    // The fixed migration failure remains authoritative.
+  }
+}
+
+void _rejectMigrationDuplicateJsonKeys(String source) {
+  try {
+    _MigrationJsonKeyScanner(source).parse();
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+final class _MigrationJsonKeyScanner {
+  _MigrationJsonKeyScanner(this._source);
+
+  final String _source;
+  int _offset = 0;
+
+  void parse() {
+    _skipWhitespace();
+    _parseValue();
+    _skipWhitespace();
+    if (_offset != _source.length) {
+      throw const AtlasLocalCacheMigrationException();
     }
   }
+
+  void _parseValue() {
+    if (_offset >= _source.length) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    switch (_source.codeUnitAt(_offset)) {
+      case 0x7b:
+        _parseObject();
+        return;
+      case 0x5b:
+        _parseArray();
+        return;
+      case 0x22:
+        _parseString();
+        return;
+      case 0x74:
+        _parseLiteral('true');
+        return;
+      case 0x66:
+        _parseLiteral('false');
+        return;
+      case 0x6e:
+        _parseLiteral('null');
+        return;
+      default:
+        _parseNumber();
+        return;
+    }
+  }
+
+  void _parseObject() {
+    _consume(0x7b);
+    _skipWhitespace();
+    if (_tryConsume(0x7d)) {
+      return;
+    }
+    final keys = <String>{};
+    while (true) {
+      final key = _parseString();
+      if (!keys.add(key)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      _skipWhitespace();
+      _consume(0x3a);
+      _skipWhitespace();
+      _parseValue();
+      _skipWhitespace();
+      if (_tryConsume(0x7d)) {
+        return;
+      }
+      _consume(0x2c);
+      _skipWhitespace();
+    }
+  }
+
+  void _parseArray() {
+    _consume(0x5b);
+    _skipWhitespace();
+    if (_tryConsume(0x5d)) {
+      return;
+    }
+    while (true) {
+      _parseValue();
+      _skipWhitespace();
+      if (_tryConsume(0x5d)) {
+        return;
+      }
+      _consume(0x2c);
+      _skipWhitespace();
+    }
+  }
+
+  String _parseString() {
+    final start = _offset;
+    _consume(0x22);
+    while (_offset < _source.length) {
+      final codeUnit = _source.codeUnitAt(_offset);
+      if (codeUnit == 0x22) {
+        _offset += 1;
+        final decoded = jsonDecode(_source.substring(start, _offset));
+        if (decoded is! String) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+        return decoded;
+      }
+      if (codeUnit < 0x20) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      if (codeUnit != 0x5c) {
+        _offset += 1;
+        continue;
+      }
+      _offset += 1;
+      if (_offset >= _source.length) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      final escape = _source.codeUnitAt(_offset);
+      _offset += 1;
+      if (escape == 0x75) {
+        for (var index = 0; index < 4; index += 1) {
+          if (_offset >= _source.length ||
+              !_isHex(_source.codeUnitAt(_offset))) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          _offset += 1;
+        }
+      } else if (escape != 0x22 &&
+          escape != 0x5c &&
+          escape != 0x2f &&
+          escape != 0x62 &&
+          escape != 0x66 &&
+          escape != 0x6e &&
+          escape != 0x72 &&
+          escape != 0x74) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    }
+    throw const AtlasLocalCacheMigrationException();
+  }
+
+  void _parseNumber() {
+    if (_tryConsume(0x2d) && _offset >= _source.length) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (_tryConsume(0x30)) {
+      if (_offset < _source.length && _isDigit(_source.codeUnitAt(_offset))) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    } else {
+      if (_offset >= _source.length ||
+          !_isNonzeroDigit(_source.codeUnitAt(_offset))) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      _offset += 1;
+      while (_offset < _source.length &&
+          _isDigit(_source.codeUnitAt(_offset))) {
+        _offset += 1;
+      }
+    }
+    if (_tryConsume(0x2e)) {
+      _consumeDigits();
+    }
+    if (_offset < _source.length &&
+        (_source.codeUnitAt(_offset) == 0x65 ||
+            _source.codeUnitAt(_offset) == 0x45)) {
+      _offset += 1;
+      if (_offset < _source.length &&
+          (_source.codeUnitAt(_offset) == 0x2b ||
+              _source.codeUnitAt(_offset) == 0x2d)) {
+        _offset += 1;
+      }
+      _consumeDigits();
+    }
+  }
+
+  void _consumeDigits() {
+    if (_offset >= _source.length || !_isDigit(_source.codeUnitAt(_offset))) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    while (_offset < _source.length && _isDigit(_source.codeUnitAt(_offset))) {
+      _offset += 1;
+    }
+  }
+
+  void _parseLiteral(String literal) {
+    if (!_source.startsWith(literal, _offset)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    _offset += literal.length;
+  }
+
+  void _skipWhitespace() {
+    while (_offset < _source.length) {
+      final codeUnit = _source.codeUnitAt(_offset);
+      if (codeUnit != 0x20 &&
+          codeUnit != 0x09 &&
+          codeUnit != 0x0a &&
+          codeUnit != 0x0d) {
+        return;
+      }
+      _offset += 1;
+    }
+  }
+
+  void _consume(int expected) {
+    if (!_tryConsume(expected)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+
+  bool _tryConsume(int expected) {
+    if (_offset >= _source.length || _source.codeUnitAt(_offset) != expected) {
+      return false;
+    }
+    _offset += 1;
+    return true;
+  }
+
+  static bool _isDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39;
+
+  static bool _isNonzeroDigit(int codeUnit) =>
+      codeUnit >= 0x31 && codeUnit <= 0x39;
+
+  static bool _isHex(int codeUnit) =>
+      _isDigit(codeUnit) ||
+      (codeUnit >= 0x41 && codeUnit <= 0x46) ||
+      (codeUnit >= 0x61 && codeUnit <= 0x66);
+}
+
+void _requireStrictMigrationPublicState(Map<String, Object?> value) {
+  try {
+    final publicCandidate = Map<String, Object?>.from(value)
+      ..['saved_searches'] = <Object?>[]
+      ..['tracker_records'] = <Object?>[];
+    final restored = AtlasLocalCacheSnapshot.fromJson(publicCandidate).toJson();
+    final expectedPublic = Map<String, Object?>.from(publicCandidate)
+      ..remove('saved_searches')
+      ..remove('tracker_records');
+    final restoredPublic = Map<String, Object?>.from(restored)
+      ..remove('saved_searches')
+      ..remove('tracker_records');
+    if (!_migrationJsonEquals(expectedPublic, restoredPublic)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+AtlasSavedSearch _strictMigrationSavedSearch(Object? source) {
+  return _strictMigrationSavedSearchWithRequest(
+    source,
+    _strictMigrationVaultSearchRequest,
+  );
+}
+
+AtlasSavedSearch _strictMigrationCompatibilitySavedSearch(Object? source) {
+  final value = _migrationStringMap(source);
+  _requireMigrationExactKeys(value, const <String>{
+    'name',
+    'description',
+    'request',
+    'created_at',
+    'updated_at',
+  });
+  final decodedRequest = _strictMigrationCompatibilitySearchRequest(
+    value['request'],
+  );
+  return AtlasSavedSearch(
+    name: vault_strict.requireAtlasVaultString(
+      value['name'],
+      field: 'migration.saved_search.name',
+      allowEmpty: false,
+    ),
+    description: _migrationOptionalString(
+      value['description'],
+      field: 'migration.saved_search.description',
+    ),
+    request: decodedRequest.request,
+    reviewedCompatibilityRequest: decodedRequest.storedRequest,
+    createdAt: _migrationPreservedUtc(
+      value['created_at'],
+      field: 'migration.saved_search.created_at',
+      required: true,
+    ),
+    updatedAt: _migrationPreservedUtc(
+      value['updated_at'],
+      field: 'migration.saved_search.updated_at',
+      required: true,
+    ),
+  );
+}
+
+AtlasSavedSearch _strictMigrationSavedSearchWithRequest(
+  Object? source,
+  AtlasSearchRequest Function(Object?) decodeRequest,
+) {
+  final value = _migrationStringMap(source);
+  _requireMigrationExactKeys(value, const <String>{
+    'name',
+    'description',
+    'request',
+    'created_at',
+    'updated_at',
+  });
+  final name = vault_strict.requireAtlasVaultString(
+    value['name'],
+    field: 'migration.saved_search.name',
+    allowEmpty: false,
+  );
+  final description = _migrationOptionalString(
+    value['description'],
+    field: 'migration.saved_search.description',
+  );
+  final request = decodeRequest(value['request']);
+  final createdAt = _migrationOptionalUtcSeconds(
+    value['created_at'],
+    field: 'migration.saved_search.created_at',
+  );
+  final updatedAt = _migrationOptionalUtcSeconds(
+    value['updated_at'],
+    field: 'migration.saved_search.updated_at',
+  );
+  return AtlasSavedSearch(
+    name: name,
+    description: description,
+    request: request,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+  );
+}
+
+AtlasSearchRequest _strictMigrationVaultSearchRequest(Object? source) {
+  final request = vault_payloads.AtlasSearchRequest.fromJson(
+    _migrationStringMap(source),
+  );
+  return AtlasSearchRequest.fromJson(request.toJson());
+}
+
+final class _StrictMigrationCompatibilitySearchRequest {
+  const _StrictMigrationCompatibilitySearchRequest({
+    required this.request,
+    required this.storedRequest,
+  });
+
+  final AtlasSearchRequest request;
+  final Map<String, Object?> storedRequest;
+}
+
+_StrictMigrationCompatibilitySearchRequest
+_strictMigrationCompatibilitySearchRequest(Object? source) {
+  try {
+    final value = _migrationStringMap(source);
+    _requireMigrationExactKeys(value, const <String>{
+      'text',
+      'status',
+      'organizations',
+      'source_ids',
+      'ats_families',
+      'cities',
+      'countries_iso3',
+      'regions',
+      'location_types',
+      'national_international',
+      'contract_categories',
+      'grade_systems',
+      'grade_families',
+      'grade_codes',
+      'ccog_codes',
+      'ccog_families',
+      'occupational_family_codes',
+      'occupational_medium_codes',
+      'mandate_network_codes',
+      'mandate_family_codes',
+      'capability_tags',
+      'contract_groups',
+      'seniority_groups',
+      'work_modalities',
+      'volunteer_kinds',
+      'unv_categories',
+      'unv_volunteer_types',
+      'closing_date_from',
+      'closing_date_to',
+      'posted_date_from',
+      'posted_date_to',
+      'min_location_confidence',
+      'min_grade_confidence',
+      'include_low_confidence',
+      'exclude_expired_open',
+      'limit',
+      'offset',
+      'sort',
+    });
+
+    for (final key in const <String>[
+      'ats_families',
+      'regions',
+      'contract_categories',
+      'grade_systems',
+      'grade_families',
+      'ccog_codes',
+      'occupational_family_codes',
+      'occupational_medium_codes',
+      'mandate_network_codes',
+      'mandate_family_codes',
+    ]) {
+      if (_migrationStringList(
+        value[key],
+        field: 'migration.request.$key',
+      ).isNotEmpty) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    }
+    final locationTypes = _migrationStringList(
+      value['location_types'],
+      field: 'migration.request.location_types',
+    );
+    if (!_migrationStringListEquals(locationTypes, const <String>[
+      'primary',
+      'duty_station',
+      'outposted',
+    ])) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (value['closing_date_from'] != null ||
+        value['posted_date_from'] != null ||
+        value['posted_date_to'] != null) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    _requireMigrationDefaultDouble(
+      value['min_location_confidence'],
+      expected: 0.7,
+    );
+    _requireMigrationDefaultDouble(
+      value['min_grade_confidence'],
+      expected: 0.7,
+    );
+    if (vault_strict.requireAtlasVaultBool(
+          value['exclude_expired_open'],
+          field: 'migration.request.exclude_expired_open',
+        ) !=
+        true) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+
+    final text = _migrationOptionalString(
+      value['text'],
+      field: 'migration.request.text',
+    );
+    final closingDateTo = _migrationOptionalDate(
+      value['closing_date_to'],
+      field: 'migration.request.closing_date_to',
+    );
+    final request =
+        vault_payloads.AtlasSearchRequest.fromJson(<String, Object?>{
+          'text': ?text,
+          'status': _migrationStringList(
+            value['status'],
+            field: 'migration.request.status',
+          ),
+          'organizations': _migrationStringList(
+            value['organizations'],
+            field: 'migration.request.organizations',
+          ),
+          'source_ids': _migrationStringList(
+            value['source_ids'],
+            field: 'migration.request.source_ids',
+          ),
+          'cities': _migrationStringList(
+            value['cities'],
+            field: 'migration.request.cities',
+          ),
+          'countries_iso3': _migrationStringList(
+            value['countries_iso3'],
+            field: 'migration.request.countries_iso3',
+          ),
+          'national_international': _migrationStringList(
+            value['national_international'],
+            field: 'migration.request.national_international',
+          ),
+          'grade_codes': _migrationStringList(
+            value['grade_codes'],
+            field: 'migration.request.grade_codes',
+          ),
+          'ccog_families': _migrationStringList(
+            value['ccog_families'],
+            field: 'migration.request.ccog_families',
+          ),
+          'capability_tags': _migrationStringList(
+            value['capability_tags'],
+            field: 'migration.request.capability_tags',
+          ),
+          'contract_groups': _migrationStringList(
+            value['contract_groups'],
+            field: 'migration.request.contract_groups',
+          ),
+          'seniority_groups': _migrationStringList(
+            value['seniority_groups'],
+            field: 'migration.request.seniority_groups',
+          ),
+          'work_modalities': _migrationStringList(
+            value['work_modalities'],
+            field: 'migration.request.work_modalities',
+          ),
+          'volunteer_kinds': _migrationStringList(
+            value['volunteer_kinds'],
+            field: 'migration.request.volunteer_kinds',
+          ),
+          'unv_categories': _migrationStringList(
+            value['unv_categories'],
+            field: 'migration.request.unv_categories',
+          ),
+          'unv_volunteer_types': _migrationStringList(
+            value['unv_volunteer_types'],
+            field: 'migration.request.unv_volunteer_types',
+          ),
+          'closing_date_to': ?closingDateTo,
+          'include_low_confidence': vault_strict.requireAtlasVaultBool(
+            value['include_low_confidence'],
+            field: 'migration.request.include_low_confidence',
+          ),
+          'include_facets': true,
+          'limit': vault_strict.requireAtlasVaultInt(
+            value['limit'],
+            field: 'migration.request.limit',
+          ),
+          'offset': vault_strict.requireAtlasVaultInt(
+            value['offset'],
+            field: 'migration.request.offset',
+          ),
+          'sort': vault_strict.requireAtlasVaultString(
+            value['sort'],
+            field: 'migration.request.sort',
+            allowEmpty: false,
+          ),
+        });
+    return _StrictMigrationCompatibilitySearchRequest(
+      request: AtlasSearchRequest.fromJson(request.toJson()),
+      storedRequest: _copyMigrationJsonObject(value),
+    );
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+AtlasApplicationRecord _strictMigrationCompatibilityTrackerRecord(
+  Object? source,
+) {
+  final value = _migrationStringMap(source);
+  _requireMigrationExactKeys(value, const <String>{
+    'id',
+    'job_key',
+    'status',
+    'notes',
+    'applied_at',
+    'updated_at',
+  });
+  return AtlasApplicationRecord(
+    id: vault_strict.requireAtlasVaultString(
+      value['id'],
+      field: 'migration.tracker.id',
+      allowEmpty: false,
+    ),
+    jobKey: vault_strict.requireAtlasVaultString(
+      value['job_key'],
+      field: 'migration.tracker.job_key',
+      allowEmpty: false,
+    ),
+    status: vault_strict.requireAtlasVaultString(
+      value['status'],
+      field: 'migration.tracker.status',
+      allowEmpty: false,
+    ),
+    notes: _migrationOptionalString(
+      value['notes'],
+      field: 'migration.tracker.notes',
+    ),
+    appliedAt: _migrationPreservedUtc(
+      value['applied_at'],
+      field: 'migration.tracker.applied_at',
+    ),
+    updatedAt: _migrationPreservedUtc(
+      value['updated_at'],
+      field: 'migration.tracker.updated_at',
+    ),
+  );
+}
+
+AtlasApplicationRecord _strictMigrationTrackerRecord(Object? source) {
+  final value = _migrationStringMap(source);
+  _requireMigrationExactKeys(value, const <String>{
+    'id',
+    'job_key',
+    'status',
+    'notes',
+    'applied_at',
+    'updated_at',
+  });
+  return AtlasApplicationRecord(
+    id: vault_strict.requireAtlasVaultString(
+      value['id'],
+      field: 'migration.tracker.id',
+    ),
+    jobKey: vault_strict.requireAtlasVaultString(
+      value['job_key'],
+      field: 'migration.tracker.job_key',
+      allowEmpty: false,
+    ),
+    status: vault_strict.requireAtlasVaultString(
+      value['status'],
+      field: 'migration.tracker.status',
+      allowEmpty: false,
+    ),
+    notes: _migrationOptionalString(
+      value['notes'],
+      field: 'migration.tracker.notes',
+    ),
+    appliedAt: _migrationOptionalUtcSeconds(
+      value['applied_at'],
+      field: 'migration.tracker.applied_at',
+    ),
+    updatedAt: _migrationOptionalUtcSeconds(
+      value['updated_at'],
+      field: 'migration.tracker.updated_at',
+    ),
+  );
+}
+
+Map<String, Object?> _canonicalMigrationSavedSearchJson(
+  AtlasSavedSearch value,
+) {
+  return <String, Object?>{
+    'name': value.name,
+    'description': value.description,
+    'request': vault_payloads.AtlasSearchRequest.fromJson(
+      value.request.toJson(),
+    ).toJson(),
+    'created_at': value.createdAt,
+    'updated_at': value.updatedAt,
+  };
+}
+
+Map<String, Object?> _canonicalMigrationTrackerJson(
+  AtlasApplicationRecord value,
+) {
+  return <String, Object?>{
+    'id': value.id,
+    'job_key': value.jobKey,
+    'status': value.status,
+    'notes': value.notes,
+    'applied_at': value.appliedAt,
+    'updated_at': value.updatedAt,
+  };
+}
+
+Map<String, Object?> _migrationStringMap(Object? source) {
+  if (source is! Map) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+  final value = <String, Object?>{};
+  for (final entry in source.entries) {
+    if (entry.key is! String) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    value[entry.key as String] = entry.value;
+  }
+  return value;
+}
+
+void _requireMigrationExactKeys(
+  Map<String, Object?> value,
+  Set<String> expected,
+) {
+  if (value.keys.toSet().length != expected.length ||
+      !value.keys.every(expected.contains)) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+String? _migrationOptionalString(Object? value, {required String field}) {
+  if (value == null) {
+    return null;
+  }
+  return vault_strict.requireAtlasVaultString(value, field: field);
+}
+
+String? _migrationOptionalDate(Object? value, {required String field}) {
+  if (value == null) {
+    return null;
+  }
+  return vault_strict.requireAtlasVaultDate(value, field: field);
+}
+
+List<String> _migrationStringList(Object? value, {required String field}) {
+  return vault_strict.requireAtlasVaultStringList(value, field: field);
+}
+
+bool _migrationStringListEquals(List<String> left, List<String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void _requireMigrationDefaultDouble(Object? value, {required double expected}) {
+  if (value is! double || !value.isFinite || value != expected) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+String? _migrationOptionalUtcSeconds(Object? value, {required String field}) {
+  if (value == null) {
+    return null;
+  }
+  try {
+    final text = vault_strict.requireAtlasVaultString(
+      value,
+      field: field,
+      allowEmpty: false,
+    );
+    final match = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})T'
+      r'(\d{2}):(\d{2}):(\d{2})'
+      r'(?:\.(\d{1,6}))?'
+      r'(Z|([+-])(\d{2}):(\d{2}))$',
+    ).firstMatch(text);
+    if (match == null) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final hour = int.parse(match.group(4)!);
+    final minute = int.parse(match.group(5)!);
+    final second = int.parse(match.group(6)!);
+    final fraction = (match.group(7) ?? '').padRight(6, '0');
+    final microseconds = fraction.isEmpty ? 0 : int.parse(fraction);
+    final wallClock = DateTime.utc(
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      second,
+      microseconds ~/ Duration.microsecondsPerMillisecond,
+      microseconds % Duration.microsecondsPerMillisecond,
+    );
+    if (year == 0 ||
+        wallClock.year != year ||
+        wallClock.month != month ||
+        wallClock.day != day ||
+        wallClock.hour != hour ||
+        wallClock.minute != minute ||
+        wallClock.second != second ||
+        wallClock.millisecond * Duration.microsecondsPerMillisecond +
+                wallClock.microsecond !=
+            microseconds) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (match.group(8) != 'Z') {
+      final offsetHour = int.parse(match.group(10)!);
+      final offsetMinute = int.parse(match.group(11)!);
+      if (offsetHour > 14 ||
+          offsetMinute > 59 ||
+          (offsetHour == 14 && offsetMinute != 0)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    }
+    final parsed = DateTime.tryParse(text);
+    if (parsed == null || !parsed.isUtc) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final utc = parsed.toUtc();
+    String two(int number) => number.toString().padLeft(2, '0');
+    final normalized =
+        '${utc.year.toString().padLeft(4, '0')}-'
+        '${two(utc.month)}-${two(utc.day)}T'
+        '${two(utc.hour)}:${two(utc.minute)}:${two(utc.second)}Z';
+    return vault_strict.requireAtlasVaultUtcSeconds(normalized, field: field);
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+String? _migrationPreservedUtc(
+  Object? value, {
+  required String field,
+  bool required = false,
+}) {
+  if (value == null) {
+    if (required) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    return null;
+  }
+  final original = vault_strict.requireAtlasVaultString(
+    value,
+    field: field,
+    allowEmpty: false,
+  );
+  _migrationOptionalUtcSeconds(original, field: field);
+  return original;
+}
+
+Map<String, Object?> _copyMigrationJsonObject(Map<String, Object?> source) {
+  return Map<String, Object?>.unmodifiable(<String, Object?>{
+    for (final entry in source.entries)
+      entry.key: _copyMigrationJsonValue(entry.value),
+  });
+}
+
+Object? _copyMigrationJsonValue(Object? value) {
+  if (value == null || value is String || value is num || value is bool) {
+    return value;
+  }
+  if (value is List) {
+    return List<Object?>.unmodifiable(
+      value.map<Object?>(_copyMigrationJsonValue),
+    );
+  }
+  if (value is Map) {
+    final result = <String, Object?>{};
+    for (final entry in value.entries) {
+      if (entry.key is! String) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      result[entry.key as String] = _copyMigrationJsonValue(entry.value);
+    }
+    return Map<String, Object?>.unmodifiable(result);
+  }
+  throw const AtlasLocalCacheMigrationException();
+}
+
+bool _migrationJsonEquals(Object? left, Object? right) {
+  Uint8List? leftBytes;
+  Uint8List? rightBytes;
+  try {
+    leftBytes = vault_json.encodeCanonicalJson(left);
+    rightBytes = vault_json.encodeCanonicalJson(right);
+    if (leftBytes.length != rightBytes.length) {
+      return false;
+    }
+    var difference = 0;
+    for (var index = 0; index < leftBytes.length; index += 1) {
+      difference |= leftBytes[index] ^ rightBytes[index];
+    }
+    return difference == 0;
+  } finally {
+    leftBytes?.fillRange(0, leftBytes.length, 0);
+    rightBytes?.fillRange(0, rightBytes.length, 0);
+  }
+}
+
+bool _privateStateProtectionDisabled() => false;
+
+bool _persistedPrivateListIsPresent(Object? value) {
+  if (value == null) {
+    return false;
+  }
+  return value is! List<Object?> || value.isNotEmpty;
 }
 
 AtlasLocalCacheSnapshot? _decodeLocalCacheSnapshot(
@@ -1252,7 +2484,16 @@ final class AtlasSavedSearch {
     required this.request,
     this.createdAt,
     this.updatedAt,
-  });
+    Map<String, Object?>? reviewedCompatibilityRequest,
+  }) : _reviewedCompatibilityRequest = reviewedCompatibilityRequest == null
+           ? null
+           : _copyMigrationJsonObject(reviewedCompatibilityRequest);
+
+  factory AtlasSavedSearch.fromPlaintextMigrationCompatibilityJson(
+    Map<String, Object?> json,
+  ) {
+    return _strictMigrationCompatibilitySavedSearch(json);
+  }
 
   factory AtlasSavedSearch.fromJson(Map<String, Object?> json) {
     return AtlasSavedSearch(
@@ -1271,6 +2512,7 @@ final class AtlasSavedSearch {
   final AtlasSearchRequest request;
   final String? createdAt;
   final String? updatedAt;
+  final Map<String, Object?>? _reviewedCompatibilityRequest;
 
   Map<String, Object?> toJson() {
     return {
@@ -1281,6 +2523,63 @@ final class AtlasSavedSearch {
       'updated_at': updatedAt,
     };
   }
+
+  Map<String, Object?> toCompatibilityStoredSnapshotJson() {
+    return <String, Object?>{
+      'name': name,
+      'description': description,
+      'request':
+          _reviewedCompatibilityRequest ??
+          _storedCompatibilityRequestFromSearchRequest(request),
+      'created_at': createdAt,
+      'updated_at': updatedAt,
+    };
+  }
+}
+
+Map<String, Object?> _storedCompatibilityRequestFromSearchRequest(
+  AtlasSearchRequest request,
+) {
+  return <String, Object?>{
+    'text': request.text,
+    'status': List<String>.from(request.status),
+    'organizations': List<String>.from(request.organizations),
+    'source_ids': List<String>.from(request.sourceIDs),
+    'ats_families': <String>[],
+    'cities': List<String>.from(request.cities),
+    'countries_iso3': List<String>.from(request.countriesISO3),
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': List<String>.from(request.nationalInternational),
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': List<String>.from(request.gradeCodes),
+    'ccog_codes': <String>[],
+    'ccog_families': List<String>.from(request.ccogFamilies),
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': List<String>.from(request.capabilityTags),
+    'contract_groups': List<String>.from(request.contractGroups),
+    'seniority_groups': List<String>.from(request.seniorityGroups),
+    'work_modalities': List<String>.from(request.workModalities),
+    'volunteer_kinds': List<String>.from(request.volunteerKinds),
+    'unv_categories': List<String>.from(request.unvCategories),
+    'unv_volunteer_types': List<String>.from(request.unvVolunteerTypes),
+    'closing_date_from': null,
+    'closing_date_to': request.closingDateTo,
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': request.includeLowConfidence,
+    'exclude_expired_open': true,
+    'limit': request.limit,
+    'offset': request.offset,
+    'sort': request.sort,
+  };
 }
 
 final class AtlasApplicationRecord {
@@ -2097,6 +3396,8 @@ final class AtlasRequest {
   final Map<String, Object?>? jsonBody;
 }
 
+enum AtlasConditionalDeleteOutcome { deleted, absent, preconditionFailed }
+
 abstract interface class AtlasTransport {
   Future<Object?> send(AtlasRequest request);
 }
@@ -2217,6 +3518,13 @@ final class AtlasAPIClient {
     ).map(_map).nonNulls.map(AtlasSavedSearch.fromJson).toList();
   }
 
+  Future<List<AtlasSavedSearch>> savedSearchesForPlaintextMigration() async {
+    return _strictPlaintextMigrationList(
+      const AtlasRequest(method: 'GET', path: 'api/saved-searches'),
+      _strictMigrationCompatibilitySavedSearch,
+    );
+  }
+
   Future<AtlasSavedSearch> saveSearch({
     required String name,
     required AtlasSearchRequest request,
@@ -2246,6 +3554,25 @@ final class AtlasAPIClient {
     return _bool(json['deleted']) ?? false;
   }
 
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteSavedSearch(
+    AtlasSavedSearch expected,
+  ) {
+    if (expected.name.isEmpty ||
+        expected.createdAt == null ||
+        expected.createdAt!.isEmpty ||
+        expected.updatedAt == null ||
+        expected.updatedAt!.isEmpty) {
+      return Future<AtlasConditionalDeleteOutcome>.error(
+        const AtlasAPIException.invalidResponse(),
+      );
+    }
+    return _conditionalDelete(
+      family: 'saved-searches',
+      identifier: expected.name,
+      expected: expected.toCompatibilityStoredSnapshotJson(),
+    );
+  }
+
   Future<AtlasApplicationRecord> saveJob(String jobKey) async {
     final json = await _requestMap(
       AtlasRequest(
@@ -2265,6 +3592,14 @@ final class AtlasAPIClient {
     ).map(_map).nonNulls.map(AtlasApplicationRecord.fromJson).toList();
   }
 
+  Future<List<AtlasApplicationRecord>>
+  trackerRecordsForPlaintextMigration() async {
+    return _strictPlaintextMigrationList(
+      const AtlasRequest(method: 'GET', path: 'api/tracker'),
+      _strictMigrationCompatibilityTrackerRecord,
+    );
+  }
+
   Future<bool> deleteTrackerRecord(String id) async {
     final json = await _requestMap(
       AtlasRequest(
@@ -2273,6 +3608,21 @@ final class AtlasAPIClient {
       ),
     );
     return _bool(json['deleted']) ?? false;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteTrackerRecord(
+    AtlasApplicationRecord expected,
+  ) {
+    if (expected.id.isEmpty || expected.notes == null) {
+      return Future<AtlasConditionalDeleteOutcome>.error(
+        const AtlasAPIException.invalidResponse(),
+      );
+    }
+    return _conditionalDelete(
+      family: 'tracker',
+      identifier: expected.id,
+      expected: expected.toJson(),
+    );
   }
 
   Future<List<AtlasSourceRun>> updates() async {
@@ -2301,21 +3651,88 @@ final class AtlasAPIClient {
     }
     return map;
   }
+
+  Future<List<T>> _strictPlaintextMigrationList<T>(
+    AtlasRequest request,
+    T Function(Object?) decode,
+  ) async {
+    try {
+      final response = await _transport.send(request);
+      if (response is! List) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      return List<T>.unmodifiable(<T>[
+        for (final item in response) decode(item),
+      ]);
+    } catch (_) {
+      throw const AtlasAPIException.invalidResponse();
+    }
+  }
+
+  Future<AtlasConditionalDeleteOutcome> _conditionalDelete({
+    required String family,
+    required String identifier,
+    required Map<String, Object?> expected,
+  }) async {
+    try {
+      final response = await _requestMap(
+        AtlasRequest(
+          method: 'POST',
+          path:
+              'api/$family/${await _conditionalDeleteIdentifier(identifier)}'
+              '/conditional-delete',
+          jsonBody: <String, Object?>{'expected': expected},
+        ),
+      );
+      if (response.length != 1 || response['outcome'] is! String) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      return switch (response['outcome']) {
+        'deleted' => AtlasConditionalDeleteOutcome.deleted,
+        'absent' => AtlasConditionalDeleteOutcome.absent,
+        _ => throw const AtlasAPIException.invalidResponse(),
+      };
+    } on AtlasAPIException catch (error) {
+      if (error.statusCode == 412) {
+        return AtlasConditionalDeleteOutcome.preconditionFailed;
+      }
+      throw const AtlasAPIException.invalidResponse();
+    } catch (_) {
+      throw const AtlasAPIException.invalidResponse();
+    }
+  }
 }
 
 final class AtlasAPIException implements Exception {
   const AtlasAPIException.invalidResponse()
-    : message = 'The server returned an invalid response.';
+    : statusCode = null,
+      message = 'The server returned an invalid response.';
 
   const AtlasAPIException.http(int statusCode, String body)
-    : message = body == ''
+    : statusCode = statusCode,
+      message = body == ''
           ? 'The server returned HTTP $statusCode.'
           : 'The server returned HTTP $statusCode: $body';
 
+  final int? statusCode;
   final String message;
 
   @override
   String toString() => message;
+}
+
+Future<String> _conditionalDeleteIdentifier(String value) async {
+  final bytes = Uint8List(value.codeUnits.length * 2);
+  for (var index = 0; index < value.codeUnits.length; index += 1) {
+    final codeUnit = value.codeUnits[index];
+    bytes[index * 2] = codeUnit >> 8;
+    bytes[index * 2 + 1] = codeUnit & 0xff;
+  }
+  try {
+    return '~sha256-${await vault_crypto.atlasVaultSha256Hex(bytes)}';
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+  }
 }
 
 String displayAtlasFilterValue(String value) {

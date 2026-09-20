@@ -104,6 +104,7 @@ def test_A3_score_against_rejects_oversized_file(tmp_path: Path) -> None:
 def test_A3_search_endpoint_rejects_score_against_outside_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    loopback_client,
 ) -> None:
     root = tmp_path / "strategies"
     root.mkdir()
@@ -115,7 +116,6 @@ def test_A3_search_endpoint_rejects_score_against_outside_root(
         db_path=db_path,
         saved_searches_path=tmp_path / "saved_searches.json",
         tracker_path=tmp_path / "tracker.json",
-        scoring_root=root,
     )
 
     import job_api.app as app_module
@@ -123,12 +123,13 @@ def test_A3_search_endpoint_rejects_score_against_outside_root(
     monkeypatch.setattr(app_module, "search_collected_jobs", lambda *args, **kwargs: FakeSearchResponse())
     monkeypatch.setattr(
         app_module,
-        "load_strategy_signals",
+        "_decode_strategy_signals",
         lambda path: pytest.fail(f"unsafe path reached loader: {path}"),
     )
-    client = TestClient(create_app(settings))
+    monkeypatch.setenv("JOB_API_STRATEGY_ROOT", str(root))
+    client = loopback_client(create_app(settings))
 
     response = client.post("/api/search", json={"score_against": str(outside)})
 
     assert response.status_code == 400
-    assert "outside scoring root" in response.json()["detail"]
+    assert response.json()["detail"] == "Strategy file is unavailable."

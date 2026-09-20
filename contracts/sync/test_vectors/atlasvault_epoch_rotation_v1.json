@@ -1,0 +1,85 @@
+{
+  "format": "atlasvault-epoch-rotation-test-vectors",
+  "version": 1,
+  "test_only": true,
+  "synthetic_material": "Tests derive device signing seeds as repeated (10+i), agreement seeds (20+i), old/new test keys 30/31, ephemeral seeds (40+i). No production material.",
+  "device_ids": [
+    "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+    "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+    "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8"
+  ],
+  "proof": {
+    "format": "atlasvault-epoch-rotation",
+    "version": 1,
+    "plan": {
+      "format": "atlasvault-rotation-plan",
+      "version": 1,
+      "account_id": "ava1-3212ca5774872447d28258e1ce8ff68b6953b7258263e2bc0d59397955adfbf2",
+      "vault_id": "vault-c26",
+      "previous_epoch": 3,
+      "new_epoch": 4,
+      "prior_registry_root": "245e428030e1f903b1633fbe1245e63d169879e07fbb84fc0ddf9988a4187e42",
+      "resulting_registry_root": "c46e8da20ef886b0cd4888c1d1a34e1a348e5040817653772ec242b2fe2e311e",
+      "state_root": "abababababababababababababababababababababababababababababababab",
+      "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+      "revocation_root": "8d2d5b50896997cf4b447dc1690d755b37d5d1c32ffd38d31bd760ab1cf09e3f",
+      "recipients": [
+        "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+        "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+      ]
+    },
+    "revocation": {
+      "format": "atlasvault-device-revocation",
+      "version": 1,
+      "account_id": "ava1-3212ca5774872447d28258e1ce8ff68b6953b7258263e2bc0d59397955adfbf2",
+      "vault_id": "vault-c26",
+      "target_device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+      "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+      "prior_registry_root": "245e428030e1f903b1633fbe1245e63d169879e07fbb84fc0ddf9988a4187e42",
+      "resulting_registry_root": "c46e8da20ef886b0cd4888c1d1a34e1a348e5040817653772ec242b2fe2e311e",
+      "key_epoch": 3,
+      "sequence": 1,
+      "authorization_category": "DEVICE_PRESENCE",
+      "root": "8d2d5b50896997cf4b447dc1690d755b37d5d1c32ffd38d31bd760ab1cf09e3f",
+      "signature_b64": "2h11LGmw/0B1mZmygrfksKBnJT3G4rQQ9wyLavvlahfUWMU3MW1XEjkNEQJFDVrGNP5IinFBIVoXlEj7FUHJDQ=="
+    },
+    "registry": [
+      {
+        "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+        "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+        "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+        "state": "ACTIVE"
+      },
+      {
+        "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+        "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+        "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+        "state": "ACTIVE"
+      },
+      {
+        "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+        "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+        "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+        "state": "ACTIVE"
+      }
+    ],
+    "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+    "deliveries": [
+      {
+        "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+        "key_epoch": 4,
+        "encapsulated_key_b64": "F9firNML9eGdhhroCYjRf66PZi9dgLAFP2zHPNqx0mQ=",
+        "ciphertext_b64": "I8c6lQPwC6C2Vsb8Wy1adA3meC0hRl0D1mBlRIeMy7Hqw9qKQ9M5Cs3E3X763jw/"
+      },
+      {
+        "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+        "key_epoch": 4,
+        "encapsulated_key_b64": "T6gd4N7cT/AvjYz/1Ia30r1iHgG3gTq88vTNaDgopU4=",
+        "ciphertext_b64": "GdWL/d01OdEVY9I4tV+e60LLZ+b5PdBuoArw3hz9W8qDuSkwjaVD2Kby70XyGjmh"
+      }
+    ],
+    "root": "5107a4e5ca8683e5c5f2d67bca1759f1057ba78d00ada06b627878ee3312a2ab",
+    "signature_b64": "jvklwe7qrj1KjdlcBFOtW50zbDREnpSofBXcnXnWXqjGQV8UPGRZawQ/ubWj+v02agtpq3iOeBC9rMT02WWWDg=="
+  },
+  "binding_root": "e4f5541fc428ad915edfcbccc45a367397383d5fdf012a52aa77ea77cb433936"
+}

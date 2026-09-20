@@ -1,0 +1,57 @@
+{
+  "format": "atlasvault-encrypted-patch-queue-vectors",
+  "version": 1,
+  "warning": "Synthetic test-only ciphertext fixtures; never use as production data.",
+  "operations": [
+    {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "operation_type": "upsert",
+      "author_device_id": "device_a",
+      "author_sequence": 1,
+      "lamport": 7,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "object_a",
+        "revision": "rev-001",
+        "parent_revision": null,
+        "key_epoch": 1,
+        "nonce_b64": "AAECAwQFBgcICQoL",
+        "ciphertext_b64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoIn0=",
+        "signature_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==",
+        "tombstone": false,
+        "content_sha256": "89c7460452eddff119fea0419e785c74de2ffb139dbe74323aca4a01e198a5dc"
+      }
+    },
+    {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "00000000-0000-4000-8000-000000000002",
+      "operation_type": "delete",
+      "author_device_id": "device_a",
+      "author_sequence": 2,
+      "lamport": 8,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "object_a",
+        "revision": "rev-002",
+        "parent_revision": "rev-001",
+        "key_epoch": 1,
+        "nonce_b64": "DA0ODxAREhMUFRYX",
+        "ciphertext_b64": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoLWRlbGV0ZSJ9",
+        "signature_b64": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+vw==",
+        "tombstone": true,
+        "content_sha256": "d9c2e699586b948f4022c7994ffe14c63a4e8e312ee2aee1ebe51bed85705cfd"
+      }
+    }
+  ],
+  "expected_transport_order": [
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002"
+  ]
+}

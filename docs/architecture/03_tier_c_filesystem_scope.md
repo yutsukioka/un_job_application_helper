@@ -60,8 +60,8 @@ DISCUSS messages are held in `S.discussion` and exposed via
 | `<agent>/option*.md`, `<agent>/phase1_7_strategy_report.md` | declared WRITER on the matching server | any other agent |
 | canonical flat-path outputs | `qa-auditor` on C1 / C2 | author-fold writers |
 
-Mechanical enforcement is via `write_scope.allowed_paths` (see C2 and
-[../scripts/check_scope.py](../scripts/check_scope.py)).
+Mechanical enforcement is via `write_scope.allowed_paths` (see C2 and the
+[archived v2 scope checker](../archive/legacy-multi-agent/version2/scripts/check_scope.py)).
 
 ## C2. `write_scope` blocks by server role
 
@@ -121,8 +121,8 @@ write_scope:
 
 | Field | Mechanically enforced? |
 |---|---|
-| `allowed_paths` | YES — by `scripts/check_scope.py` |
-| `forbidden_paths` | YES — by `scripts/check_scope.py` |
+| `allowed_paths` | YES — by the archived v2 `docs/archive/legacy-multi-agent/version2/scripts/check_scope.py` stub |
+| `forbidden_paths` | YES — by the archived v2 `docs/archive/legacy-multi-agent/version2/scripts/check_scope.py` stub |
 | `allowed_messages` | NO — prompt-level convention only |
 | `forbidden_actions` | NO — prompt-level convention only |
 | `message_prefix_required` | NO — prompt-level convention only |
@@ -134,7 +134,8 @@ trail, but stock `agent_sync` itself does not gate on them.
 
 ## C3. Optional `check_scope.py` verifier
 
-Stub at [../scripts/check_scope.py](../scripts/check_scope.py).
+Stub in the
+[archived v2 scope checker](../archive/legacy-multi-agent/version2/scripts/check_scope.py).
 
 ### Expectations
 

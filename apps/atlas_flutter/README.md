@@ -4,6 +4,8 @@ Flutter Android client for the Atlas / UN job application helper product. The Sw
 `apps/apple/` is the product reference; this app targets Android parity for Search, filters, saved
 jobs/searches, updates, sources, settings, local cache, and job detail.
 
+Requires Flutter 3.44.4 or newer (with Dart 3.12.2 or newer).
+
 ## Local Server
 
 Run or connect to `services/job-api` before refreshing Search data.
@@ -95,6 +97,13 @@ Manual offline flow:
 4. Make the server unreachable from the Android device.
 5. Relaunch Atlas.
 6. Verify Search rows are visible from cache immediately.
+
+Desktop builds store this cache in the operating system's persistent Application
+Support/application-data location under an `Atlas` directory. They do not use the
+system temporary directory. See
+[`docs/architecture/atlas_storage_retention_policy.md`](../../docs/architecture/atlas_storage_retention_policy.md)
+for historical-detail retention, legacy cache migration, archive retention, and
+future cache-deduplication decisions.
 
 ## Screenshots And Review
 

@@ -1,77 +1,57 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
+from fastapi.testclient import TestClient
+from job_api import auth
+from job_api.app import create_app
+from job_api.config import ApiSettings
 
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "packages" / "jobagg"))
-sys.path.insert(0, str(ROOT / "services" / "job-api"))
-
-pytest.importorskip("fastapi")
-pytest.importorskip("httpx")
-
-from fastapi.testclient import TestClient  # noqa: E402
-from job_api import auth as job_api_auth  # noqa: E402
-from job_api.app import create_app  # noqa: E402
-from job_api.config import ApiSettings  # noqa: E402
-
-
-def _settings(tmp_path: Path, *, token: str | None = "secret-token") -> ApiSettings:
-    return ApiSettings(
-        repo_root=ROOT,
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", "a" * 48)
+    settings = ApiSettings(
+        repo_root=tmp_path,
         db_path=tmp_path / "missing.sqlite3",
-        saved_searches_path=tmp_path / "saved_searches.json",
+        saved_searches_path=tmp_path / "saved.json",
         tracker_path=tmp_path / "tracker.json",
-        allow_lan=True,
-        api_token=token,
     )
+    return TestClient(create_app(settings))
 
 
-def test_A2_lan_mode_rejects_missing_token_header(tmp_path: Path) -> None:
-    client = TestClient(create_app(_settings(tmp_path)))
-
-    response = client.get("/api/health")
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Missing or invalid X-Job-Api-Token"
+def test_A2_private_route_rejects_missing_token(client):
+    assert client.get("/api/tracker").status_code == 403
 
 
-def test_A2_lan_mode_accepts_valid_token_header(tmp_path: Path) -> None:
-    client = TestClient(create_app(_settings(tmp_path)))
-
-    response = client.get("/api/health", headers={"X-Job-Api-Token": "secret-token"})
-
+def test_A2_private_route_accepts_valid_bearer_token(client):
+    response = client.get(
+        "/api/tracker", headers={"Authorization": "Bearer " + "a" * 48}
+    )
     assert response.status_code == 200
-    assert response.json()["status"] == "missing_db"
+    assert response.json() == []
 
 
-def test_A2_lan_mode_uses_constant_time_token_compare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[bytes, bytes]] = []
+def test_A2_token_uses_constant_time_compare(monkeypatch):
+    calls = []
 
-    def compare_digest(left: bytes, right: bytes) -> bool:
+    def compare(left, right):
         calls.append((left, right))
         return True
 
-    monkeypatch.setattr(job_api_auth.hmac, "compare_digest", compare_digest)
-    client = TestClient(create_app(_settings(tmp_path)))
-
-    response = client.get("/api/health", headers={"X-Job-Api-Token": "secret-token"})
-
-    assert response.status_code == 200
-    assert calls == [(b"secret-token", b"secret-token")]
+    monkeypatch.setattr(auth.secrets, "compare_digest", compare)
+    assert auth.PrivateApiToken.parse("a" * 48).matches_authorization(
+        "Bearer " + "b" * 48
+    )
+    assert calls == [(b"b" * 48, b"a" * 48)]
 
 
-def test_A2_lan_mode_throttles_repeated_failed_auth(tmp_path: Path) -> None:
-    client = TestClient(create_app(_settings(tmp_path)))
-
-    for _ in range(5):
-        response = client.get("/api/health", headers={"X-Job-Api-Token": "wrong"})
-        assert response.status_code == 401
-
-    throttled = client.get("/api/health", headers={"X-Job-Api-Token": "wrong"})
-
-    assert throttled.status_code == 429
-    assert throttled.json()["detail"] == "Too many failed authentication attempts"
+def test_A2_repeated_bad_tokens_never_admit_private_requests(client):
+    for _ in range(6):
+        assert (
+            client.get(
+                "/api/tracker", headers={"Authorization": "Bearer " + "b" * 48}
+            ).status_code
+            == 403
+        )
+    assert client.get("/api/health").status_code == 200

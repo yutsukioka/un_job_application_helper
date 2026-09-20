@@ -1,80 +1,109 @@
-"""Authentication helpers for LAN-exposed job-api deployments."""
+"""Private API bearer-token loading and verification."""
 
 from __future__ import annotations
 
-import hmac
-import time
+import os
+import re
+import secrets
+import stat
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from fastapi import HTTPException, Request, status
+# Public configuration/format label, not a credential.
+TOKEN_ENVIRONMENT = "ATLAS_PRIVATE_API_TOKEN"  # nosec B105 # noqa: S105
+# Public configuration/format label, not a credential.
+TOKEN_FILE_ENVIRONMENT = "ATLAS_PRIVATE_API_TOKEN_FILE"  # nosec B105 # noqa: S105
+MINIMUM_TOKEN_BYTES = 32
+MAXIMUM_TOKEN_FILE_BYTES = 4096
 
-from job_api.config import ApiSettings
-
-
-AUTH_HEADER = "X-Job-Api-Token"
-FAILED_AUTH_LIMIT = 5
-FAILED_AUTH_WINDOW_SECONDS = 60.0
-
-
-@dataclass(slots=True)
-class FailedAuthLimiter:
-    max_failures: int = FAILED_AUTH_LIMIT
-    window_seconds: float = FAILED_AUTH_WINDOW_SECONDS
-    _failures: dict[str, list[float]] = field(default_factory=dict)
-
-    def is_limited(self, key: str, *, now: float | None = None) -> bool:
-        failures = self._recent_failures(key, now=now)
-        return len(failures) >= self.max_failures
-
-    def record_failure(self, key: str, *, now: float | None = None) -> None:
-        timestamp = time.monotonic() if now is None else now
-        failures = self._recent_failures(key, now=timestamp)
-        failures.append(timestamp)
-        self._failures[key] = failures
-
-    def reset(self, key: str) -> None:
-        self._failures.pop(key, None)
-
-    def _recent_failures(self, key: str, *, now: float | None = None) -> list[float]:
-        timestamp = time.monotonic() if now is None else now
-        cutoff = timestamp - self.window_seconds
-        failures = [value for value in self._failures.get(key, []) if value >= cutoff]
-        self._failures[key] = failures
-        return failures
+_TOKEN_PATTERN = re.compile(rb"[A-Za-z0-9._~+/-]+={0,2}\Z")
+_AUTHORIZATION_PATTERN = re.compile(r"Bearer +([^\s]+)\Z", re.IGNORECASE | re.ASCII)
+_CONFIGURATION_ERROR = "Invalid private API configuration."
 
 
-def require_lan_auth(settings: ApiSettings, limiter: FailedAuthLimiter):
-    async def dependency(request: Request) -> None:
-        if not settings.allow_lan:
-            return
-        if not settings.api_token:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"{AUTH_HEADER} is not configured for LAN mode",
-            )
-        key = _client_key(request)
-        if limiter.is_limited(key):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many failed authentication attempts",
-            )
-        provided = request.headers.get(AUTH_HEADER)
-        if not _token_matches(provided, settings.api_token):
-            limiter.record_failure(key)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Missing or invalid {AUTH_HEADER}",
-            )
-        limiter.reset(key)
+@dataclass(frozen=True, slots=True)
+class PrivateApiToken:
+    """An opaque ASCII bearer token retained only in process memory."""
 
-    return dependency
+    _value: bytes = field(repr=False)
+
+    @classmethod
+    def parse(cls, value: str | bytes) -> PrivateApiToken:
+        try:
+            encoded = value.encode("ascii") if isinstance(value, str) else bytes(value)
+        except UnicodeEncodeError:
+            raise ValueError(_CONFIGURATION_ERROR) from None
+        if (
+            len(encoded) < MINIMUM_TOKEN_BYTES
+            or len(encoded) > MAXIMUM_TOKEN_FILE_BYTES
+            or not _TOKEN_PATTERN.fullmatch(encoded)
+        ):
+            raise ValueError(_CONFIGURATION_ERROR)
+        return cls(encoded)
+
+    def matches_authorization(self, header: str | None) -> bool:
+        if header is None:
+            return False
+        match = _AUTHORIZATION_PATTERN.fullmatch(header)
+        if match is None:
+            return False
+        candidate = match.group(1)
+        try:
+            candidate_bytes = candidate.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+        return secrets.compare_digest(candidate_bytes, self._value)
 
 
-def _token_matches(provided: str | None, expected: str) -> bool:
-    return hmac.compare_digest((provided or "").encode("utf-8"), expected.encode("utf-8"))
+def load_private_api_token(
+    environment: Mapping[str, str] | None = None,
+) -> PrivateApiToken:
+    environment = os.environ if environment is None else environment
+    direct_value = environment.get(TOKEN_ENVIRONMENT)
+    file_value = environment.get(TOKEN_FILE_ENVIRONMENT)
+    if direct_value is not None and file_value is not None:
+        raise ValueError(_CONFIGURATION_ERROR)
+    if direct_value is not None:
+        return PrivateApiToken.parse(direct_value)
+    if file_value is not None:
+        return PrivateApiToken.parse(_read_token_file(file_value))
+    raise ValueError(_CONFIGURATION_ERROR)
 
 
-def _client_key(request: Request) -> str:
-    if request.client is None:
-        return "unknown"
-    return request.client.host or "unknown"
+def token_source_is_configured(environment: Mapping[str, str]) -> bool:
+    return (
+        environment.get(TOKEN_ENVIRONMENT) is not None
+        or environment.get(TOKEN_FILE_ENVIRONMENT) is not None
+    )
+
+
+def _read_token_file(raw_path: str) -> bytes:
+    if not raw_path or raw_path != raw_path.strip() or "\x00" in raw_path:
+        raise ValueError(_CONFIGURATION_ERROR)
+    path = Path(raw_path)
+    try:
+        path_stat = path.lstat()
+        if not stat.S_ISREG(path_stat.st_mode):
+            raise ValueError(_CONFIGURATION_ERROR)
+        if os.name == "posix" and path_stat.st_mode & 0o077:
+            raise ValueError(_CONFIGURATION_ERROR)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            opened_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened_stat.st_mode):
+                raise ValueError(_CONFIGURATION_ERROR)
+            if os.name == "posix" and opened_stat.st_mode & 0o077:
+                raise ValueError(_CONFIGURATION_ERROR)
+            if (
+                opened_stat.st_size <= 0
+                or opened_stat.st_size > MAXIMUM_TOKEN_FILE_BYTES
+            ):
+                raise ValueError(_CONFIGURATION_ERROR)
+            contents = handle.read(MAXIMUM_TOKEN_FILE_BYTES + 1)
+    except (OSError, ValueError):
+        raise ValueError(_CONFIGURATION_ERROR) from None
+    if len(contents) != opened_stat.st_size:
+        raise ValueError(_CONFIGURATION_ERROR)
+    return contents

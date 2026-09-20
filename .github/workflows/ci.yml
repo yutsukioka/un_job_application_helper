@@ -23,22 +23,26 @@ jobs:
       - name: Install packages
         run: |
           python -m pip install --upgrade pip
-          python -m pip install bandit pip-audit ruff
-          python -m pip install -e "packages/jobagg[dev]"
+          python -m pip install bandit pip-audit ruff hypothesis
+          python -m pip install -e "packages/jobagg[dev,browser]"
           python -m pip install -e "services/job-api[dev]"
           python -m pip install -e "packages/vaultsync[dev]"
+          python -m pip install -e "services/atlasvault-api[dev]"
+          python -m pip install -r agents/apex/job_shortlist_requirements.txt
+          python -m playwright install --with-deps chromium
 
       - name: Run tests
         run: |
           (cd packages/jobagg && pytest tests)
           pytest packages/vaultsync/tests
           pytest tests
+          pytest services/job-api/tests reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests
 
       - name: Run security gates
         run: |
-          bandit -q -r services/job-api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
+          bandit -q -r services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
           pip-audit
-          ruff check --select=S --ignore=S104 services/job-api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
+          ruff check --select=S --ignore=S104 services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
           pytest -m security
 
       - name: Validate JSON contracts

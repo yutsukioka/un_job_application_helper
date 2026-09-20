@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlasvault.local/contracts/authenticated_snapshot.schema.json",
+  "title": "AtlasVault authenticated collection snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "payload", "authentication"],
+  "properties": {
+    "format": {"const": "atlasvault-authenticated-collection-snapshot"},
+    "version": {"const": 1},
+    "payload": {"$ref": "#/$defs/payload"},
+    "authentication": {"$ref": "#/$defs/authentication"}
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version",
+        "collection_id",
+        "collection_revision",
+        "last_order",
+        "records",
+        "applied_fingerprints",
+        "author_sequences",
+        "author_sequence_owners",
+        "record_count",
+        "live_record_count",
+        "tombstone_count"
+      ],
+      "properties": {
+        "format": {"const": "atlasvault-authenticated-collection-snapshot-payload"},
+        "version": {"const": 1},
+        "collection_id": {"$ref": "#/$defs/identifier"},
+        "collection_revision": {"type": "integer", "minimum": 1},
+        "last_order": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "minimum": 1},
+            {"$ref": "#/$defs/identifier"},
+            {"type": "integer", "minimum": 1},
+            {"$ref": "#/$defs/uuid"}
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "encrypted_patch_queue.schema.json#/$defs/opaqueCiphertextEnvelope"
+          },
+          "maxItems": 65536
+        },
+        "applied_fingerprints": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/uuid"},
+          "additionalProperties": {"$ref": "#/$defs/sha256"},
+          "maxProperties": 65536
+        },
+        "author_sequences": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"type": "integer", "minimum": 1},
+          "maxProperties": 65536
+        },
+        "author_sequence_owners": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {"pattern": "^[1-9][0-9]*$"},
+            "additionalProperties": {"$ref": "#/$defs/uuid"},
+            "maxProperties": 65536
+          },
+          "maxProperties": 65536
+        },
+        "record_count": {"type": "integer", "minimum": 0, "maximum": 65536},
+        "live_record_count": {"type": "integer", "minimum": 0, "maximum": 65536},
+        "tombstone_count": {"type": "integer", "minimum": 0, "maximum": 65536}
+      }
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "tag_b64"],
+      "properties": {
+        "algorithm": {"const": "HMAC-SHA256"},
+        "tag_b64": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 44,
+          "maxLength": 44
+        }
+      }
+    }
+  }
+}

@@ -38,8 +38,8 @@ def _settings(tmp_path: Path) -> ApiSettings:
 
 
 @pytest.mark.parametrize("name", INVALID_NAMES)
-def test_D2_saved_search_api_rejects_invalid_names(tmp_path: Path, name: str) -> None:
-    client = TestClient(create_app(_settings(tmp_path)))
+def test_D2_saved_search_api_rejects_invalid_names(tmp_path: Path, name: str, loopback_client) -> None:
+    client = loopback_client(create_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/saved-searches",

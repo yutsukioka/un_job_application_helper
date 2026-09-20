@@ -19,13 +19,9 @@ from jobagg.pipelines.consolidation import consolidate_bundle_databases
 from jobagg.robots import RobotsPolicy
 from jobagg.scheduler import _bundle_health_sidecar, _refresh_existing_health_report_after_consolidation, main
 
-
-def _fresh_observed_at() -> datetime:
-    return datetime.now(tz=UTC)
-
-
-def _stale_observed_at() -> datetime:
-    return datetime.now(tz=UTC) - timedelta(days=30)
+FRESH_OBSERVED_AT = datetime.now(tz=UTC)
+STALE_OBSERVED_AT = FRESH_OBSERVED_AT - timedelta(days=30)
+FUTURE_CLOSES_AT = "2099-07-30"
 
 
 @register_adapter
@@ -442,10 +438,10 @@ def test_consolidate_bundle_databases_preserves_detail_and_breaker_metadata(tmp_
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=_fresh_observed_at(),
+                observed_at=FRESH_OBSERVED_AT,
             ),
         ),
-        observed_at=_fresh_observed_at(),
+        observed_at=FRESH_OBSERVED_AT,
     )
 
     consolidate_bundle_databases(output_dir=output)
@@ -604,8 +600,6 @@ def test_consolidation_health_refresh_recomputes_open_backlog_counts(tmp_path):
 def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_rows(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
-    # Both notices remain open; only source observation age distinguishes them.
-    future_deadline = datetime.now(UTC) + timedelta(days=30)
     source = OrganizationSource(
         id="isa_inspira_split",
         name="International Seabed Authority",
@@ -628,7 +622,7 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
             title="Stale Split Role",
             external_id="279000",
             apply_url="https://careers.un.org/jobSearchDescription/279000?language=en",
-            closes_at=future_deadline,
+            closes_at=FUTURE_CLOSES_AT,
         )
     )
     stale_db.add_source_run(
@@ -643,10 +637,10 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=_stale_observed_at(),
+                observed_at=STALE_OBSERVED_AT,
             ),
         ),
-        observed_at=_stale_observed_at(),
+        observed_at=STALE_OBSERVED_AT,
     )
     fresh_db = JobDatabase(output / "un_jobs.sqlite3")
     fresh_db.initialize()
@@ -656,7 +650,7 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
             title="Fresh Role",
             external_id="280000",
             apply_url="https://careers.un.org/jobSearchDescription/280000?language=en",
-            closes_at=future_deadline,
+            closes_at=FUTURE_CLOSES_AT,
         )
     )
     fresh_db.add_source_run(
@@ -671,10 +665,10 @@ def test_consolidate_bundle_databases_quarantines_stale_split_inspira_current_ro
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=_fresh_observed_at(),
+                observed_at=FRESH_OBSERVED_AT,
             ),
         ),
-        observed_at=_fresh_observed_at(),
+        observed_at=FRESH_OBSERVED_AT,
     )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -733,10 +727,10 @@ def test_consolidate_bundle_databases_keeps_inconclusive_source_rows_open_withou
                 publishability_classification="source_inconclusive",
                 scope_validation_status="passed",
                 missing_transition_allowed=False,
-                observed_at=_fresh_observed_at(),
+                observed_at=FRESH_OBSERVED_AT,
             ),
         ),
-        observed_at=_fresh_observed_at(),
+        observed_at=FRESH_OBSERVED_AT,
     )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -852,7 +846,7 @@ def test_consolidate_bundle_databases_keeps_cross_source_rows_without_verified_a
             title="Duplicated Role",
             external_id="279100",
             apply_url="https://careers.un.org/jobSearchDescription/279100?language=en",
-            closes_at="2099-07-30",
+            closes_at=FUTURE_CLOSES_AT,
             description=description,
         )
         db.upsert_job(job)
@@ -880,10 +874,10 @@ def test_consolidate_bundle_databases_keeps_cross_source_rows_without_verified_a
                     run_classification="ok",
                     publishability_classification="ok",
                     missing_transition_allowed=True,
-                    observed_at=_fresh_observed_at(),
+                    observed_at=FRESH_OBSERVED_AT,
                 ),
             ),
-            observed_at=_fresh_observed_at(),
+            observed_at=FRESH_OBSERVED_AT,
         )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -950,10 +944,10 @@ def test_consolidate_bundle_databases_keeps_cross_source_external_id_collisions(
                     run_classification="ok",
                     publishability_classification="ok",
                     missing_transition_allowed=True,
-                    observed_at=_fresh_observed_at(),
+                    observed_at=FRESH_OBSERVED_AT,
                 ),
             ),
-            observed_at=_fresh_observed_at(),
+            observed_at=FRESH_OBSERVED_AT,
         )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -1057,10 +1051,10 @@ def test_consolidate_bundle_databases_marks_detail_quality_deadlines_and_trusted
                 run_classification="ok",
                 publishability_classification="ok",
                 missing_transition_allowed=True,
-                observed_at=_fresh_observed_at(),
+                observed_at=FRESH_OBSERVED_AT,
             ),
         ),
-        observed_at=_fresh_observed_at(),
+        observed_at=FRESH_OBSERVED_AT,
     )
 
     result = consolidate_bundle_databases(output_dir=output)
@@ -1138,8 +1132,8 @@ def test_consolidate_bundles_health_report_includes_consolidated_only_stale_sour
         extra={"output_slug": "stale"},
     )
     for source, observed_at in (
-        (fresh_source, _fresh_observed_at()),
-        (stale_source, _stale_observed_at()),
+        (fresh_source, FRESH_OBSERVED_AT),
+        (stale_source, STALE_OBSERVED_AT),
     ):
         external_id = "A1" if source.id == "fresh_source" else "A2"
         db = JobDatabase(output / f"{source.extra['output_slug']}_jobs.sqlite3")

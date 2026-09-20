@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlasvault-api"
+version = "0.1.0"
+description = "Zero-knowledge AtlasVault account and signed-device API boundary."
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=42.0",
+  "fastapi>=0.115,<1",
+  "vaultsync",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atlasvault_api*"]

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtlasVault signed state commitment v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "collection_id", "sequence", "previous_root", "state_sha256", "root", "signature_b64"],
+  "properties": {
+    "format": {"const": "atlasvault-state-commitment"},
+    "version": {"const": 1},
+    "collection_id": {"type": "string", "minLength": 1, "maxLength": 128, "not": {"pattern": "[^A-Za-z0-9._~-]"}},
+    "sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "previous_root": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$"},
+    "state_sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$"},
+    "root": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$"},
+    "signature_b64": {"type": "string", "minLength": 88, "maxLength": 88, "pattern": "^[A-Za-z0-9+/]{86}==$"}
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atlasvault:guarded-collection:v1",
+  "title": "Complete ciphertext-only collection candidate authenticated by C21 and C22",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "route", "records"],
+  "properties": {
+    "format": {"const": "atlasvault-guarded-collection"},
+    "version": {"const": 1},
+    "route": {"enum": ["patch", "snapshot", "compaction"]},
+    "records": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["format", "version", "object_id", "revision", "parent_revision", "key_epoch", "nonce_b64", "ciphertext_b64", "aad_b64", "signature_b64", "tombstone", "content_sha256"],
+        "properties": {
+          "format": {"const": "atlasvault-opaque-ciphertext-envelope"},
+          "version": {"const": 1},
+          "object_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "revision": {"type": "string", "minLength": 1, "maxLength": 128},
+          "parent_revision": {"type": ["string", "null"], "maxLength": 128},
+          "key_epoch": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+          "nonce_b64": {"type": "string", "maxLength": 1398104},
+          "ciphertext_b64": {"type": "string", "maxLength": 1398104},
+          "aad_b64": {"type": "string", "maxLength": 1398104},
+          "signature_b64": {"type": "string", "maxLength": 1398104},
+          "tombstone": {"type": "boolean"},
+          "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

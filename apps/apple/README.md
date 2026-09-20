@@ -100,11 +100,32 @@ Use the address that matches the active Wi-Fi network. If you paste a full healt
 URL such as `http://192.168.50.22:8765/api/health`, the app normalizes it to the
 base URL `http://192.168.50.22:8765`.
 
-Run the server from the repository root:
+Local development should use the validated launcher, which binds only to
+loopback by default:
 
 ```bash
-uv run --with-editable ./packages/jobagg --with-editable ./services/job-api --module uvicorn job_api.app:app --host 0.0.0.0 --port 8765
+uv run --with-editable ./packages/jobagg --with-editable ./services/job-api python -m job_api.launcher
 ```
+
+LAN binding exposes public routes to the local network and requires explicit
+opt-in plus token protection for every private route. Create a fake or dedicated
+token outside the repository in a permission-restricted file, then launch:
+
+```bash
+umask 077
+TOKEN_FILE="$(mktemp "${TMPDIR:-/tmp}/atlas-private-api-token.XXXXXX")"
+openssl rand -base64 48 | tr -d '\n' > "$TOKEN_FILE"
+ATLAS_API_HOST=0.0.0.0 \
+ATLAS_ALLOW_LAN=1 \
+ATLAS_PRIVATE_API_MODE=token \
+ATLAS_PRIVATE_API_TOKEN_FILE="$TOKEN_FILE" \
+uv run --with-editable ./packages/jobagg --with-editable ./services/job-api python -m job_api.launcher
+```
+
+Delete the token file when the service stops. The current Apple client does not
+store or send the private API bearer token, so physical-device app use over LAN
+is limited to public API behavior. Use a separate authenticated test client for
+fake private-route verification; do not persist that token in the app.
 
 If the server is not running, the search screen shows an offline banner and an
 empty result state. Sample rows are reserved for explicit SwiftUI previews.

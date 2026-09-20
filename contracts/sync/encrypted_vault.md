@@ -1,8 +1,10 @@
 # AtlasVault v1 Encrypted Vault Contract
 
-Status: Phase 0 contract. The Python reference package in `packages/vaultsync`
-implements the cryptographic format only. This contract does not define cloud
-sync behavior, authentication, platform secure storage, or data migration.
+Status: AtlasVault v1 cross-platform encrypted export contract. The Python
+reference package in `packages/vaultsync` implements the cryptographic format,
+and the Apple, Android, and Windows clients consume the same canonical
+`atlasvault-export` version 1 envelope. This contract does not define cloud
+sync behavior, authentication, device linking, or data migration.
 
 ## Purpose
 
@@ -62,7 +64,9 @@ AtlasVault v1 uses a two-layer key model:
 
 1. Generate a random 256-bit vault key with secure randomness.
 2. Use the vault key to encrypt record payloads.
-3. Derive a wrapping key from a strong passphrase or recovery key.
+3. Derive a wrapping key using the profile appropriate to the input:
+   Argon2id for a passphrase-wrap v1 input, or HKDF-SHA256 for a generated
+   256-bit recovery-key-wrap v2 input.
 4. Encrypt, or wrap, the vault key with the derived wrapping key.
 5. Serialize only wrapped vault keys, encrypted record blobs, and minimal
    plaintext sync metadata.
@@ -73,20 +77,21 @@ Rules:
 - Raw vault keys are never serialized into vault metadata or record files.
 - Future devices may store a local copy of the unwrapped vault key in platform
   secure storage.
-- Future Apple clients should use Apple Keychain.
-- Future Android clients should use Android Keystore.
-- Future Windows clients should use DPAPI or Credential Manager.
+- Apple clients use Apple Keychain for device-local key custody.
+- Android clients use Android Keystore for device-local key custody.
+- Windows clients use current-user DPAPI for device-local key custody.
 - Cloud providers and custom backends store only encrypted metadata and
   encrypted record blobs.
 - Authentication and account identity are separate from encryption keys.
 
 ## Cryptographic Suite
 
-The preferred v1 suite is:
+The top-level AtlasVault v1 suite is:
 
 - record encryption: AES-256-GCM;
 - key wrapping AEAD: AES-256-GCM;
-- passphrase/recovery-key KDF: Argon2id;
+- passphrase-wrap v1 KDF: Argon2id;
+- generated recovery-key-wrap v2 KDF: HKDF-SHA256;
 - subkey derivation: HKDF-SHA256;
 - passphrase salts: random 128-bit or larger salts;
 - AES-GCM nonces: random 96-bit nonces generated securely and never reused with
@@ -97,8 +102,10 @@ Record encryption should derive a record subkey from the vault key with
 HKDF-SHA256 using the vault ID and record ID as context. This keeps record keys
 domain-separated while retaining one vault root key.
 
-XChaCha20-Poly1305 may be considered only as a future crypto suite if libsodium
-is adopted consistently across all supported clients.
+HKDF-SHA256 recovery wrapping is only for a generated 256-bit recovery key. It
+must not be reused as a password or passphrase KDF. XChaCha20-Poly1305 may be
+considered only as a future crypto suite if libsodium is adopted consistently
+across all supported clients.
 
 ## Vault Metadata
 
@@ -139,6 +146,104 @@ Example:
 `key_wraps[].ciphertext` contains only the AES-GCM encrypted vault key. It must
 not contain plaintext records, the passphrase, the recovery key, or the raw vault
 key.
+
+### Passphrase Wrap V1 Compatibility
+
+The existing passphrase wrap remains byte-compatible and is not reinterpreted:
+
+- `type` is `passphrase`;
+- no `wrap_version` field is present;
+- KDF is Argon2id;
+- AEAD is AES-256-GCM;
+- nonce is 12 bytes;
+- ciphertext is 32 encrypted vault-key bytes plus the 16-byte GCM tag;
+- its historical associated data does not bind `vault_id`.
+
+The v1 limitation is preserved for compatibility. It is not the profile used
+for newly generated recovery material.
+
+## Recovery-Key Text V1
+
+A recovery key begins as exactly 32 bytes from a cryptographically secure
+random generator. Its transcription checksum is:
+
+```text
+SHA256(
+  UTF8("atlasvault-recovery-key-v1:")
+  || raw_recovery_key_32_bytes
+)[0:5]
+```
+
+The five-byte checksum detects transcription errors; it is not an
+authentication tag. The 32-byte key and checksum are concatenated and encoded
+with RFC 4648 Base32 using uppercase `A-Z2-7` and no padding. The result is
+exactly 60 symbols, rendered as:
+
+```text
+AVRK1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+```
+
+Parsers may accept lowercase ASCII and ASCII spaces or hyphens between groups,
+with leading or trailing ASCII whitespace. They must reject unsupported
+prefixes, padding, Unicode look-alikes, ambiguous digits, malformed lengths,
+extra data, and checksum mismatches. Checksum comparison must be constant time.
+Implementations must not autocorrect `0`, `1`, or `8`.
+
+## Recovery-Key Wrap V2
+
+Recovery wrap v2 is a versioned object inside top-level `atlas-vault` version
+1 metadata:
+
+```json
+{
+  "id": "primary-recovery-v2",
+  "type": "recovery_key",
+  "wrap_version": 2,
+  "kdf": {
+    "algorithm": "HKDF-SHA256",
+    "salt": "canonical-base64-32-bytes",
+    "info": "atlas-vault-recovery-wrap-v2"
+  },
+  "nonce": "canonical-base64-12-bytes",
+  "ciphertext": "canonical-base64-48-bytes"
+}
+```
+
+All keys are required and additional keys are invalid. Base64 must be
+canonical. The wrapping key is derived as:
+
+```text
+HKDF-SHA256(
+  IKM = raw recovery key (32 bytes),
+  salt = wrap salt (32 bytes),
+  info = UTF8("atlas-vault-recovery-wrap-v2"),
+  L = 32 bytes
+)
+```
+
+The 32-byte vault key is sealed with AES-256-GCM using the wrap's random
+12-byte nonce. The canonical, sorted, compact UTF-8 JSON associated data is:
+
+```json
+{
+  "format": "atlas-vault-key-wrap",
+  "version": 2,
+  "vault_id": "<validated-vault-id>",
+  "id": "primary-recovery-v2",
+  "type": "recovery_key",
+  "key_wrap_aead": "AES-256-GCM",
+  "kdf": {
+    "algorithm": "HKDF-SHA256",
+    "salt": "<canonical-base64>",
+    "info": "atlas-vault-recovery-wrap-v2"
+  }
+}
+```
+
+This AAD binds the owning vault, wrap version, fixed wrap identity and type,
+AEAD, KDF algorithm, salt, and info. Modifying any bound value, the nonce, or
+the ciphertext must make unwrap fail. Raw recovery and vault keys are never
+serialized.
 
 ## Encrypted Records
 
@@ -216,22 +321,160 @@ decryption.
 
 ## Manual Encrypted Export And Import
 
-Manual export/import is a first-class sync path. An export bundle may contain:
+Manual encrypted export uses this exact envelope:
 
-- vault metadata;
-- encrypted record blobs;
-- tombstones;
-- opaque device or export metadata.
+```json
+{
+  "format": "atlasvault-export",
+  "version": 1,
+  "export_id": "<lowercase-uuid>",
+  "created_at": "<utc-iso-8601-seconds>",
+  "vault_metadata": {},
+  "records": []
+}
+```
+
+The envelope contains complete validated vault metadata, encrypted record
+blobs, and encrypted tombstones. It excludes local store IDs and paths,
+selected-vault registration, Keychain state, raw keys, recovery text,
+passphrases, and plaintext payloads. Encoding is UTF-8 JSON with sorted keys,
+compact separators, and stable field names. Record order is preserved.
+
+Before an Apple client offers an export for saving, it must strictly decode its
+own canonical bytes, validate metadata and vault identity, unwrap with the
+entered recovery key, compare the recovered key to the local vault key in
+constant time, and hydrate all encrypted records into temporary in-memory
+state. Hydrated private state must be discarded without publication. Any
+corrupt encrypted record blocks export readiness.
 
 An export bundle must not contain plaintext saved searches, plaintext tracker
 records, raw vault keys, passphrases, recovery keys, or decrypted payloads.
 
-Import happens locally:
+Phase 2D-62 imports this envelope only into a clean Apple installation. Import
+requires no selected vault, no pending local-vault creation, a locked runtime,
+an active lifecycle, and protected data. It strictly decodes the envelope,
+canonically re-encodes it, requires exactly one recovery wrap v2, unwraps the
+vault key locally, and hydrates every encrypted record in temporary memory
+before any persistent side effect. A wrong recovery key or corrupt encrypted
+record creates no import journal, local store, Keychain key, or selection.
 
-1. The user provides the passphrase or recovery key.
-2. The client unwraps the vault key locally.
-3. The client decrypts and merges records locally.
-4. The client writes local plaintext only to approved local storage.
+The recovery-import transaction is bound by a non-secret, device-only Keychain
+journal. The journal records opaque import, export, vault, and independently
+generated local-store IDs; one UTC-seconds timestamp; and lowercase SHA-256
+fingerprints of the canonical export, canonical local store, and recovered
+vault key. It contains no export bytes, file URL, path, encrypted records,
+recovery key or text, vault key, or plaintext.
+
+Restore ordering is fixed:
+
+1. write the import journal;
+2. atomically create the local store with overwrite disabled;
+3. read back and verify the canonical local store;
+4. create the device-only Keychain vault key with add-only semantics;
+5. read back and constant-time verify the vault key;
+6. create the selected-vault registry item with add-only semantics;
+7. read back and verify selection;
+8. clear the import journal last.
+
+Selection is the commit point. Neither an existing store, vault key, nor
+selection may be updated by import. A durability-unconfirmed store write
+creates no key or selection and requires explicit resume. Resume requires
+reselection of an export with the same canonical digest and full recovery-key
+re-entry. Existing partial resources must match all journal fingerprints or
+restore fails closed.
+
+An explicit, separately confirmed reset may remove only a matching partial
+store and matching partial Keychain key while no selection exists. Both
+resources are verified before either is removed, and the journal is cleared
+last. A matching committed selection must be finished, not reset. Unrelated or
+mismatched resources are never deleted.
+
+Production recovery-key unlock is available only when the selected encrypted
+store strictly contains exactly one valid recovery wrap v2. It derives the
+vault key for the selected vault in memory and delegates activation to the
+existing runtime. The recovered key is session-only and is not written back to
+Keychain. Passphrase unlock remains unavailable. Import and recovery unlock do
+not render or author private state, perform cloud sync, or migrate plaintext.
+
+### iOS-Flutter Encrypted Interoperability
+
+Flutter/Android and Apple exchange the same canonical `atlasvault-export`
+version 1 envelope. The exporter preserves vault metadata, valid existing key
+wraps, ordered encrypted records, and tombstones. A recovery transport contains
+exactly one recovery-wrap v2 and may preserve valid coexisting passphrase-wrap
+v1 entries. It excludes device-local store IDs and timestamps, selected-vault
+state, protected journals, local paths or content URIs, raw keys, recovery
+text, and plaintext payloads.
+
+Recovery-wrap v2 remains the portable recovery boundary. The recovery key is
+displayed or entered separately and is never embedded in the document. An
+exporter must authenticate the recovery wrap against the active vault key and
+hydrate every encrypted record before offering canonical bytes for an explicit
+save.
+
+An importing device creates a new device-local store ID, local timestamps, and
+local key protection. Imported metadata and ordered encrypted records are not
+rewritten; tombstones and supported-but-unrendered private record families
+remain encrypted and ordered. Flutter installation is clean-install only,
+journaled, store-first, key-second, and selection-last. The protected import
+journal contains only transaction identifiers, stages, and resource digests;
+it excludes export bytes, record identifiers, paths, content URIs, plaintext,
+and raw keys. Before selection, explicit reset is bound to those digests. After
+selection, the transaction is resume-only and the journal clears last.
+Existing-vault replacement and cross-vault merging are not part of this
+contract. The recovery key travels separately, no plaintext intermediary or
+cloud service is required, and this profile does not alter the export wire
+fields or versions.
+
+### Windows Encrypted Interoperability
+
+Windows is another consumer of the same canonical `atlasvault-export` version
+1 envelope. Windows does not add fields, reinterpret metadata, change record
+ordering, or define a platform-specific transport envelope. Recovery transport
+requires exactly one recovery-wrap v2 and may retain valid coexisting
+passphrase-wrap v1 entries. The recovery key travels separately and is absent
+from the encrypted document.
+
+Windows export excludes the local-store ID, local timestamps, current-user
+DPAPI blob, selected-vault marker, migration and import journals, public cache,
+local path, raw keys, and decrypted payloads. Export preserves vault metadata,
+ordered encrypted-record envelopes, tombstones, and supported-but-unrendered
+private records without re-encryption.
+
+Windows import is clean-install only. It rejects an existing selected vault,
+pending plaintext migration, pending unrelated import, or any plaintext private
+authority. After strict canonical decode and recovery-key authentication, it
+creates a new Windows local-store ID and local timestamps while retaining the
+imported vault metadata and encrypted records byte-for-byte and in order.
+
+The device-local Windows recovery-import journal uses the strict
+`atlasvault-windows-recovery-import` profile and current-user DPAPI protection.
+It stores transaction identifiers, stages, and SHA-256 resource fingerprints,
+but no export bytes, encrypted records, file path, recovery key, raw vault key,
+or plaintext. Existing Android journals retain the exact
+`atlasvault-android-recovery-import` format and canonical encoding; either
+platform rejects the other platform's local journal profile.
+
+Windows installation ordering is fixed:
+
+1. create the DPAPI-protected recovery-import journal;
+2. create and read back the canonical encrypted local store;
+3. create and verify the current-user DPAPI-protected vault key;
+4. create and read back the selected-vault marker;
+5. activate and verify the imported encrypted runtime;
+6. clear the import journal last.
+
+The store is first, the key is second, and selection is last. Selection is the
+commit point. Resume requires the same canonical export and recovery key.
+Before selection, explicit reset is hash-bound to the journaled store and key;
+after selection, reset is unavailable and only resume may complete the
+transaction. The Windows recovery-import transaction holds the existing
+cross-process plaintext-authority admission boundary from the final clean-state
+check through selection and journal completion.
+
+Windows file dialogs transfer encrypted bytes only and expose no path to Dart.
+There is no plaintext intermediary, recovery-key sidecar, existing-vault
+replacement, cloud dependency, or device-linking behavior in this contract.
 
 ## Future Device Onboarding And Removal
 

@@ -1,0 +1,702 @@
+{
+  "device_ids": [
+    "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+    "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+    "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+    "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+    "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c"
+  ],
+  "history_updates": [
+    {
+      "collection": {
+        "collection_id": "collection-c26",
+        "format": "atlasvault-state-commitment",
+        "previous_root": "a7726321014af08c56e892d2249b2e4dc57db81ba00398b609b92420d3a23e7a",
+        "root": "eefc4db8ade919a307ff7a2d0a824c6be7519c0ab770be5d053078c5c020124b",
+        "sequence": 2,
+        "signature_b64": "GcZtGWlJE1mFdpEMXs/AXejczj8S2tsdCiNiX8XWiYtCIn2TAJbgyMfaIHWs8XCYWoCVf3aqr2YsBloVwixmCw==",
+        "state_sha256": "fa5ad8726b673137509ca5290570cd64fc8d58ad2da57f56bbc03a8857a09c5c",
+        "version": 1
+      },
+      "opaque_state_b64": "eyJmb3JtYXQiOiJhdGxhc3ZhdWx0LWd1YXJkZWQtY29sbGVjdGlvbiIsInJlY29yZHMiOltdLCJyb3V0ZSI6InBhdGNoIiwidmVyc2lvbiI6MX0=",
+      "registry": [
+        {
+          "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+          "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+          "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+          "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+          "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+          "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+          "state": "REVOKED"
+        },
+        {
+          "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+          "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+          "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+          "state": "ACTIVE"
+        }
+      ],
+      "view": {
+        "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+        "collection_root": "eefc4db8ade919a307ff7a2d0a824c6be7519c0ab770be5d053078c5c020124b",
+        "format": "atlasvault-authenticated-state-view",
+        "key_epoch": 4,
+        "previous_registry_root": "a9e20011f329e2ec8bd275df6fb064b44b340d9ec9cbf2d408f308869a2355f1",
+        "previous_root": "72599e2d84d9e7903191a26e5f90f55b4aae483f70291728ab3e08d9f3cadb87",
+        "registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+        "root": "3427c015ed07f9632573bd2d4b2abb831ed6cd657237a1ee771359d343d8ba72",
+        "sequence": 2,
+        "signature_b64": "acB/ucQJyafpdqtNx1+ksHsx1ojurbZzjy032UdGQ5YXxgpGo45yXJkhUyZI264O/Usc8NozafyW2bt3gnbnCA==",
+        "vault_id": "vault-c26",
+        "version": 2
+      }
+    }
+  ],
+  "initial_collection": {
+    "collection_id": "collection-c26",
+    "format": "atlasvault-state-commitment",
+    "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "root": "a7726321014af08c56e892d2249b2e4dc57db81ba00398b609b92420d3a23e7a",
+    "sequence": 1,
+    "signature_b64": "VQZRTzEcyCW7YD4iAgNtDvJmvUv9tJpFWF0w0B6hII8YSmnmJl3Da2Zod0ZfbRoR2s8Bi5fvI3S8QBkp180jAQ==",
+    "state_sha256": "fa5ad8726b673137509ca5290570cd64fc8d58ad2da57f56bbc03a8857a09c5c",
+    "version": 1
+  },
+  "initial_history_registry": [
+    {
+      "descriptor_sha256": "ecd7e50cf9b14dc90f3a1f20bda4c8b8164d5e99c35a82612c7b14505fb78c2d",
+      "device_id": "62db7c3f61bbc2554cec10305d452444067f8bfc8368731dd9d4621e57d7068b"
+    },
+    {
+      "descriptor_sha256": "2840994067d2c532c04283dd7c9a1c6b05fc421520924edf4437b53bec9f8d64",
+      "device_id": "d2095475726cacd5de75d01b284dcaa34482a13b9e8a9364533fafa032808cf5"
+    },
+    {
+      "descriptor_sha256": "1071898257f0bec2a5e1cd75f5d9b9dad2e8201b43c95a56b9e1b9bb544a6235",
+      "device_id": "5c5abdb490c4d12faa2a33acbc9d07d049d4eb4ea1d0aef039fe3aa4e688ca9d"
+    },
+    {
+      "descriptor_sha256": "8a8d69adf8d96d7d2c1d78163abc75026a90d610314f9a36d779e478155da4b6",
+      "device_id": "cd5d09f9cbd73602e8f67f320e92bc41b06d396cc1ffa19822c1a6d5a5f5a657"
+    },
+    {
+      "descriptor_sha256": "22eb27c8658e9cc81f5350eabf0d2c01f9c562343524b30b3001e31545af71ad",
+      "device_id": "c65d6ac0c5193ba663bacd258b6ffe7115ed48e73ac0396ef7932f46b44d22de"
+    }
+  ],
+  "initial_registry": [
+    {
+      "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+      "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+      "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+      "state": "ACTIVE"
+    },
+    {
+      "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+      "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+      "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+      "state": "ACTIVE"
+    },
+    {
+      "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+      "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+      "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+      "state": "ACTIVE"
+    },
+    {
+      "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+      "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+      "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+      "state": "ACTIVE"
+    },
+    {
+      "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+      "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+      "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+      "state": "ACTIVE"
+    }
+  ],
+  "initial_view": {
+    "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+    "collection_root": "a7726321014af08c56e892d2249b2e4dc57db81ba00398b609b92420d3a23e7a",
+    "format": "atlasvault-authenticated-state-view",
+    "key_epoch": 3,
+    "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+    "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "registry_root": "a9e20011f329e2ec8bd275df6fb064b44b340d9ec9cbf2d408f308869a2355f1",
+    "root": "72599e2d84d9e7903191a26e5f90f55b4aae483f70291728ab3e08d9f3cadb87",
+    "sequence": 1,
+    "signature_b64": "zozjVYp5IALcN21a46fox6iVUu9cz6Tn8LbqwB3Nb3u/7lzuIemyw09Pd1bumZ3+ZXns9sy3Z02giczpeycQBQ==",
+    "vault_id": "vault-c26",
+    "version": 2
+  },
+  "opaque_state_b64": "eyJmb3JtYXQiOiJhdGxhc3ZhdWx0LWd1YXJkZWQtY29sbGVjdGlvbiIsInJlY29yZHMiOltdLCJyb3V0ZSI6InBhdGNoIiwidmVyc2lvbiI6MX0=",
+  "packets": [
+    [
+      {
+        "proof": {
+          "activation_id": "bb511f5211a78a34b6548104ff1609cd481409927245769a9bc408088fcc49ac",
+          "format": "atlasvault-device-delivery-proof",
+          "hpke_suite": "0x0020/0x0001/0x0002",
+          "hpke_version": 2,
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "plan": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "format": "atlasvault-rotation-plan",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "new_epoch": 4,
+            "previous_epoch": 3,
+            "prior_registry_root": "6c09d535c0988e60a688974850d51756018d2c74dfa3d5e8948f2cf19753c6a2",
+            "recipients": [
+              "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+            ],
+            "resulting_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "revocation_root": "efe99aa9c50e04f390db6edcf443c083c3c8bdc8ecb258ecd6fcd7bd3e0aa1a8",
+            "state_root": "72599e2d84d9e7903191a26e5f90f55b4aae483f70291728ab3e08d9f3cadb87",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "recipient_agreement_sha256": "e29800da2235f6ba5dbfbc8cb0476913a9b6200aa9b9ac0943beec11a6e34918",
+          "recipient_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "registry": [
+            {
+              "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+              "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+              "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+              "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+              "state": "ACTIVE"
+            }
+          ],
+          "registry_generation": 4,
+          "revocation": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "authorization_category": "DEVICE_PRESENCE",
+            "format": "atlasvault-device-revocation",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "key_epoch": 3,
+            "prior_registry_root": "6c09d535c0988e60a688974850d51756018d2c74dfa3d5e8948f2cf19753c6a2",
+            "resulting_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "root": "efe99aa9c50e04f390db6edcf443c083c3c8bdc8ecb258ecd6fcd7bd3e0aa1a8",
+            "sequence": 1,
+            "signature_b64": "FkLdFV9EoZm7+NBX5aRRo0SLO9p5WCH36sbaV1iNaAQqPHTLD1ixtcMDmOlkWBawdoVhVF/mgRVxN6e3IAuGAg==",
+            "target_device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "root": "c8ec768528addd603eac535fc9e85377158973694dda62d20c966c68788fb417",
+          "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "j2i54FJrl9cazK/EMsrOGi095N/kAAIe8Fnl9YpWUSDV25Xq0NQEHhiKE6siPSrdTqv1QyMk2xXgFrMBy7ILAQ==",
+          "signature_version": 1,
+          "version": 2,
+          "wrapper_sha256": "e8a0cde2673b7a77a336f1448fde8ad160350377e95f7362ff027a428615c55a"
+        },
+        "wrapper": {
+          "ciphertext_b64": "BA8LRfpTOfWZC+4ge56Ww1AJyC5tdvsDAD3eJ8tTy7GTSetx0XIQki8FlFxrRGD3",
+          "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "encapsulated_key_b64": "0Dv5ZtA/nkNbK3HN/BHhQyiVAzbL6KhViiKJHK+hZFw=",
+          "key_epoch": 4
+        }
+      },
+      {
+        "proof": {
+          "activation_id": "cff4549a66c081498d8f8a35a6b4d3319f149d61c1e305a1aec40f0114f846fa",
+          "format": "atlasvault-device-delivery-proof",
+          "hpke_suite": "0x0020/0x0001/0x0002",
+          "hpke_version": 2,
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "plan": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "format": "atlasvault-rotation-plan",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "new_epoch": 5,
+            "previous_epoch": 4,
+            "prior_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "recipients": [
+              "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+            ],
+            "resulting_registry_root": "d8de61645539cb2a92d8243c4666dc7288bfc22fdc1a12d6ddc17c678427e54e",
+            "revocation_root": "397c3cf340426fecc604524bec6d9faa4083e26e0c1a4b1fa2498e9837f47c31",
+            "state_root": "3427c015ed07f9632573bd2d4b2abb831ed6cd657237a1ee771359d343d8ba72",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "recipient_agreement_sha256": "e29800da2235f6ba5dbfbc8cb0476913a9b6200aa9b9ac0943beec11a6e34918",
+          "recipient_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "registry": [
+            {
+              "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+              "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+              "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+              "state": "REVOKED"
+            },
+            {
+              "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+              "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+              "state": "ACTIVE"
+            }
+          ],
+          "registry_generation": 5,
+          "revocation": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "authorization_category": "DEVICE_PRESENCE",
+            "format": "atlasvault-device-revocation",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "key_epoch": 4,
+            "prior_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "resulting_registry_root": "d8de61645539cb2a92d8243c4666dc7288bfc22fdc1a12d6ddc17c678427e54e",
+            "root": "397c3cf340426fecc604524bec6d9faa4083e26e0c1a4b1fa2498e9837f47c31",
+            "sequence": 1,
+            "signature_b64": "aLUKcxa39TTeaw4cbFCdg1lnPJ0TGYdZRI7HtgYkpkHqI61OlFrlBy/IDUiC4WikagviXBY2aEr+IlNmGRAfDQ==",
+            "target_device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "root": "1ba92458d650aa10e5e3188519ca28ae0da7cdd68dafcbe52526ab9538175624",
+          "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "4EJMbtQt68qlDme/voEvWvjJLKaJDu1wLZsz5rSfPrabaInab2D64juXh9EYDu0FpFi6+5yyGFsC1ESLceMYBg==",
+          "signature_version": 1,
+          "version": 2,
+          "wrapper_sha256": "6c0005a1832fab898011e618da3ad092f0b13f9e1fd4bb5da8ee68fa38776c10"
+        },
+        "wrapper": {
+          "ciphertext_b64": "XyU/4d0nhbGbAm+qhcF/3Hsru8gN07ihWss9l1gh5sQdm/cNv4cT5UYCJzgEDwAr",
+          "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "encapsulated_key_b64": "IDJ1Km332oJWFIbUpzP4Jn6muFQbgCANNTMCyT2DiiM=",
+          "key_epoch": 5
+        }
+      }
+    ],
+    [
+      {
+        "proof": {
+          "activation_id": "bb511f5211a78a34b6548104ff1609cd481409927245769a9bc408088fcc49ac",
+          "format": "atlasvault-device-delivery-proof",
+          "hpke_suite": "0x0020/0x0001/0x0002",
+          "hpke_version": 2,
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "plan": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "format": "atlasvault-rotation-plan",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "new_epoch": 4,
+            "previous_epoch": 3,
+            "prior_registry_root": "6c09d535c0988e60a688974850d51756018d2c74dfa3d5e8948f2cf19753c6a2",
+            "recipients": [
+              "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+            ],
+            "resulting_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "revocation_root": "efe99aa9c50e04f390db6edcf443c083c3c8bdc8ecb258ecd6fcd7bd3e0aa1a8",
+            "state_root": "72599e2d84d9e7903191a26e5f90f55b4aae483f70291728ab3e08d9f3cadb87",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "recipient_agreement_sha256": "fbb9909c372069e8fb2edcbd4ef1f17aab694e373814e19545db6c20d2e8c132",
+          "recipient_device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "registry": [
+            {
+              "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+              "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+              "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+              "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+              "state": "ACTIVE"
+            }
+          ],
+          "registry_generation": 4,
+          "revocation": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "authorization_category": "DEVICE_PRESENCE",
+            "format": "atlasvault-device-revocation",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "key_epoch": 3,
+            "prior_registry_root": "6c09d535c0988e60a688974850d51756018d2c74dfa3d5e8948f2cf19753c6a2",
+            "resulting_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "root": "efe99aa9c50e04f390db6edcf443c083c3c8bdc8ecb258ecd6fcd7bd3e0aa1a8",
+            "sequence": 1,
+            "signature_b64": "FkLdFV9EoZm7+NBX5aRRo0SLO9p5WCH36sbaV1iNaAQqPHTLD1ixtcMDmOlkWBawdoVhVF/mgRVxN6e3IAuGAg==",
+            "target_device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "root": "90825daba9bf1a897cd63957ff70324a76ebfd4831bd0bc35b0a79b0add9e22f",
+          "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "BTym0QcyULsYzePYVNEDP1oTCvRhaewy1XCBYXkC6h393bR3nb/q5TAiESvJhotjQpa4G2iKitkBq1g6BHLZBA==",
+          "signature_version": 1,
+          "version": 2,
+          "wrapper_sha256": "ffc1b9ed2ea1e6efb2c3b7c6a883e6976c21a642479265260489aabb0c690bb7"
+        },
+        "wrapper": {
+          "ciphertext_b64": "i26CFiQPjQZmh2yU1AugXZX2zsI4PL9f+fculymALaUUaHFd6sBKqMFzyTEiqUPR",
+          "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "encapsulated_key_b64": "iVpXju4R8irvrPnYpnMXjRn4vXRhwQXdTQb6jfLQ/QY=",
+          "key_epoch": 4
+        }
+      },
+      {
+        "proof": {
+          "activation_id": "cff4549a66c081498d8f8a35a6b4d3319f149d61c1e305a1aec40f0114f846fa",
+          "format": "atlasvault-device-delivery-proof",
+          "hpke_suite": "0x0020/0x0001/0x0002",
+          "hpke_version": 2,
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "plan": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "format": "atlasvault-rotation-plan",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "new_epoch": 5,
+            "previous_epoch": 4,
+            "prior_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "recipients": [
+              "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+            ],
+            "resulting_registry_root": "d8de61645539cb2a92d8243c4666dc7288bfc22fdc1a12d6ddc17c678427e54e",
+            "revocation_root": "397c3cf340426fecc604524bec6d9faa4083e26e0c1a4b1fa2498e9837f47c31",
+            "state_root": "3427c015ed07f9632573bd2d4b2abb831ed6cd657237a1ee771359d343d8ba72",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "recipient_agreement_sha256": "fbb9909c372069e8fb2edcbd4ef1f17aab694e373814e19545db6c20d2e8c132",
+          "recipient_device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "registry": [
+            {
+              "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+              "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+              "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+              "state": "REVOKED"
+            },
+            {
+              "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+              "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+              "state": "ACTIVE"
+            }
+          ],
+          "registry_generation": 5,
+          "revocation": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "authorization_category": "DEVICE_PRESENCE",
+            "format": "atlasvault-device-revocation",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "key_epoch": 4,
+            "prior_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "resulting_registry_root": "d8de61645539cb2a92d8243c4666dc7288bfc22fdc1a12d6ddc17c678427e54e",
+            "root": "397c3cf340426fecc604524bec6d9faa4083e26e0c1a4b1fa2498e9837f47c31",
+            "sequence": 1,
+            "signature_b64": "aLUKcxa39TTeaw4cbFCdg1lnPJ0TGYdZRI7HtgYkpkHqI61OlFrlBy/IDUiC4WikagviXBY2aEr+IlNmGRAfDQ==",
+            "target_device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "root": "5e539f71ed1c71c49ea9eef185f906f53c51b14c7bf89b3cfa8611d104a2f7c4",
+          "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "wN4jqUvMnokBlNDwXLjJwvxQU8Y52uk1YFNfu9n0hdx0/b7HWgDhBsq5FH530VhWa/CyAj455EelLouT65uEBw==",
+          "signature_version": 1,
+          "version": 2,
+          "wrapper_sha256": "7752bde4ff29058413886f9ac2a0eaf143ef955027f00d06e71985399cef1d06"
+        },
+        "wrapper": {
+          "ciphertext_b64": "HSU19wRsHz0+DIbruMNuUieTC10FNyVIajWLQTlP2vUtYCgauvcRdoaGgbXbWpFR",
+          "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "encapsulated_key_b64": "U4LiLcICOQf7y25fm4GACuKcex+vYIzhRG9bRh/FBWY=",
+          "key_epoch": 5
+        }
+      }
+    ],
+    [
+      {
+        "proof": {
+          "activation_id": "bb511f5211a78a34b6548104ff1609cd481409927245769a9bc408088fcc49ac",
+          "format": "atlasvault-device-delivery-proof",
+          "hpke_suite": "0x0020/0x0001/0x0002",
+          "hpke_version": 2,
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "plan": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "format": "atlasvault-rotation-plan",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "new_epoch": 4,
+            "previous_epoch": 3,
+            "prior_registry_root": "6c09d535c0988e60a688974850d51756018d2c74dfa3d5e8948f2cf19753c6a2",
+            "recipients": [
+              "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+            ],
+            "resulting_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "revocation_root": "efe99aa9c50e04f390db6edcf443c083c3c8bdc8ecb258ecd6fcd7bd3e0aa1a8",
+            "state_root": "72599e2d84d9e7903191a26e5f90f55b4aae483f70291728ab3e08d9f3cadb87",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "recipient_agreement_sha256": "8cc5e76e360c2208d19ea6a490354c2f55239eef3f1a769d4a6adbf517e28a03",
+          "recipient_device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "registry": [
+            {
+              "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+              "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+              "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+              "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+              "state": "ACTIVE"
+            }
+          ],
+          "registry_generation": 4,
+          "revocation": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "authorization_category": "DEVICE_PRESENCE",
+            "format": "atlasvault-device-revocation",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "key_epoch": 3,
+            "prior_registry_root": "6c09d535c0988e60a688974850d51756018d2c74dfa3d5e8948f2cf19753c6a2",
+            "resulting_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "root": "efe99aa9c50e04f390db6edcf443c083c3c8bdc8ecb258ecd6fcd7bd3e0aa1a8",
+            "sequence": 1,
+            "signature_b64": "FkLdFV9EoZm7+NBX5aRRo0SLO9p5WCH36sbaV1iNaAQqPHTLD1ixtcMDmOlkWBawdoVhVF/mgRVxN6e3IAuGAg==",
+            "target_device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "root": "057bdf48fb15a2ff3088d6f1fa1945af203d664229f5adabd5a1b51b9428a2d9",
+          "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "tFdZTRGolWJEz0+aFTbIXM+SNDAHbH8FdyMgWt68JCj6Tx10QUh3cdXTTewqEbMUthsD1TNN9E7BrTlPE+MTAA==",
+          "signature_version": 1,
+          "version": 2,
+          "wrapper_sha256": "946b09c8fc442539bdbfa1d5b76d35cc0410911c5c13f68c601fb4d78fb646d0"
+        },
+        "wrapper": {
+          "ciphertext_b64": "I62SYhbGb/b3xsobyJjpSE+dXtduGtH+kQsDMnaKV1T1Yv/TSzBEuI9ul7frOMPX",
+          "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "encapsulated_key_b64": "W0Vo7cjnHEK69P7UhKXYDOH6McVXfjFJk4BeXcN+TQQ=",
+          "key_epoch": 4
+        }
+      },
+      {
+        "proof": {
+          "activation_id": "cff4549a66c081498d8f8a35a6b4d3319f149d61c1e305a1aec40f0114f846fa",
+          "format": "atlasvault-device-delivery-proof",
+          "hpke_suite": "0x0020/0x0001/0x0002",
+          "hpke_version": 2,
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "plan": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "format": "atlasvault-rotation-plan",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "new_epoch": 5,
+            "previous_epoch": 4,
+            "prior_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "recipients": [
+              "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+            ],
+            "resulting_registry_root": "d8de61645539cb2a92d8243c4666dc7288bfc22fdc1a12d6ddc17c678427e54e",
+            "revocation_root": "397c3cf340426fecc604524bec6d9faa4083e26e0c1a4b1fa2498e9837f47c31",
+            "state_root": "3427c015ed07f9632573bd2d4b2abb831ed6cd657237a1ee771359d343d8ba72",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "recipient_agreement_sha256": "8cc5e76e360c2208d19ea6a490354c2f55239eef3f1a769d4a6adbf517e28a03",
+          "recipient_device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "registry": [
+            {
+              "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "state": "ACTIVE"
+            },
+            {
+              "agreement_public_b64": "8T/vPvqVmKKiP8dWv2iP6LvX9s+VKLuu87REJojwqzE=",
+              "device_id": "avd1-a4be09d56c47f743491ae7ea8a23d0405e146461e96514dfe5cd2aabd07a0743",
+              "signing_public_b64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+              "state": "REVOKED"
+            },
+            {
+              "agreement_public_b64": "csrwV1GHNBMFsDUHRDlYYq6+l4s7LNeWNXUlGg7k5GY=",
+              "device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+              "signing_public_b64": "C+71qeZ55qPhNP4ng3v/MsfLX11E6gm8sOVCutakwMw=",
+              "state": "ACTIVE"
+            }
+          ],
+          "registry_generation": 5,
+          "revocation": {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "authorization_category": "DEVICE_PRESENCE",
+            "format": "atlasvault-device-revocation",
+            "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "key_epoch": 4,
+            "prior_registry_root": "1f2e72787c3898e64f78f5fc25f7161a079cb9a887fe795153388726c9a29a28",
+            "resulting_registry_root": "d8de61645539cb2a92d8243c4666dc7288bfc22fdc1a12d6ddc17c678427e54e",
+            "root": "397c3cf340426fecc604524bec6d9faa4083e26e0c1a4b1fa2498e9837f47c31",
+            "sequence": 1,
+            "signature_b64": "aLUKcxa39TTeaw4cbFCdg1lnPJ0TGYdZRI7HtgYkpkHqI61OlFrlBy/IDUiC4WikagviXBY2aEr+IlNmGRAfDQ==",
+            "target_device_id": "avd1-8b3ffd2d46016e46f0531f457cf92ff295f6b89d8d28d706335931f42c3a6f0c",
+            "vault_id": "vault-c26",
+            "version": 1
+          },
+          "root": "758084fa1e334af2c7bdf3af6a47471cd4eb1cb8d62aa9c29e34c00d7a34f9ec",
+          "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "ezPysF4hONHRTDBbqmUxO+URHljfRa2PPZhlk73Al46EmtR8BTZtIC/Yk8BXOwjtHmiosp2btfR+5y4muyVXBQ==",
+          "signature_version": 1,
+          "version": 2,
+          "wrapper_sha256": "95d8aafc1ccb85638a9fbe787fbc2aea71e5ae48016ee537d40eefb1c1a7bc39"
+        },
+        "wrapper": {
+          "ciphertext_b64": "be8TByQwz++SAPC0FcHt1e7yqFzxKM7zcIw8GArZlyUmPn0U4z+F76hkw86i8KcX",
+          "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "encapsulated_key_b64": "iRVYQw7joYGSH0iC6kmesKnsvdpvavUIXNPpWymZl3I=",
+          "key_epoch": 5
+        }
+      }
+    ]
+  ],
+  "synthetic_test_material": true,
+  "target_activation_id": "cff4549a66c081498d8f8a35a6b4d3319f149d61c1e305a1aec40f0114f846fa"
+}

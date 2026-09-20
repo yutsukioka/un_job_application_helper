@@ -1,0 +1,151 @@
+{
+  "format": "atlasvault-two-device-convergence-vectors",
+  "version": 1,
+  "warning": "Synthetic test-only ciphertext fixtures; never use as production data.",
+  "resolution_rule": "delete-wins-then-max-lamport-device-sequence-operation",
+  "device_a_operations": ["create_a", "edit_a", "delete_a"],
+  "device_b_operations": ["create_b", "edit_b", "late_edit_b"],
+  "operations": {
+    "create_a": {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "20000000-0000-4000-8000-000000000001",
+      "operation_type": "upsert",
+      "author_device_id": "device_a",
+      "author_sequence": 1,
+      "lamport": 1,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "shared_record",
+        "revision": "c20-create-a",
+        "parent_revision": null,
+        "key_epoch": 1,
+        "nonce_b64": "AAECAwQFBgcICQoL",
+        "ciphertext_b64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoIn0=",
+        "signature_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==",
+        "tombstone": false,
+        "content_sha256": "89c7460452eddff119fea0419e785c74de2ffb139dbe74323aca4a01e198a5dc"
+      }
+    },
+    "create_b": {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "20000000-0000-4000-8000-000000000002",
+      "operation_type": "upsert",
+      "author_device_id": "device_b",
+      "author_sequence": 1,
+      "lamport": 1,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "shared_record",
+        "revision": "c20-create-b",
+        "parent_revision": null,
+        "key_epoch": 1,
+        "nonce_b64": "AAECAwQFBgcICQoL",
+        "ciphertext_b64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoIn0=",
+        "signature_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==",
+        "tombstone": false,
+        "content_sha256": "89c7460452eddff119fea0419e785c74de2ffb139dbe74323aca4a01e198a5dc"
+      }
+    },
+    "edit_a": {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "20000000-0000-4000-8000-000000000003",
+      "operation_type": "upsert",
+      "author_device_id": "device_a",
+      "author_sequence": 2,
+      "lamport": 2,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "shared_record",
+        "revision": "c20-edit-a",
+        "parent_revision": "c20-create-a",
+        "key_epoch": 1,
+        "nonce_b64": "AAECAwQFBgcICQoL",
+        "ciphertext_b64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoIn0=",
+        "signature_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==",
+        "tombstone": false,
+        "content_sha256": "89c7460452eddff119fea0419e785c74de2ffb139dbe74323aca4a01e198a5dc"
+      }
+    },
+    "edit_b": {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "20000000-0000-4000-8000-000000000004",
+      "operation_type": "upsert",
+      "author_device_id": "device_b",
+      "author_sequence": 2,
+      "lamport": 2,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "shared_record",
+        "revision": "c20-edit-b",
+        "parent_revision": "c20-create-b",
+        "key_epoch": 1,
+        "nonce_b64": "AAECAwQFBgcICQoL",
+        "ciphertext_b64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoIn0=",
+        "signature_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==",
+        "tombstone": false,
+        "content_sha256": "89c7460452eddff119fea0419e785c74de2ffb139dbe74323aca4a01e198a5dc"
+      }
+    },
+    "delete_a": {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "20000000-0000-4000-8000-000000000005",
+      "operation_type": "delete",
+      "author_device_id": "device_a",
+      "author_sequence": 3,
+      "lamport": 3,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "shared_record",
+        "revision": "c20-delete-a",
+        "parent_revision": "c20-edit-a",
+        "key_epoch": 1,
+        "nonce_b64": "DA0ODxAREhMUFRYX",
+        "ciphertext_b64": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoLWRlbGV0ZSJ9",
+        "signature_b64": "/////////////////////////////////////////////////////////////////////////////////////w==",
+        "tombstone": true,
+        "content_sha256": "d9c2e699586b948f4022c7994ffe14c63a4e8e312ee2aee1ebe51bed85705cfd"
+      }
+    },
+    "late_edit_b": {
+      "format": "atlasvault-encrypted-patch-operation",
+      "version": 1,
+      "operation_id": "20000000-0000-4000-8000-000000000006",
+      "operation_type": "upsert",
+      "author_device_id": "device_b",
+      "author_sequence": 3,
+      "lamport": 100,
+      "envelope": {
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "version": 1,
+        "object_id": "shared_record",
+        "revision": "c20-late-edit-b",
+        "parent_revision": "c20-edit-b",
+        "key_epoch": 1,
+        "nonce_b64": "AAECAwQFBgcICQoL",
+        "ciphertext_b64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+        "aad_b64": "eyJraW5kIjoiZW5jcnlwdGVkLXBhdGNoIn0=",
+        "signature_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==",
+        "tombstone": false,
+        "content_sha256": "89c7460452eddff119fea0419e785c74de2ffb139dbe74323aca4a01e198a5dc"
+      }
+    }
+  },
+  "expected_final_revision": "c20-delete-a",
+  "expected_final_tombstone": true,
+  "expected_operation_count": 6
+}

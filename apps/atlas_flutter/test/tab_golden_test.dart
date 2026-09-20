@@ -1,71 +1,87 @@
+import 'dart:io';
+
 import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+bool get _skipAndroidGoldensOnWindows {
+  // These baselines are Android renderer parity assets; Windows text and
+  // rasterization differ enough to produce stable but irrelevant pixel diffs.
+  return Platform.isWindows;
+}
+
 void main() {
-  testWidgets('saved tab matches implemented Android parity golden', (
-    tester,
-  ) async {
-    _configurePhoneViewport(tester);
-    final controller = _tabGoldenController();
-    addTearDown(controller.dispose);
+  testWidgets(
+    'saved tab matches implemented Android parity golden',
+    (tester) async {
+      _configurePhoneViewport(tester);
+      final controller = _tabGoldenController();
+      addTearDown(controller.dispose);
 
-    await _pumpPanel(tester, AtlasSavedPanel(controller: controller));
+      await _pumpPanel(tester, AtlasSavedPanel(controller: controller));
 
-    await expectLater(
-      find.byType(AtlasSavedPanel),
-      matchesGoldenFile('goldens/android/saved_tab.png'),
-    );
-  });
+      await expectLater(
+        find.byType(AtlasSavedPanel),
+        matchesGoldenFile('goldens/android/saved_tab.png'),
+      );
+    },
+    skip: _skipAndroidGoldensOnWindows,
+  );
 
-  testWidgets('updates tab matches implemented Android parity golden', (
-    tester,
-  ) async {
-    _configurePhoneViewport(tester);
-    final controller = _tabGoldenController();
-    addTearDown(controller.dispose);
+  testWidgets(
+    'updates tab matches implemented Android parity golden',
+    (tester) async {
+      _configurePhoneViewport(tester);
+      final controller = _tabGoldenController();
+      addTearDown(controller.dispose);
 
-    await _pumpPanel(tester, AtlasUpdatesPanel(controller: controller));
+      await _pumpPanel(tester, AtlasUpdatesPanel(controller: controller));
 
-    await expectLater(
-      find.byType(AtlasUpdatesPanel),
-      matchesGoldenFile('goldens/android/updates_tab.png'),
-    );
-  });
+      await expectLater(
+        find.byType(AtlasUpdatesPanel),
+        matchesGoldenFile('goldens/android/updates_tab.png'),
+      );
+    },
+    skip: _skipAndroidGoldensOnWindows,
+  );
 
-  testWidgets('sources tab matches implemented Android parity golden', (
-    tester,
-  ) async {
-    _configurePhoneViewport(tester);
-    final controller = _tabGoldenController();
-    addTearDown(controller.dispose);
+  testWidgets(
+    'sources tab matches implemented Android parity golden',
+    (tester) async {
+      _configurePhoneViewport(tester);
+      final controller = _tabGoldenController();
+      addTearDown(controller.dispose);
 
-    await _pumpPanel(
-      tester,
-      AtlasSourcesPanel(controller: controller, onSourceSelected: (_) {}),
-    );
+      await _pumpPanel(
+        tester,
+        AtlasSourcesPanel(controller: controller, onSourceSelected: (_) {}),
+      );
 
-    await expectLater(
-      find.byType(AtlasSourcesPanel),
-      matchesGoldenFile('goldens/android/sources_tab.png'),
-    );
-  });
+      await expectLater(
+        find.byType(AtlasSourcesPanel),
+        matchesGoldenFile('goldens/android/sources_tab.png'),
+      );
+    },
+    skip: _skipAndroidGoldensOnWindows,
+  );
 
-  testWidgets('settings tab matches implemented Android parity golden', (
-    tester,
-  ) async {
-    _configurePhoneViewport(tester);
-    final controller = _tabGoldenController();
-    addTearDown(controller.dispose);
+  testWidgets(
+    'settings tab matches implemented Android parity golden',
+    (tester) async {
+      _configurePhoneViewport(tester);
+      final controller = _tabGoldenController();
+      addTearDown(controller.dispose);
 
-    await _pumpPanel(tester, AtlasSettingsPanel(controller: controller));
+      await _pumpPanel(tester, AtlasSettingsPanel(controller: controller));
 
-    await expectLater(
-      find.byType(AtlasSettingsPanel),
-      matchesGoldenFile('goldens/android/settings_tab.png'),
-    );
-  });
+      await expectLater(
+        find.byType(AtlasSettingsPanel),
+        matchesGoldenFile('goldens/android/settings_tab.png'),
+      );
+    },
+    skip: _skipAndroidGoldensOnWindows,
+  );
 }
 
 void _configurePhoneViewport(WidgetTester tester) {
