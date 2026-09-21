@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -124,7 +125,9 @@ def storage_check(config):
     reserve = guard.get("min_free_bytes", 0)
     free = os.statvfs(mount)
     available = free.f_bavail * free.f_frsize
-    storage_health = record_storage_health(config, available, reserve)
+    storage_health = record_storage_health(
+        config, available, reserve, persist=config.get("_record_storage_health", False)
+    )
     if available < reserve:
         raise ValueError("Configured storage free space is below static reserve")
     # Nonexistent mounted volume never gets created and no data path falls back.
@@ -141,7 +144,7 @@ def storage_check(config):
     }
 
 
-def record_storage_health(config, available, reserve):
+def record_storage_health(config, available, reserve, *, persist=True):
     """Persistent local alert transitions before the hard reserve is exhausted.
 
     Runway uses observed volume consumption, not an invented jobagg-only rate.
@@ -155,9 +158,12 @@ def record_storage_health(config, available, reserve):
         if type(value) is not int or value < 0:
             raise ValueError("Storage warning limits must be nonnegative integers")
     directory = config["attempt_state_dir"]
-    directory.mkdir(parents=True, exist_ok=True)
-    with (directory / "storage-health.lock").open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    if persist:
+        directory.mkdir(parents=True, exist_ok=True)
+    owner = (directory / "storage-health.lock").open("a+") if persist else nullcontext()
+    with owner as lock:
+        if persist:
+            fcntl.flock(lock, fcntl.LOCK_EX)
         path = directory / "storage-health.json"
         prior = json.loads(path.read_text()) if path.exists() else {}
         now = datetime.now(timezone.utc).timestamp()
@@ -176,7 +182,8 @@ def record_storage_health(config, available, reserve):
                   "volume_consumption_bytes_per_second": rate, "estimated_runway_seconds": runway,
                   "estimate_basis": "observed_volume_free_space; includes other writers",
                   "transitions": events}
-        write(path, {**result, "samples": [*samples, {"at": now, "available_bytes": available}][-96:]})
+        if persist:
+            write(path, {**result, "samples": [*samples, {"at": now, "available_bytes": available}][-96:]})
         return result
 
 

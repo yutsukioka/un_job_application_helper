@@ -471,8 +471,9 @@ def resolve(base, value):
     return Path(os.path.abspath(base / value))
 
 
-def load_config(path):
+def load_config(path, *, record_storage_health=False):
     config = read_json(path)
+    config["_record_storage_health"] = record_storage_health
     config["_config_sha256"] = digest(path)
     config["_config_path"] = path
     require(config.get("schema_version") == 1, "unsupported configuration schema")
@@ -1852,7 +1853,7 @@ def main(argv=None):
             os.umask(0o077)
             raw = read_json(config_path)
             attempt, intent = OBSERVABILITY.start_attempt(config_path, raw)
-        config, expected = load_config(config_path)
+        config, expected = load_config(config_path, record_storage_health=args.execute)
         if not args.execute:
             result = {
                 "status": "dry_run",

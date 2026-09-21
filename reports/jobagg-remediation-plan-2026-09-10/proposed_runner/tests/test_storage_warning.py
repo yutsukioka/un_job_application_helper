@@ -32,3 +32,14 @@ def test_storage_warning_transitions_clear_and_runway(tmp_path):
     value = obs.record_storage_health(config, 10000, 1000)
     assert value["status"] == "warning" and 0 < value["estimated_runway_seconds"] < 3600
     assert "includes other writers" in value["estimate_basis"]
+
+
+def test_preview_computes_warning_without_creating_any_receipts(tmp_path):
+    directory = tmp_path / 'not-created'
+    config = {'attempt_state_dir': directory, 'storage_guard': {}}
+    assert obs.record_storage_health(config, 1000, 900, persist=False)['status'] == 'critical'
+    assert not directory.exists()
+    obs.record_storage_health(config, 1000, 900)
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    obs.record_storage_health(config, 100000000000, 900, persist=False)
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
