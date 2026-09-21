@@ -119,17 +119,18 @@ def test_redirect_pins_its_own_dns_answer(monkeypatch, target):
     assert len(wire.lookups) == 2
 
 
-def test_redirect_rebinding_is_rejected_before_connect(monkeypatch):
+@pytest.mark.parametrize("denied", ["127.0.0.1", "0.0.0.0", "::", "::ffff:0.0.0.0"])
+def test_redirect_rebinding_is_rejected_before_connect(monkeypatch, denied):
     c = client(max_retries=0)
     redirect = b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n"
-    wire = Wire(monkeypatch, [[PUBLIC], ["127.0.0.1"]], [redirect])
+    wire = Wire(monkeypatch, [[PUBLIC], [denied]], [redirect])
     with pytest.raises(SSRFProtectionError, match="denied network"):
         c.get("http://jobs.example.test/jobs")
     assert wire.connections == [(PUBLIC, 80)]
 
 
 @pytest.mark.parametrize("failure", ["timeout", "503"])
-@pytest.mark.parametrize("next_address", [OTHER_PUBLIC, "127.0.0.1"])
+@pytest.mark.parametrize("next_address", [OTHER_PUBLIC, "127.0.0.1", "0.0.0.0", "::", "::ffff:0.0.0.0"])
 def test_retry_revalidates_and_pins_new_address(monkeypatch, failure, next_address):
     c = client(max_retries=1)
     responses = (
@@ -143,7 +144,7 @@ def test_retry_revalidates_and_pins_new_address(monkeypatch, failure, next_addre
         responses,
         failures=[1] if failure == "timeout" else [],
     )
-    if next_address == "127.0.0.1":
+    if next_address != OTHER_PUBLIC:
         with pytest.raises(SSRFProtectionError, match="denied network"):
             c.get("http://jobs.example.test/jobs")
         assert wire.connections == [(PUBLIC, 80)]
@@ -181,6 +182,8 @@ def test_environment_proxy_cannot_resolve_destination_independently(monkeypatch)
         ["::ffff:10.0.0.5"],
         ["::ffff:169.254.169.254"],
         ["::ffff:192.168.1.1"],
+        ["0.0.0.0"], ["::"], ["::ffff:0.0.0.0"],
+        ["224.0.0.1"], ["ff02::1"], ["192.0.2.1"],
     ],
 )
 def test_invalid_or_denied_resolver_results_never_connect(monkeypatch, addresses):
@@ -189,6 +192,7 @@ def test_invalid_or_denied_resolver_results_never_connect(monkeypatch, addresses
     with pytest.raises(SSRFProtectionError):
         c.get("http://jobs.example.test/jobs")
     assert wire.connections == []
+    assert wire.sockets == []
 
 
 @pytest.mark.parametrize("address", ["::ffff:93.184.216.34", "2606:4700:4700::1111"])

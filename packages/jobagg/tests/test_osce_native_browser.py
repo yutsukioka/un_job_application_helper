@@ -106,6 +106,15 @@ def native(tmp_path, monkeypatch):
     url = f'https://localhost:{server.server_port}'
     old, client = make_browser(tmp_path, monkeypatch, {})
     client.safe_policy = SafeHTTPPolicy({'localhost'}, resolver=lambda _: ['8.8.8.8'])
+    # Deliberate test-only transport seam: production never maps public to local.
+    # Keep the policy strict while letting the fixture exercise Chromium TLS.
+    from jobagg import browser_proxy
+    from jobagg.http_safe import ValidatedEndpoint
+    real_dial = browser_proxy._dial
+    async def fixture_dial(endpoint, timeout):
+        assert endpoint.host == 'localhost' and endpoint.addresses == ('8.8.8.8',)
+        return await real_dial(ValidatedEndpoint(endpoint.host, endpoint.port, ('127.0.0.1',)), timeout)
+    monkeypatch.setattr(browser_proxy, '_dial', fixture_dial)
     old.capture.default_header_origin = old.capture.origin(url)
     renderer = OSCENativeBrowser(client, old.capture, {
         'url_patterns': ['^' + re.escape(url) + '/.*$'], 'ready_selector': 'h1',
@@ -289,3 +298,18 @@ def test_native_command_releases_only_complete_listing(tmp_path, monkeypatch, co
         with pytest.raises(ValueError, match='already attempted'):
             command.main([*argv, '--execute'])
         assert len(reserves) == 1
+
+
+def test_native_divergent_dns_cannot_reach_loopback(native, monkeypatch):
+    from jobagg import browser_proxy
+    browser, url, replies, calls = native
+    attempts = []
+    async def reject_public(endpoint, timeout):
+        attempts.append(endpoint)
+        raise OSError("Validated public destination unavailable")
+    monkeypatch.setattr(browser_proxy, '_dial', reject_public)
+    replies['/job'] = (200, {}, '<h1>Must not reach loopback</h1>')
+    with pytest.raises(Exception):
+        browser.render(url + '/job')
+    assert attempts and all(e.addresses == ('8.8.8.8',) for e in attempts)
+    assert calls == []

@@ -137,7 +137,8 @@ def _is_denied_address(value: str) -> bool:
         raise SSRFProtectionError("URL host could not be resolved")
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
-    return any(address in network for network in DENIED_NETWORKS)
+    return (not address.is_global or address.is_multicast
+            or any(address in network for network in DENIED_NETWORKS))
 
 
 def _as_ip_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:

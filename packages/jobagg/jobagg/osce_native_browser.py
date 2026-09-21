@@ -22,6 +22,7 @@ from uuid import uuid4
 from jobagg.adapters.osce_inventory import Cards, SESSION, captured_scope, reconcile
 from jobagg.atomic_files import atomic_write_text
 from jobagg.browser_fetch import BrowserContractError, COMPOSED_HTML, COMPOSED_TEXT, GuardedBrowser
+from jobagg.browser_proxy import pinned_browser_proxy
 from jobagg.http import HttpResponse, ResponseTooLargeError
 from jobagg.html_text import render_html_text
 from jobagg.osce_fragments import DATA_ROUTE, csrf_token, validate_csrf_header, page_url, request_url, result_html, session_parts, site_name, validate_request
@@ -99,8 +100,10 @@ class OSCENativeBrowser(GuardedBrowser):
         self.pending, self.chains, self.tasks = {}, {}, set()
         self.serial = asyncio.Lock()
         self.loop = asyncio.get_running_loop()
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=not self.headed, timeout=self.remaining_ms(), args=[
+        async with pinned_browser_proxy(self.client.safe_policy, self.client.timeout_seconds) as proxy, async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=not self.headed, timeout=self.remaining_ms(),
+                proxy={"server": proxy, "bypass": "<-loopback>"}, args=[
+                "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
                 "--disable-background-networking", "--disable-component-update",
                 "--disable-quic", "--block-new-web-contents",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",

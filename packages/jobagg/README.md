@@ -517,3 +517,10 @@ cd packages/jobagg
 pip install -e ".[dev]"
 pytest
 ```
+
+Guarded network destinations must be public unicast addresses. Unspecified,
+private, reserved and multicast addresses are rejected after IPv4-mapped IPv6
+normalization, including on redirects and retries. The OSCE Chromium transport
+uses a task-local CONNECT proxy that resolves and pins each upstream connection
+to validated numeric addresses. Chromium retains end-to-end TLS verification
+and its anonymous session cookies; there is no direct-network fallback.

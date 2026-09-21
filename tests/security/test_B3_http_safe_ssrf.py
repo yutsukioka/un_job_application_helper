@@ -15,7 +15,7 @@ from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError, safe_urljoin  
 
 
 def test_B3_http_safe_allows_configured_public_host() -> None:
-    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["203.0.113.10"])
+    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["93.184.216.34"])
 
     assert policy.validate_url("https://jobs.example.org/list") == "jobs.example.org"
 
@@ -40,7 +40,7 @@ def test_B3_http_safe_rejects_schemes_and_private_targets(url: str) -> None:
 
 
 def test_B3_http_safe_rejects_host_not_in_organization_allowlist() -> None:
-    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["203.0.113.10"])
+    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["93.184.216.34"])
 
     with pytest.raises(SSRFProtectionError):
         policy.validate_url("https://evil.example.net/list")
@@ -54,14 +54,14 @@ def test_B3_http_safe_rejects_dns_rebind_to_private_address() -> None:
 
 
 def test_B3_safe_urljoin_validates_joined_target() -> None:
-    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["203.0.113.10"])
+    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["93.184.216.34"])
 
     with pytest.raises(SSRFProtectionError):
         safe_urljoin("https://jobs.example.org/list", "//169.254.169.254/latest", policy=policy)
 
 
 def test_B3_http_safe_rejects_redirect_to_private_host() -> None:
-    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["203.0.113.10"])
+    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["93.184.216.34"])
 
     with pytest.raises(SSRFProtectionError):
         policy.validate_redirect(
@@ -72,7 +72,7 @@ def test_B3_http_safe_rejects_redirect_to_private_host() -> None:
 
 
 def test_B3_http_safe_rejects_too_many_redirects() -> None:
-    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["203.0.113.10"])
+    policy = SafeHTTPPolicy(allowed_hosts={"jobs.example.org"}, resolver=lambda host: ["93.184.216.34"])
 
     with pytest.raises(SSRFProtectionError):
         policy.validate_redirect(
