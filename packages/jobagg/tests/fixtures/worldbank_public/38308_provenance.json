@@ -1,0 +1,10 @@
+{
+  "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/evidence/worldbank_public_fields/public-page-002/http/00001.json",
+  "capture_sha256": "7f9f2af419d44ab1e3423c907f7bc1d3b1cfc6418bb7911a6dab1d08b69e8b5c",
+  "body_sha256": "4e706754bac0419306df3a15198adf11e87f05ac31f4cfd57338fa5797061852",
+  "source_url": "https://worldbankgroup.csod.com/ux/ats/careersite/1/home/requisition/38308?c=worldbankgroup",
+  "original_started_at": "2026-09-13T15:48:06.694323+00:00",
+  "original_finished_at": "2026-09-13T15:48:07.926114+00:00",
+  "fixture_sha256": "5314b54ad5561ca91c219548cff676e3ac5d9e28f0e2ab6453a392857b4ad025",
+  "scope": "Only exact public JobPosting; anonymous bootstrap context excluded"
+}

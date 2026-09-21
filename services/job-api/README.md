@@ -11,6 +11,12 @@ python -m pip install -e services/job-api
 python -m job_api.launcher
 ```
 
+With uv, run the service project directly:
+
+```bash
+uv run --directory services/job-api job-api
+```
+
 Defaults:
 
 - Database: `private/jobagg/output/all_jobs.sqlite3`
@@ -84,6 +90,8 @@ Implemented for MVP:
 - `GET /api/facets`
 - `POST /api/facets`
 - `GET /api/taxonomies`
+- `GET /api/listing-inventory`
+- `GET /api/job-attachment`
 - saved-search CRUD/run
 - `GET /api/updates`
 - `GET /api/sync/runs`
@@ -93,3 +101,28 @@ Contracted stubs:
 
 - `POST /api/sync/run`
 - `POST /api/assistant/runs`
+
+## Publication and compatibility
+
+Job database reads are gated while a publication generation is incomplete or
+changes during the response. Private-route admission runs before this gate;
+tracker and saved-search storage remain available independently of publication.
+The listing-inventory and stored public vacancy-attachment routes are public job
+data endpoints and use the same publication gate.
+
+The launcher and authentication contract is the `ATLAS_*` policy above. The
+older `JOB_API_ALLOW_LAN`, `JOB_API_TOKEN`, `JOB_API_UNIX_SOCKET`, and
+`JOB_API_SCORING_ROOT` settings are superseded; use `ATLAS_ALLOW_LAN`, a private
+bearer-token source, and `JOB_API_STRATEGY_ROOT`. The `job-api` entry point delegates
+to the validated launcher. New saved-search names are validated, while existing
+stored identities remain available through exact lookup, execution, ordinary
+deletion, and conditional deletion.
+
+Search accepts `limit: 0` for facet-only requests and at most 200 rows per
+response. The Apple client pages larger Load More and offline snapshot requests
+using `offset`, preserving the first page's facets. Saved searches store a
+bounded initial page size. Job keys are bounded to 4096 characters to support
+URL-derived identities; attachment IDs are bounded to 200 characters. Public
+inventory evidence exposes typed verification facts and capture hashes only.
+URL-trust labels compare hostnames only and are advisory, not scheme/port or
+transport-security attestations.

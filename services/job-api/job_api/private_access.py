@@ -34,7 +34,8 @@ _ACCESS_UNAVAILABLE = "Private API access unavailable."
 
 class PrivateAccessMode(str, Enum):
     LOOPBACK = "loopback"
-    TOKEN = "token"
+    # Public configuration/format label, not a credential.
+    TOKEN = "token"  # nosec B105 # noqa: S105
     DISABLED = "disabled"
 
 

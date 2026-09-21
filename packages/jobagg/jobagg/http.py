@@ -5,6 +5,8 @@ from __future__ import annotations
 import errno
 import email.utils
 import gzip
+import http.client
+import ipaddress
 import json
 import random
 import socket
@@ -18,10 +20,25 @@ from http.cookiejar import CookieJar
 from dataclasses import dataclass
 from typing import Any
 
-try:  # pragma: no cover - optional dependency
-    import brotli  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - exercised only when brotli is missing
-    brotli = None
+from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError, ValidatedEndpoint
+
+
+def verified_ssl_context() -> ssl.SSLContext:
+    """Use platform trust roots when available, without changing global SSL state.
+
+    A missing optional import uses Python's verified default trust store. An
+    installed truststore that cannot initialize fails closed; it must not cause
+    certificate or hostname checks to be disabled.
+    """
+    try:
+        import truststore
+    except ImportError:
+        context = ssl.create_default_context()
+    else:
+        context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
+        raise ValueError("HTTPS requires certificate and hostname verification")
+    return context
 
 
 @dataclass(slots=True)
@@ -30,6 +47,7 @@ class HttpResponse:
     status_code: int
     headers: dict[str, str]
     text: str
+    content: bytes = b""
 
     def json(self) -> Any:
         return json.loads(self.text)
@@ -47,6 +65,114 @@ class ResponseTooLargeError(HTTPError):
 # under 5 MiB; this cap exists to prevent a misconfigured detail URL from
 # pulling a large binary into memory and persisting it as ``description``.
 _DEFAULT_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+_RESPONSE_READ_CHUNK_BYTES = 64 * 1024
+
+
+def _connect_validated(endpoint: ValidatedEndpoint, timeout, source_address=None):
+    """Connect numeric sockets only; Host and TLS SNI remain on HTTPConnection."""
+    last_error = None
+    for address in endpoint.addresses:
+        family = socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
+        destination = (address, endpoint.port, 0, 0) if family == socket.AF_INET6 else (address, endpoint.port)
+        sock = None
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(destination)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            if sock is not None:
+                sock.close()
+    if last_error is not None:
+        raise last_error
+    raise SSRFProtectionError("No validated connection addresses")
+
+
+def _connection_factory(client, request, connection_class):
+    if client.safe_policy is None:
+        return connection_class
+    if request.has_proxy() or request._tunnel_host:
+        raise SSRFProtectionError("Proxies cannot be used with pinned HTTP destinations")
+    endpoint = getattr(request, "_jobagg_endpoint", None)
+    if endpoint is None:
+        endpoint = client.safe_policy.resolve_url(request.full_url)
+
+    def create(host, **kwargs):
+        connection = connection_class(host, **kwargs)
+        if connection.host.casefold().strip("[]") != endpoint.host or connection.port != endpoint.port:
+            raise SSRFProtectionError("Connection authority differs from validated URL")
+        # Override only this connection's TCP dialer. HTTPSConnection still wraps
+        # the socket with the original hostname and verified SSL context.
+        def dial(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+            if address != (connection.host, endpoint.port):
+                raise SSRFProtectionError("Connection destination changed after validation")
+            return _connect_validated(endpoint, timeout, source_address)
+        connection._create_connection = dial
+        return connection
+    return create
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+
+    def http_open(self, request):
+        return self.do_open(_connection_factory(self.client, request, http.client.HTTPConnection), request)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, client):
+        super().__init__(context=client._ssl_context)
+        self.client = client
+
+    def https_open(self, request):
+        return self.do_open(
+            _connection_factory(self.client, request, http.client.HTTPSConnection),
+            request, context=self._context,
+        )
+
+
+class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Check every destination before urllib follows it or forwards credentials."""
+
+    def __init__(self, client: JobAggHTTPClient) -> None:
+        self.client = client
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        count = getattr(req, '_jobagg_redirect_count', 0) + 1
+        endpoint = None
+        if self.client.safe_policy is not None:
+            if count > self.client.safe_policy.max_redirects:
+                raise SSRFProtectionError("Too many redirects")
+            newurl = urllib.parse.urljoin(req.full_url, newurl)
+            endpoint = self.client.safe_policy.resolve_url(newurl)
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(newurl)
+        if old.scheme == 'https' and new.scheme != 'https':
+            raise SSRFProtectionError('HTTPS redirect downgrade is not allowed')
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        redirected._jobagg_redirect_count = count
+        redirected._jobagg_endpoint = endpoint
+        old_origin = (old.scheme, old.hostname, old.port or (443 if old.scheme == 'https' else 80))
+        new_origin = (new.scheme, new.hostname, new.port or (443 if new.scheme == 'https' else 80))
+        if old_origin != new_origin:
+            # Cookies from the jar are added separately for the destination's
+            # own scope. Never forward an explicit Cookie/auth/custom token.
+            public_headers = {'accept', 'accept-encoding', 'accept-language', 'user-agent', 'cache-control'}
+            for name, _ in list(redirected.header_items()):
+                if name.lower() not in public_headers:
+                    redirected.remove_header(name)
+        self.client._mark_request((old.hostname or '').lower())
+        self.client._respect_min_delay((new.hostname or '').lower())
+        self.client._mark_request((new.hostname or '').lower())
+        return redirected
 
 
 class JobAggHTTPClient:
@@ -62,6 +188,7 @@ class JobAggHTTPClient:
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         tls_verify: bool = True,
         default_headers: dict[str, str] | None = None,
+        safe_policy: SafeHTTPPolicy | None = None,
     ) -> None:
         self.user_agent = user_agent
         self.timeout_seconds = timeout_seconds
@@ -72,19 +199,38 @@ class JobAggHTTPClient:
         self.max_response_bytes = int(max_response_bytes)
         self.tls_verify = bool(tls_verify)
         self.default_headers = dict(default_headers or {})
+        self.safe_policy = safe_policy
         # Per-host last-request timestamp. Robots policies promise "one
         # request per host every ``min_delay_seconds``" — a single shared
         # timestamp would over-throttle when the same client straddles
         # multiple hosts (e.g. listing API + CDN attachment fetch).
         self._last_request_at_by_host: dict[str, float] = {}
         self._cookie_jar = CookieJar()
-        handlers = [urllib.request.HTTPCookieProcessor(self._cookie_jar)]
-        if not self.tls_verify:
+        if self.tls_verify:
+            self._ssl_context = verified_ssl_context()
+        else:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            handlers.append(urllib.request.HTTPSHandler(context=context))
-        self._opener = urllib.request.build_opener(*handlers)
+            self._ssl_context = context
+        self._opener = self._build_opener()
+
+    def _build_opener(self, redirect_handler=None):
+        """Keep the same TLS context and cookie jar when redirect policy changes."""
+        if self.tls_verify and (
+            self._ssl_context.verify_mode != ssl.CERT_REQUIRED
+            or not self._ssl_context.check_hostname
+        ):
+            raise ValueError("HTTPS requires certificate and hostname verification")
+        # A proxy would perform its own destination resolution, bypassing pinning.
+        proxy = urllib.request.ProxyHandler({}) if self.safe_policy is not None else urllib.request.ProxyHandler()
+        return urllib.request.build_opener(
+            proxy,
+            urllib.request.HTTPCookieProcessor(self._cookie_jar),
+            redirect_handler if redirect_handler is not None else _ValidatedRedirectHandler(self),
+            _PinnedHTTPHandler(self),
+            _PinnedHTTPSHandler(self),
+        )
 
     def _request(
         self,
@@ -95,6 +241,11 @@ class JobAggHTTPClient:
         body: bytes | None = None,
         timeout_seconds: int | float | None = None,
     ) -> HttpResponse:
+        diagnostic_start = time.monotonic()
+        self.last_request_diagnostics = {
+            "stage": "policy_validation", "headers_received": False,
+            "wire_bytes_read": 0, "elapsed_seconds": 0.0,
+        }
         request_headers = {
             "User-Agent": self.user_agent,
             "Accept": "*/*",
@@ -106,9 +257,15 @@ class JobAggHTTPClient:
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         for attempt in range(self.max_retries + 1):
+            if self.safe_policy is not None:
+                request._jobagg_endpoint = self.safe_policy.resolve_url(url)
             self._respect_min_delay(host)
             try:
+                self.last_request_diagnostics["stage"] = "connect_or_headers"
                 with self._opener.open(request, timeout=timeout) as response:
+                    self.last_request_diagnostics.update(
+                        stage="body_read", headers_received=True, status_code=response.status,
+                    )
                     declared = response.headers.get("Content-Length")
                     if declared is not None:
                         try:
@@ -118,50 +275,60 @@ class JobAggHTTPClient:
                                 )
                         except ValueError:
                             pass
-                    # Read at most max_response_bytes + 1 so we can detect
-                    # over-cap responses that omitted Content-Length.
-                    raw_bytes = response.read(self.max_response_bytes + 1)
-                    if len(raw_bytes) > self.max_response_bytes:
-                        raise ResponseTooLargeError(
-                            f"Response from {url} exceeded cap of {self.max_response_bytes} bytes"
-                        )
+                    raw_bytes = _read_capped_body(
+                        response,
+                        url=url,
+                        max_bytes=self.max_response_bytes,
+                        progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total),
+                    )
+                    self.last_request_diagnostics["stage"] = "body_decode"
                     decoded_bytes = _decode_content_encoding(
                         raw_bytes,
                         response.headers.get("Content-Encoding"),
+                        max_bytes=self.max_response_bytes,
                     )
                     charset = response.headers.get_content_charset() or "utf-8"
                     text = decoded_bytes.decode(charset, errors="replace")
                     self._mark_request(host)
+                    self.last_request_diagnostics["stage"] = "complete"
                     return HttpResponse(
                         url=response.geturl(),
                         status_code=response.status,
                         headers=dict(response.headers.items()),
                         text=text,
+                        content=decoded_bytes,
                     )
             except urllib.error.HTTPError as exc:
                 self._mark_request(host)
+                self.last_request_diagnostics.update(stage="error_body_read", headers_received=True, status_code=exc.code)
                 error_bytes = _decode_content_encoding(
-                    exc.read(),
+                    _read_capped_body(exc, url=url, max_bytes=self.max_response_bytes,
+                                     progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total)),
                     exc.headers.get("Content-Encoding") if exc.headers else None,
+                    max_bytes=self.max_response_bytes,
                 )
                 response_body = error_bytes.decode("utf-8", errors="replace")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     retry_after = _retry_after_from_headers(exc.headers)
-                    delay = retry_after or self.backoff_base_seconds * (2**attempt)
+                    delay = retry_after if retry_after is not None else self.backoff_base_seconds * (2**attempt)
                     if delay > 0:
-                        time.sleep(self._with_jitter(delay))
+                        time.sleep(max(delay, self._with_jitter(delay)) if retry_after is not None else self._with_jitter(delay))
                     continue
                 raise HTTPError(
                     f"{method} {url} failed with HTTP {exc.code}: {response_body[:300]}"
                 ) from exc
             except urllib.error.URLError as exc:
                 self._mark_request(host)
+                if isinstance(exc.reason, SSRFProtectionError):
+                    raise HTTPError(f"{method} {url} blocked by safe HTTP policy: {exc.reason}") from exc
                 if _is_transient_url_error(exc) and attempt < self.max_retries:
                     delay = self.backoff_base_seconds * (2**attempt)
                     if delay > 0:
                         time.sleep(self._with_jitter(delay))
                     continue
                 raise HTTPError(f"{method} {url} failed: {exc.reason}") from exc
+            finally:
+                self.last_request_diagnostics["elapsed_seconds"] = max(0.0, time.monotonic() - diagnostic_start)
 
         raise HTTPError(f"{method} {url} failed after retries")
 
@@ -310,13 +477,28 @@ def _is_transient_url_error(exc: urllib.error.URLError) -> bool:
 
 
 def _default_accept_encoding() -> str:
-    encodings = ["gzip", "deflate"]
-    if brotli is not None:
-        encodings.append("br")
-    return ", ".join(encodings)
+    return "gzip, deflate"
 
 
-def _decode_content_encoding(data: bytes, encoding: str | None) -> bytes:
+def _read_capped_body(stream: Any, *, url: str, max_bytes: int, progress=None) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(_RESPONSE_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if progress is not None:
+            progress(total)
+        if total > max_bytes:
+            raise ResponseTooLargeError(
+                f"Response from {url} exceeded cap of {max_bytes} bytes"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _decode_content_encoding(data: bytes, encoding: str | None, *, max_bytes: int | None = None) -> bytes:
     """Decode an HTTP response body according to its Content-Encoding header.
 
     Returns the original bytes when the encoding is missing, ``identity``, or
@@ -326,20 +508,70 @@ def _decode_content_encoding(data: bytes, encoding: str | None) -> bytes:
     """
 
     if not data or not encoding:
-        return data
+        return _ensure_decoded_size(data, max_bytes)
     encoding = encoding.strip().lower()
     if encoding in {"", "identity"}:
-        return data
+        return _ensure_decoded_size(data, max_bytes)
     try:
         if encoding == "gzip":
-            return gzip.decompress(data)
+            return _decode_zlib_content(data, 16 + zlib.MAX_WBITS, max_bytes=max_bytes)
         if encoding == "deflate":
             try:
-                return zlib.decompress(data)
+                return _decode_zlib_content(data, zlib.MAX_WBITS, max_bytes=max_bytes)
             except zlib.error:
-                return zlib.decompress(data, -zlib.MAX_WBITS)
-        if encoding == "br" and brotli is not None:
-            return brotli.decompress(data)
-    except (OSError, zlib.error, ValueError):
-        return data
+                return _decode_zlib_content(data, -zlib.MAX_WBITS, max_bytes=max_bytes)
+    except (gzip.BadGzipFile, OSError, zlib.error, ValueError):
+        return _ensure_decoded_size(data, max_bytes)
+    return _ensure_decoded_size(data, max_bytes)
+
+
+def _decode_zlib_content(data: bytes, wbits: int, *, max_bytes: int | None) -> bytes:
+    decoder = zlib.decompressobj(wbits)
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in _iter_bytes_chunks(data):
+        pending = chunk
+        while pending:
+            decoded = decoder.decompress(
+                pending,
+                _remaining_output_limit(total, max_bytes),
+            )
+            total = _append_decoded_chunk(chunks, total, decoded, max_bytes)
+            pending = decoder.unconsumed_tail
+    decoded = decoder.flush(_remaining_output_limit(total, max_bytes))
+    _append_decoded_chunk(chunks, total, decoded, max_bytes)
+    return b"".join(chunks)
+
+
+def _iter_bytes_chunks(data: bytes) -> list[bytes]:
+    return [
+        data[index : index + _RESPONSE_READ_CHUNK_BYTES]
+        for index in range(0, len(data), _RESPONSE_READ_CHUNK_BYTES)
+    ]
+
+
+def _remaining_output_limit(total: int, max_bytes: int | None) -> int:
+    if max_bytes is None:
+        return 0
+    return max(1, max_bytes - total + 1)
+
+
+def _append_decoded_chunk(
+    chunks: list[bytes],
+    total: int,
+    chunk: bytes,
+    max_bytes: int | None,
+) -> int:
+    if not chunk:
+        return total
+    total += len(chunk)
+    if max_bytes is not None and total > max_bytes:
+        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes")
+    chunks.append(chunk)
+    return total
+
+
+def _ensure_decoded_size(data: bytes, max_bytes: int | None) -> bytes:
+    if max_bytes is not None and len(data) > max_bytes:
+        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes")
     return data

@@ -1,0 +1,27 @@
+{
+  "capture_log": "private/jobagg/complete_fetch_20260913/sources/itu_successfactors/full-001/details.jsonl",
+  "capture_log_sha256": "6ef81f9102e2e3d2c95e6eadcb85003dd474477fb24fa91f9daafaee9151901c",
+  "fixtures": [
+    {
+      "external_id": "1364924755",
+      "fixture": "itu_1364924755_public_20260913.html",
+      "sha256": "a9b455e41c1ce9029b19041da228f25a15b6fc4261b5a8b788cb083b253fc2d8",
+      "source_url": "https://jobs.itu.int/job/Home-Based-Roster-Innovation-Ecosystem-Consultant/1364924755/",
+      "original_observed_at": "2026-09-13T11:04:17.317678+00:00"
+    },
+    {
+      "external_id": "1362530455",
+      "fixture": "itu_1362530455_public_20260913.html",
+      "sha256": "b1a1463d8aa58e097598c8830d09d099958293069e281db48bd05819c13bb6ea",
+      "source_url": "https://jobs.itu.int/job/Panama-City-Administrateur%28trice%29-de-programme/1362530455/",
+      "original_observed_at": "2026-09-13T11:03:21.530867+00:00"
+    },
+    {
+      "external_id": "1361435855",
+      "fixture": "itu_1361435855_public_20260913.html",
+      "sha256": "982bb44dddede205d16026fb8fcfd13bf9e5d191974eea50d6a422af1d2afdd0",
+      "source_url": "https://jobs.itu.int/job/Geneva-Head%2C-Enterprise-Risk-and-Internal-Controls/1361435855/",
+      "original_observed_at": "2026-09-13T11:02:19.349674+00:00"
+    }
+  ]
+}

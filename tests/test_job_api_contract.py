@@ -223,7 +223,13 @@ def test_saved_search_conditional_delete_supports_existing_names(
     name: str,
 ) -> None:
     client = _client(tmp_path)
-    expected = _saved_search_snapshot(client, name=name)
+    # Seed a legacy identity directly: creation validates new names, while
+    # existing stored records must remain addressable by conditional deletion.
+    expected = _saved_search_snapshot(client)
+    expected["name"] = name
+    _settings(tmp_path).saved_searches_path.write_text(json.dumps(
+        {"version": 1, "saved_searches": {name: expected}}, ensure_ascii=True,
+    ))
     identifier_segment = _conditional_identifier_segment(name)
 
     response = client.post(
@@ -949,3 +955,40 @@ def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
 
     assert payload["total"] == 1
     assert payload["results"][0]["job_key"] == "un_inspira:current"
+
+
+@pytest.mark.parametrize("name", ["x" * 129, "  legacy search  "])
+def test_legacy_saved_search_runs_and_deletes_by_exact_identity(tmp_path: Path, name: str) -> None:
+    client = _client(tmp_path)
+    expected = _saved_search_snapshot(client)
+    expected["name"] = name
+    _settings(tmp_path).saved_searches_path.write_text(json.dumps(
+        {"version": 1, "saved_searches": {name: expected}}, ensure_ascii=True,
+    ))
+    from urllib.parse import quote
+    path = "/api/saved-searches/" + quote(name, safe="")
+    assert client.get("/api/saved-searches").json()[0]["name"] == name
+    response = client.post(path + "/run")
+    assert response.status_code == 200
+    assert "results" in response.json()
+    assert client.delete(path).json() == {"deleted": True}
+    assert client.get("/api/saved-searches").json() == []
+
+
+def test_search_zero_limit_returns_facets_without_rows(tmp_path):
+    response = _client(tmp_path).post("/api/search", json={"limit": 0, "include_facets": True})
+    assert response.status_code == 200
+    value = response.json()
+    assert value["limit"] == 0 and value["results"] == []
+    assert value["total"] > 0 and value["facets"]
+
+
+@pytest.mark.parametrize("route", ["/api/job-detail", "/api/jobs/by-key", "/api/jobs/", "/api/jobs/path/", "/api/job-attachment"])
+def test_public_job_routes_reject_overlong_identities(tmp_path, route):
+    client = _client(tmp_path)
+    key = "x" * 4097
+    if route.endswith("/"):
+        response = client.get(route + key)
+    else:
+        response = client.get(route, params={"job_key": key, "attachment_id": "a" * 64})
+    assert response.status_code == 422

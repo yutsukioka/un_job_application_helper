@@ -158,8 +158,13 @@ def test_taleo_parses_fao_detail_fill_list_payload():
     assert job.title == "Food Standards Officer"
     assert job.employment_type == "Professional"
     assert job.location == "Italy-Rome"
-    assert job.posted_at.isoformat() == "2026-04-30T00:00:00+00:00"
-    assert job.closes_at.isoformat() == "2026-05-22T23:59:00+00:00"
+    assert job.posted_at is None
+    assert job.raw["_taleo_posting_time_resolution"]["kind"] == "public_calendar_date_only"
+    # The response exposes a wall clock; this URL binds neither tz nor tzname.
+    assert job.closes_at is None
+    assert job.closes_tz is None
+    assert job.closes_at_local == "22/May/2026, 11:59:00 PM"
+    assert job.raw["_taleo_deadline_resolution"]["kind"] == "unknown_timezone"
     assert "Full FAO role description." in job.description
     assert flat["JOB_LEVEL"] == "P-4"
     assert flat["Grade Level"] == "P-4"
@@ -213,7 +218,9 @@ def test_taleo_parses_adb_detail_fill_list_payload():
     assert job.employment_type == "Technical International (Field Office)"
     assert "Full ADB role description for social protection.\n\nYou will:" in job.description
     assert "- Lead policy dialogue." in job.description
-    assert job.closes_at.isoformat() == "2026-06-03T23:59:00+00:00"
+    assert job.closes_at is None
+    assert job.closes_at_local == "03-Jun-2026, 11:59:00 PM"
+    assert job.raw["_taleo_deadline_resolution"]["kind"] == "unknown_timezone"
     assert flat["JOB_LEVEL"] == "TI2"
     assert flat["Position Level"] == "TI2"
     assert flat["Department"] == "Sectors Department 3"

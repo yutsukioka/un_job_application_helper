@@ -15,6 +15,9 @@ class FakeResponse:
     status = 200
     headers = FakeHeaders({"Content-Type": "text/plain"})
 
+    def __init__(self):
+        self._body = io.BytesIO(b"ok")
+
     def __enter__(self):
         return self
 
@@ -22,7 +25,7 @@ class FakeResponse:
         return False
 
     def read(self, amt=-1):
-        return b"ok"
+        return self._body.read(amt)
 
     def geturl(self):
         return "https://example.org"
@@ -162,6 +165,16 @@ def test_retry_after_ms_header_is_honored(monkeypatch):
     assert response.text == "ok"
     assert opener.calls == 2
     assert sleeps == [2.5]
+
+
+def test_jitter_never_reduces_server_retry_after(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr('jobagg.http.time.sleep', sleeps.append)
+    client = JobAggHTTPClient(max_retries=1)
+    client._opener = RetryAfterThenSuccessOpener()
+    monkeypatch.setattr(client, '_with_jitter', lambda delay: delay * 0.75)
+    assert client.get('https://example.org').text == 'ok'
+    assert sleeps == [7.0]
 
 
 def test_retry_attempts_respect_min_delay(monkeypatch):

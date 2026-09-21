@@ -303,6 +303,14 @@ configured minimum crawl delay before every attempt without jitter; transient
 HTTP 429, 500, 502, 503, and 504 responses use bounded exponential backoff.
 HTTP 403 is not retried and stops the current source sync.
 
+When a source uses `SafeHTTPPolicy`, each request, redirect and retry resolves
+and validates a destination set before connecting. TCP connections use those
+numeric addresses without another hostname lookup; HTTP Host and HTTPS SNI and
+certificate verification retain the original hostname. Empty or mixed
+public/private DNS answers are rejected, including private IPv4 addresses mapped
+into IPv6. Environment proxies are disabled for policy-guarded requests because
+proxy-side DNS resolution would bypass the validated destination set.
+
 For one-off implementation testing across disabled real sources, use:
 
 ```bash
@@ -509,3 +517,10 @@ cd packages/jobagg
 pip install -e ".[dev]"
 pytest
 ```
+
+Guarded network destinations must be public unicast addresses. Unspecified,
+private, reserved and multicast addresses are rejected after IPv4-mapped IPv6
+normalization, including on redirects and retries. The OSCE Chromium transport
+uses a task-local CONNECT proxy that resolves and pins each upstream connection
+to validated numeric addresses. Chromium retains end-to-end TLS verification
+and its anonymous session cookies; there is no direct-network fallback.

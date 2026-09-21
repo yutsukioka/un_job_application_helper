@@ -11,9 +11,10 @@ import stat
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Path as PathParameter
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import (
     http_exception_handler,
     request_validation_exception_handler,
@@ -37,7 +38,9 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
+from job_api.attachments import download_job_attachment, list_job_attachments
 from job_api.config import ApiSettings, load_settings
+from job_api.listing_inventory import listing_inventory
 from job_api.models import (
     ApplicationRecord,
     AssistantRunRequest,
@@ -54,6 +57,7 @@ from job_api.private_access import (
     load_private_access_policy,
     private_access_rejection,
 )
+from job_api.publication_gate import PublicationGateMiddleware
 from job_api.tracker import (
     compare_and_delete_record,
     create_record,
@@ -90,6 +94,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         os.environ.get("JOB_API_STRATEGY_ROOT", settings.repo_root / "private")
     )
     app = FastAPI(title="UN Job Application Helper API", version="0.1.0")
+    app.add_middleware(
+        PublicationGateMiddleware,
+        state_path=settings.db_path.parent / ".jobagg-publication-state.json",
+    )
     app.add_middleware(PrivateAccessMiddleware, policy=private_access)
     if private_access.cors_origins:
         app.add_middleware(
@@ -185,22 +193,31 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 ]
                 payload["total"] = len(results)
             payload["results"] = results
+        _annotate_result_url_trust(payload)
         return SearchResponse(**payload)
 
+    @app.get("/api/job-attachment")
+    def job_attachment(
+        job_key: str = Query(min_length=1, max_length=4096),
+        attachment_id: str = Query(min_length=1, max_length=200),
+    ):
+        _require_db(settings.db_path)
+        return download_job_attachment(settings.db_path, job_key, attachment_id)
+
     @app.get("/api/job-detail")
-    def job_detail_query(job_key: str) -> dict[str, Any]:
+    def job_detail_query(job_key: str = Query(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/by-key")
-    def job_detail_by_key(job_key: str) -> dict[str, Any]:
+    def job_detail_by_key(job_key: str = Query(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/{job_key}")
-    def job_detail(job_key: str) -> dict[str, Any]:
+    def job_detail(job_key: str = PathParameter(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/path/{job_key:path}")
-    def job_detail_path(job_key: str) -> dict[str, Any]:
+    def job_detail_path(job_key: str = PathParameter(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/facets")
@@ -254,6 +271,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         payload["facet_labels"] = _facet_labels(
             settings.db_path, payload.get("facets") or {}
         )
+        _annotate_result_url_trust(payload)
         return SearchResponse(**payload)
 
     @app.delete("/api/saved-searches/{name}")
@@ -307,6 +325,21 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def updates() -> dict[str, Any]:
         _require_db(settings.db_path)
         return {"recent_source_runs": _recent_source_runs(settings.db_path)}
+
+    @app.get("/api/listing-inventory")
+    def published_listing_inventory(
+        source: str | None = Query(default=None, min_length=1, max_length=200),
+        pending_only: bool = False,
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        return listing_inventory(
+            settings.db_path,
+            source=source,
+            pending_only=pending_only,
+            limit=limit,
+            offset=offset,
+        )
 
     @app.get("/api/sources")
     def sources() -> dict[str, Any]:
@@ -512,16 +545,58 @@ def _job_detail_payload(
     db_path: Path, database: JobDatabase, job_key: str
 ) -> dict[str, Any]:
     _require_db(db_path)
-    job_key = unquote(job_key)
+    # Preserve canonical percent-encoded keys before trying compatibility decoding.
     job = database.get_job(job_key)
     if job is None:
-        raise HTTPException(status_code=404, detail=f"Unknown job_key: {job_key}")
+        decoded_key = unquote(job_key)
+        if decoded_key != job_key:
+            job = database.get_job(decoded_key)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job_key")
+    job_key = str(job["job_key"])
     job["locations"] = list(database.iter_vacancy_locations(job_key))
     job["classification"] = _job_classification(db_path, job_key)
     job["source_features"] = _job_source_features(db_path, job_key)
     job["deadline_info"] = _deadline_info(job)
+    job["attachments"] = list_job_attachments(db_path, job_key)
     job["display_sections"] = _job_display_sections(job)
-    return job
+    return _annotate_url_trust(job)
+
+
+def _annotate_result_url_trust(payload: dict[str, Any]) -> None:
+    payload["results"] = [
+        _annotate_url_trust(dict(row)) if isinstance(row, dict) else row
+        for row in payload.get("results") or []
+    ]
+
+
+def _annotate_url_trust(row: dict[str, Any]) -> dict[str, Any]:
+    source_origin_host = _url_origin_host(row.get("source_url")) or _url_origin_host(
+        row.get("apply_url")
+    )
+    row["apply_url_trust"] = _url_trust(row.get("apply_url"), source_origin_host)
+    row["source_url_trust"] = _url_trust(row.get("source_url"), source_origin_host)
+    return row
+
+
+def _url_trust(value: object, source_origin_host: str | None) -> dict[str, Any]:
+    origin_host = _url_origin_host(value)
+    return {
+        "origin_host": origin_host,
+        "matches_source_org": bool(
+            origin_host and source_origin_host and origin_host == source_origin_host
+        ),
+    }
+
+
+def _url_origin_host(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        host = urlsplit(value.strip()).hostname
+    except ValueError:
+        return None
+    return host.lower() if host else None
 
 
 def _scalar(conn: sqlite3.Connection, query: str) -> Any:
@@ -1072,4 +1147,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

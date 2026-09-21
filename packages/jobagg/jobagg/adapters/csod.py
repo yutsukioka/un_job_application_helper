@@ -6,6 +6,12 @@ import copy
 import html as html_lib
 import json
 import re
+import hashlib
+from pathlib import Path
+
+from jobagg.atomic_files import atomic_write_text
+from jobagg.pipelines.http_checkpoint import HostIneligible
+from jobagg.pipelines.host_recovery import classify_failure
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -47,14 +53,25 @@ class CSODAdapter(JobAdapter):
         for api_url in candidate_urls:
             try:
                 return self._fetch_posted_jobs(api_url, csod_context=csod_context)
+            except (HostIneligible, TimeoutError, PermissionError):
+                raise
             except Exception as exc:
+                # Even without DurableCapture, an access denial is terminal.
+                # Refreshing credentials or switching endpoints after a denial
+                # must not silently defeat the shared transport's review hold.
+                if classify_failure(exc) == "access_denied":
+                    raise
                 errors.append(f"{api_url}: {exc}")
                 if not (csod_context and _looks_like_auth_error(exc)):
                     continue
                 try:
                     refreshed_context = self._discover_context(required=True)
                     return self._fetch_posted_jobs(api_url, csod_context=refreshed_context)
+                except (HostIneligible, TimeoutError, PermissionError):
+                    raise
                 except Exception as refreshed_exc:
+                    if classify_failure(refreshed_exc) == "access_denied":
+                        raise
                     errors.append(f"{api_url} after token refresh: {refreshed_exc}")
 
         joined = " | ".join(errors[-4:])
@@ -72,39 +89,74 @@ class CSODAdapter(JobAdapter):
         base_payload = copy.deepcopy(self.source.extra.get("search_payload") or {})
         base_payload.setdefault("pageNumber", 1)
         base_payload.setdefault("pageSize", page_size)
+        if page_size < 1 or max_pages < 1:
+            raise ValueError("CSOD pagination bounds must be positive")
+        # The provider exposes no snapshot token. Revalidate every saved prefix
+        # page before resuming; count alone cannot identify an inventory generation.
+        scope = {"source_id": self.source.id, "url": api_url, "payload": base_payload,
+                 "page_size": page_size, "max_pages": max_pages}
+        checkpoint_path = getattr(self, "listing_checkpoint_path", None)
+        checkpoint = None
+        if checkpoint_path and Path(checkpoint_path).exists():
+            checkpoint = json.loads(Path(checkpoint_path).read_text())
+            if checkpoint.get("scope") != scope or checkpoint.get("complete"):
+                checkpoint = None
+        if checkpoint_path and checkpoint is None:
+            atomic_write_text(checkpoint_path, json.dumps({
+                "schema_version": 1, "scope": scope, "next_page": 1,
+                "total": None, "captured_ids": [], "pages": [], "complete": False,
+            }, sort_keys=True))
+        pages = []
         jobs: list[JobRecord] = []
         seen_keys: set[str] = set()
         total_count: int | None = None
-
+        self.run_diagnostics.pagination_complete = False
         for page_number in range(1, max_pages + 1):
             payload = copy.deepcopy(base_payload)
             payload["pageNumber"] = page_number
             payload["pageSize"] = page_size
             response_payload = self.post_json(api_url, payload, headers=self._headers(csod_context))
+            reported = self._total_count(response_payload)
+            if reported is None or reported < 0:
+                raise ValueError("CSOD listing lacks a valid advertised total")
+            if total_count is not None and reported != total_count:
+                if checkpoint_path:
+                    Path(checkpoint_path).unlink(missing_ok=True)
+                raise HostIneligible("CSOD inventory changed; restart next cycle", category="budget")
+            total_count = reported
+            rows = self._rows(response_payload)
+            digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+            if checkpoint and page_number <= len(checkpoint.get("pages", [])):
+                if checkpoint.get("total") != reported or checkpoint["pages"][page_number - 1]["sha256"] != digest:
+                    # All accumulated rows are fresh responses from this walk.
+                    checkpoint = None
             page_jobs = self.parse_jobs(response_payload)
-            if not page_jobs:
-                break
-            new_in_page = 0
-            for job in page_jobs:
+            ids = [job.external_id for job in page_jobs]
+            if any(not key for key in ids) or len(ids) != len(set(ids)) or seen_keys.intersection(ids):
+                raise ValueError("CSOD listing has missing or repeated IDs/pages")
+            expected = min(page_size, max(0, reported - len(seen_keys)))
+            if len(ids) != expected:
+                raise ValueError("CSOD page size does not reconcile with advertised total")
+            seen_keys.update(ids)
+            jobs.extend(page_jobs)
+            pages.append({"page": page_number, "sha256": digest, "ids": ids, "rows": rows})
+            complete = len(seen_keys) == reported
+            self.run_diagnostics.pages_fetched = page_number
+            self.run_diagnostics.total_reported_by_source = reported
+            if checkpoint_path:
+                atomic_write_text(checkpoint_path, json.dumps({
+                    "schema_version": 1, "scope": scope, "next_page": page_number + 1,
+                    "total": reported, "captured_ids": sorted(seen_keys), "pages": pages,
+                    "complete": complete,
+                }, sort_keys=True))
+            if complete:
+                self.run_diagnostics.pagination_complete = True
+                self.run_diagnostics.health_status = "ok_empty" if not jobs else "ok"
+                # Details are deliberately outside the enumeration transaction.
                 if fetch_details:
-                    detail_job = self.fetch_detail_for_listing_item(job.raw)
-                    if detail_job is not None:
-                        job = detail_job
-                key = job.identity_key()
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                jobs.append(job)
-                new_in_page += 1
-            if new_in_page == 0:
-                # All rows on this page were duplicates; stop to avoid
-                # an infinite loop on a vendor paging bug or shrinking
-                # result set.
-                break
-            total_count = self._total_count(response_payload) or total_count
-            if total_count is not None and page_number * page_size >= total_count:
-                break
-        return jobs
+                    jobs = [self.fetch_detail_for_listing_item(job.raw) or job for job in jobs]
+                return jobs
+        raise ValueError("CSOD page limit reached before complete ID reconciliation")
 
     def parse_jobs(self, payload: Any) -> list[JobRecord]:
         rows = self._rows(payload)
@@ -132,7 +184,7 @@ class CSODAdapter(JobAdapter):
                     description=item.get("description")
                     or item.get("externalDescription")
                     or item.get("jobDescription"),
-                    raw=item,
+                    raw={**item, "_worldbank_record_kind": "listing"} if self.source.id == "worldbank_csod" else item,
                 )
             )
         return jobs
@@ -141,6 +193,15 @@ class CSODAdapter(JobAdapter):
         external_id = self._external_id(item)
         if external_id is None:
             return None
+        if self.source.id == "worldbank_csod":
+            from jobagg.adapters.worldbank_public import render_public_page
+            public_url = item.get("companyApplyUrl") or item.get("url") or item.get("applyUrl") or self._apply_url_from_template(external_id)
+            if public_url is None:
+                raise ValueError("World Bank listing lacks its public detail URL")
+            html_text = self.fetch_text(str(public_url))
+            return render_public_page(self.source, html_text, page_url=str(public_url), external_id=external_id,
+                                      expected_title=item.get("title") or item.get("displayJobTitle") or item.get("displayTitle"),
+                                      listing_raw=item)
         detail_url = self._detail_api_url(external_id)
         if detail_url is None:
             return None
@@ -207,7 +268,10 @@ class CSODAdapter(JobAdapter):
         return None
 
     def _discover_context_if_configured(self) -> dict[str, Any] | None:
-        required = _as_bool(self.source.extra.get("requires_bearer_token"), default=False)
+        required = (
+            _as_bool(self.source.extra.get("requires_bearer_token"), default=False)
+            or _as_bool(self.source.extra.get("requires_runtime_context"), default=False)
+        )
         enabled = required or _as_bool(self.source.extra.get("discover_context"), default=False)
         enabled = enabled or bool(self.source.extra.get("context_url"))
         if not enabled:
