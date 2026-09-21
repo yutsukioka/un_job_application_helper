@@ -410,15 +410,38 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     "INSERT OR IGNORE INTO remediation_sources(source_id) VALUES(?)", (source.id,)
                 )
 
+    def retry_input_fingerprint(self, payload):
+        semantic = deepcopy(payload)
+        # A fresh frame path/timestamp is not a parser or URL repair.
+        semantic.pop("frame_path", None)
+        semantic.pop("frame_sha256", None)
+        listing = semantic.get("listing")
+        if isinstance(listing, dict):
+            for key in ("first_seen_at", "last_seen_at", "normalized_hash", "posting_fingerprint"):
+                listing.pop(key, None)
+            if isinstance(listing.get("raw"), dict):
+                listing["raw"].pop("_jobagg_listing_verification", None)
+        return hashlib.sha256(dump({"payload": semantic, "binding": self.binding}).encode()).hexdigest()
+
     def enqueue(self, conn, source, kind, identity, payload, *, due=None, refresh=False):
         now = time.time()
         key = task_key(source, kind, identity)
         old = conn.execute(
-            "SELECT status,payload,eligible_at,last_error FROM remediation_tasks WHERE task_id=?",
+            "SELECT status,payload,eligible_at,last_error,receipt FROM remediation_tasks WHERE task_id=?",
             (key,),
         ).fetchone()
-        if old and old["status"] in {"inflight", "interrupted", "blocked", *UNAVAILABLE_STATUSES}:
+        if old and old["status"] in {"inflight", "interrupted", *UNAVAILABLE_STATUSES}:
             return key
+        if old and old["status"] in {"dead_letter", "blocked"}:
+            receipt = json.loads(old["receipt"] or "{}")
+            # Legacy blocks lack a typed input/version binding; use the
+            # evidence-checked repair command rather than guessing their cause.
+            if old["status"] == "blocked" and not receipt.get("retry_input_sha256"):
+                return key
+            failed_input = receipt.get("retry_input_sha256") or self.retry_input_fingerprint(json.loads(old["payload"]))
+            if failed_input == self.retry_input_fingerprint(payload):
+                return key
+            refresh = True
         if old and kind == "document" and old["status"] == "not_required":
             prior = json.loads(old["payload"])
             if not document_disposition_changed(prior, payload):
@@ -1382,6 +1405,12 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             "fidelity_status": document.get("fidelity_status", "unverified"),
         }
 
+    def incomplete_response_count(self, task):
+        receipt = json.loads(task.get("receipt") or "{}")
+        if receipt.get("retry_input_sha256") != self.retry_input_fingerprint(json.loads(task["payload"])):
+            return 0
+        return int(receipt.get("incomplete_response_count", 0))
+
     def retry_after_error(self, task, target, exc):
         """Retry only eligibility deferrals or proven, non-held transport failures."""
         if isinstance(exc, BlockingIOError) or (
@@ -1391,6 +1420,22 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 "category": "eligibility_deferred",
                 "eligible_at": max(time.time() + 60, getattr(exc, "eligible_at", 0) or 0),
             }
+        from jobagg.vacancy_outcomes import IncompleteDetailResponse
+        if isinstance(exc, IncompleteDetailResponse):
+            count = self.incomplete_response_count(task) + 1
+            paths = sorted((target / "http").glob("*.json"))
+            if not paths or count >= 3 or self.shared_policy.source_hold(task["source_id"]):
+                return None
+            meta = json.loads(paths[-1].read_text())
+            if (meta.get("state") != "response_captured" or meta.get("status_code") != 200
+                    or meta.get("body_captured") is not True
+                    or meta.get("phase", {}).get("kind") != "detail"
+                    or str(meta.get("phase", {}).get("job_id")) != str(task["external_id"])
+                    or self.host_state((urlsplit(meta["url"]).hostname or "").lower()).get("stopped")):
+                return None
+            return {"category": "incomplete_detail_response", "incomplete_response_count": count,
+                    "capture": {"path": str(paths[-1]), "sha256": sha(paths[-1])},
+                    "eligible_at": time.time() + 300 * (2 ** (count - 1))}
         chain = []
         cause = exc
         while cause is not None and cause not in chain:
@@ -1400,6 +1445,11 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             cause = cause.__cause__
         if any(isinstance(error, ssl.SSLError) for error in chain):
             return None
+        deferred = [error for error in chain if isinstance(error, HostIneligible)
+                    and error.category in {"budget", "cooldown"}]
+        if deferred and not any(isinstance(error, urllib.error.HTTPError) for error in chain):
+            return {"category": "eligibility_deferred",
+                    "eligible_at": max(time.time() + 60, *(error.eligible_at or 0 for error in deferred))}
         transient = any(isinstance(error, (TimeoutError, ConnectionError)) for error in chain)
         statuses = [error.code for error in chain if isinstance(error, urllib.error.HTTPError)]
         transient |= bool(statuses) and statuses[-1] in {408, 429, 500, 502, 503, 504}
@@ -1458,8 +1508,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 )
             return None
         minimum = float(source.extra.get("listing_min_budget_seconds", 0)) if task["kind"] == "listing" else 0
+        minimum = max(6.0, minimum)
         if deadline is not None and deadline - time.time() < minimum:
-            raise HostIneligible("Insufficient listing budget before reservation", category="budget")
+            raise HostIneligible("Insufficient request budget before reservation", category="budget")
         return self.claim(task, deadline=deadline)
 
     def perform(self, task, deadline):
@@ -1513,6 +1564,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 if unavailable:
                     return unavailable
             retry = self.retry_after_error(task, target, exc)
+            from jobagg.vacancy_outcomes import IncompleteDetailResponse
+            incomplete_count = self.incomplete_response_count(task) + int(isinstance(exc, IncompleteDetailResponse))
             status = "dead_letter" if classify_failure(exc) == "local_policy" else ("pending" if retry else "blocked")
             with self.db.connection_scope() as conn:
                 self.finish(
@@ -1520,7 +1573,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     task,
                     token,
                     status,
-                    {"capture_directory": str(target), "error": reason, "retry_decision": retry},
+                    {"capture_directory": str(target), "error": reason, "retry_decision": retry,
+                     "incomplete_response_count": incomplete_count,
+                     "retry_input_sha256": self.retry_input_fingerprint(json.loads(task["payload"]))},
                     reason,
                     retry["eligible_at"] if retry else 0,
                 )
@@ -1662,6 +1717,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         }
 
     def report(self, request=None):
+        from jobagg.source_health import source_health
         sources = []
         source_holds = json.loads((self.shared_policy.root / "source_holds.json").read_text())
         with self.db.connect() as conn:
@@ -1679,6 +1735,10 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 sources.append(
                     {
                         "source_id": source.id,
+                        "fetch_health": source_health(conn, source.id, hold=(
+                            source_holds.get(source.id)
+                            or self.host_state((urlsplit(source.base_url).hostname or "").lower()).get("stopped")
+                        )),
                         "attachments_in_scope": source.extra.get("fetch_attachments", True) is not False,
                         "status": "incomplete",
                         "reason": ("Independent whole public text/metadata scope and live publication are not certified; supplementary attachments excluded."

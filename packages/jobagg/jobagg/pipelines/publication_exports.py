@@ -19,6 +19,7 @@ from jobagg.publication_deadline import expired
 from jobagg.atomic_files import atomic_write_text
 from jobagg.db import JobDatabase
 from jobagg.pipelines.exports import export_jobs
+from jobagg.retained_artifacts import archived_fingerprint, open_artifact
 
 
 JOURNAL_NAME = "export-checkpoints.json"
@@ -46,7 +47,7 @@ def _fingerprint(path):
     try:
         before = path.lstat()
     except FileNotFoundError:
-        return None
+        return archived_fingerprint(path)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"export_evidence_not_regular_file:{path}")
     digest = hashlib.sha256()
@@ -89,7 +90,7 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
     try:
         digest = hashlib.sha256()
         size = 0
-        with os.fdopen(fd, "wb") as output, source.open("rb") as input_file:
+        with os.fdopen(fd, "wb") as output, open_artifact(source) as input_file:
             for block in iter(lambda: input_file.read(1024 * 1024), b""):
                 output.write(block)
                 digest.update(block)

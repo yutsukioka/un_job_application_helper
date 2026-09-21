@@ -455,10 +455,12 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                                 " ".join((baseline["description"] or "").split())
                             ):
                                 from jobagg.pipelines.public_text_regression import (
-                                    taleo_date_metadata_only_change,
+                                    taleo_date_metadata_only_change, inspira_ltr_mark_only_change,
                                 )
 
                                 date_header_check = taleo_date_metadata_only_change(baseline, row)
+                                if date_header_check.get("accepted") is not True:
+                                    date_header_check = inspira_ltr_mark_only_change(baseline, row)
                                 if date_header_check.get("accepted") is not True:
                                     from jobagg.pipelines.reviewed_text_changes import reviewed_text_change
                                     date_header_check = reviewed_text_change(baseline, row, proof)
@@ -573,9 +575,23 @@ def _merged_model(change, before, generation):
 
     imo_calendar_fields = bound_public_date_fields(public, incoming)
     source_owned_fields = set(imo_calendar_fields)
+    # The source validators own coherent observations, including explicit
+    # unknowns. Filling those fields from an older row invalidates their proof.
+    unv_bound = incoming.get("source_id") == "unv_uvp" and JobDatabase._unv_bound_public_detail(
+        public, incoming.get("external_id"), incoming.get("description")
+    )
+    labelled_bound = JobDatabase._labelled_notice_bound_public_detail(
+        incoming.get("source_id"), public, incoming
+    )
+    workday_bound = JobDatabase._workday_precision_bound_public_detail(public, incoming)
+    if unv_bound or labelled_bound:
+        source_owned_fields.update(_PUBLIC_FIELDS)
+    if workday_bound:
+        source_owned_fields.update(("posted_at", "closes_at", "closes_at_local", "closes_tz"))
     raw = {
         **previous,
-        **{key: value for key, value in public.items() if value not in (None, "", [], {})},
+        # Empty values in an accepted source observation are evidence too.
+        **public,
     }
     if imo_calendar_fields:
         restore_raw_public_claims(raw, public_claims(public))
@@ -620,6 +636,7 @@ def _merged_model(change, before, generation):
         for key, value in list(raw.items()):
             if (
                 "verification" in key
+                and key not in public
                 and key != "_jobagg_listing_verification"
                 and isinstance(value, dict)
                 and value.get("complete") is True
@@ -630,13 +647,14 @@ def _merged_model(change, before, generation):
                     "invalidated_reason": "Public content changed; historical proof retained in generation beforeimage",
                 }
     raw["_deterministic_fetch_observation"] = change["proof"]
-    raw["_jobagg_main_text_verification"] = {
-        "complete": False,
-        "observed_at": change["proof"]["observed_at"],
-        "reason": "Parser output/capture equality; independent whole public text contract unverified",
-        "description_sha256": change["proof"]["parsed_source_text_sha256"],
-        "previous_verification": previous.get("_jobagg_main_text_verification"),
-    }
+    if not unv_bound:
+        raw["_jobagg_main_text_verification"] = {
+            "complete": False,
+            "observed_at": change["proof"]["observed_at"],
+            "reason": "Parser output/capture equality; independent whole public text contract unverified",
+            "description_sha256": change["proof"]["parsed_source_text_sha256"],
+            "previous_verification": previous.get("_jobagg_main_text_verification"),
+        }
     raw["attachment_verification"] = {
         **previous.get("attachment_verification", {}),
         "complete": False,

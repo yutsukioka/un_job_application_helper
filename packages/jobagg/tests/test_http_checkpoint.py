@@ -154,3 +154,65 @@ def test_diagnostic_url_hides_query_secret():
     assert "actual-secret" not in safe_url("https://one.example/job?token=actual-secret&id=123")
     with pytest.raises(ValueError):
         safe_url("https://user:password@one.example/job")
+
+
+@pytest.mark.parametrize('remaining', [0.345, 4.9, 5.9])
+def test_under_budget_requests_do_not_dispatch_or_poison_host(tmp_path, monkeypatch, remaining):
+    guarded = capture(tmp_path, monkeypatch, lambda *a, **k: pytest.fail('under-budget dispatch'),
+                      deadline_at=time.time() + remaining)
+    with pytest.raises(HostIneligible) as error:
+        guarded.request('https://one.example/123')
+    assert error.value.category == 'budget'
+    assert guarded.dispatched == 0
+    for path in (tmp_path / 'hosts').glob('*.json'):
+        state = json.loads(path.read_text())
+        assert not state.get('stopped') and not state.get('recovery')
+
+
+def test_pacing_budget_does_not_charge_half_open_probe(tmp_path, monkeypatch):
+    from jobagg.pipelines.host_recovery import transient_failure
+    guarded = capture(tmp_path, monkeypatch, lambda *a, **k: pytest.fail('paced dispatch'))
+    now = time.time()
+    stem = 'host-' + hashlib.sha256(b'one.example').hexdigest()[:24]
+    lock = tmp_path / 'hosts' / (stem + '.lock')
+    state_path = lock.with_suffix('.json')
+    state = transient_failure({}, now - 4000, 'transient_transport', 'old', 0)
+    state_path.write_text(json.dumps(state))
+    lock.write_text(str(now))
+    guarded.deadline_at = now + 10  # Eight seconds pacing leaves < six seconds.
+    with pytest.raises(HostIneligible) as error:
+        guarded.request('https://one.example/123')
+    assert error.value.category == 'budget'
+    assert json.loads(state_path.read_text()) == state
+
+
+def test_deadline_clipped_timeout_defers_then_next_batch_succeeds(tmp_path, monkeypatch):
+    guarded = capture(tmp_path, monkeypatch, lambda *a, **k: (_ for _ in ()).throw(TimeoutError('read')),
+                      deadline_at=time.time() + 10)
+    with pytest.raises(HostIneligible) as error:
+        guarded.request('https://one.example/123')
+    assert error.value.category == 'budget'
+    meta = json.loads((tmp_path / 'evidence/http/00001.json').read_text())
+    assert meta['failure_category'] == 'local_budget' and meta['deadline_limited']
+    state = json.loads(next((tmp_path / 'hosts').glob('*.json')).read_text())
+    assert not state.get('recovery') and not state.get('stopped')
+    guarded.deadline_at = time.time() + 60
+    guarded.original = lambda url, **kw: response(url)
+    assert guarded.request('https://one.example/123').status_code == 200
+
+
+def test_recovery_probe_requires_full_timeout_not_clipped_batch_remainder(tmp_path, monkeypatch):
+    from jobagg.pipelines.host_recovery import transient_failure
+    guarded = capture(tmp_path, monkeypatch, lambda *a, **k: pytest.fail('clipped recovery probe'))
+    now = time.time()
+    state_path = tmp_path / 'hosts' / ('host-' + hashlib.sha256(b'one.example').hexdigest()[:24] + '.json')
+    state = transient_failure({}, now - 4000, 'transient_transport', 'old', 0)
+    state_path.write_text(json.dumps(state))
+    guarded.deadline_at = now + 10
+    with pytest.raises(HostIneligible) as error:
+        guarded.request('https://one.example/123')
+    assert error.value.category == 'budget'
+    assert json.loads(state_path.read_text()) == state
+    record = json.loads((tmp_path / 'evidence/http/00001.json').read_text())
+    assert record['failure_category'] == 'local_budget'
+    assert record['failure_stage'] == 'local_pre_dispatch' and not record['body_captured']

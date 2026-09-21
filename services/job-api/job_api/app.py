@@ -9,6 +9,7 @@ import re
 import sqlite3
 import stat
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote, urlsplit
@@ -344,7 +345,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.get("/api/sources")
     def sources() -> dict[str, Any]:
         _require_db(settings.db_path)
-        return {"sources": _source_summaries(settings.db_path)}
+        return {"sources": _source_summaries(settings.db_path, settings.worker_db_path)}
 
     @app.post("/api/sync/run")
     def run_sync() -> dict[str, str]:
@@ -1043,7 +1044,14 @@ def _json_value(value: Any) -> Any:
         return value
 
 
-def _source_summaries(db_path: Path) -> list[dict[str, Any]]:
+def _source_summaries(db_path: Path, worker_db_path: Path | None = None) -> list[dict[str, Any]]:
+    from jobagg.source_health import read_worker_health
+    current, health_unavailable = {}, False
+    if worker_db_path is not None:
+        try:
+            current = read_worker_health(worker_db_path)
+        except (OSError, ValueError, KeyError, sqlite3.Error):
+            health_unavailable = True
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -1060,10 +1068,27 @@ def _source_summaries(db_path: Path) -> list[dict[str, Any]]:
             """
         ).fetchall()
         diagnostics = _latest_diagnostics(conn)
+    rows = [dict(row) for row in rows]
+    visible = {row["source_id"] for row in rows}
+    rows.extend({"source_id": key, "organization": key, "total_jobs": 0, "open_jobs": 0,
+                 "last_seen_at": None} for key in sorted(current.keys() - visible))
     result = []
     for row in rows:
         source_id = row["source_id"]
         diagnostic = diagnostics.get(source_id, {})
+        if worker_db_path is not None:
+            diagnostic = current.get(source_id, {
+                "health_status": "unavailable" if health_unavailable else "not_checked",
+                "health_basis": "deterministic_worker_queue", "coverage_status": "incomplete",
+            })
+        elif diagnostic.get("health_status") in {"ok", "ok_empty"}:
+            try:
+                observed = datetime.fromisoformat(diagnostic["observed_at"].replace("Z", "+00:00"))
+                fresh = observed.tzinfo is not None and 0 <= (datetime.now(timezone.utc) - observed).total_seconds() <= 21600
+            except (KeyError, TypeError, ValueError):
+                fresh = False
+            if not fresh:
+                diagnostic = {**diagnostic, "health_status": "stale"}
         result.append(
             {
                 "source_id": source_id,
@@ -1080,6 +1105,10 @@ def _source_summaries(db_path: Path) -> list[dict[str, Any]]:
                 )
                 if diagnostic.get("missing_transition_allowed") is not None
                 else None,
+                **{key: diagnostic.get(key) for key in (
+                    "fetch_status", "last_attempt_status", "last_success_at", "retry_due_at",
+                    "active_hold", "task_counts", "coverage_status", "health_basis",
+                )},
             }
         )
     return result

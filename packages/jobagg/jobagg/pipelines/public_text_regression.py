@@ -16,6 +16,24 @@ from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
 _METHOD = "taleo_bound_date_headers_v1"
+
+
+def inspira_ltr_mark_only_change(before, incoming):
+    """Allow only an LRM change in otherwise identical left-to-right text.
+
+    Keep the original strings/hashes. Do not strip arbitrary Unicode format
+    controls: joiners and bidi overrides can change meaning or presentation.
+    The caller must already have validated the fresh detail capture/identity.
+    """
+    old, new = before.get("description") or "", incoming.get("description") or ""
+    if (before.get("source_id") != "un_inspira" or incoming.get("source_id") != "un_inspira"
+            or not incoming.get("external_id") or before.get("external_id") != incoming.get("external_id")
+            or not old or not new or old == new
+            or any(unicodedata.bidirectional(ch) in {"R", "AL", "RLE", "RLO", "RLI", "LRE", "LRO", "LRI", "FSI", "PDI", "PDF"} for ch in old + new)
+            or old.replace("\u200e", "") != new.replace("\u200e", "")):
+        return {"accepted": False}
+    return {"accepted": True, "method": "inspira_ltr_mark_only_v1",
+            "removed_codepoint": "U+200E", "source_bytes_preserved": True}
 _SOURCES = {
     "fao_taleo": ("jobs.fao.org", "Job Posting", "Closure Date", "dmy_slash"),
     "wipo_taleo": ("wipo.taleo.net", "Publication Date", "Application Deadline", "dmy"),

@@ -104,3 +104,55 @@ def test_listing_budget_is_checked_before_durable_reservation(setup):
     with worker.db.connect() as conn:
         row=conn.execute('SELECT status,attempts FROM remediation_tasks WHERE task_id=?',(task['task_id'],)).fetchone()
     assert row['status']=='pending' and row['attempts']==0
+
+
+def test_unchanged_failed_inputs_do_not_reenter_on_new_listing_frame(setup):
+    from copy import deepcopy
+    worker, _, _, _ = setup
+    worker.max_tasks = 1
+    worker.tick(execute=True)
+    task = task_row(worker)
+    payload = json.loads(task['payload'])
+    for status in ('dead_letter', 'blocked'):
+        receipt = {'retry_input_sha256': worker.retry_input_fingerprint(payload)}
+        with worker.db.connection_scope() as conn:
+            conn.execute('UPDATE remediation_tasks SET status=?,receipt=? WHERE task_id=?',
+                         (status, json.dumps(receipt), task['task_id']))
+            fresh = deepcopy(payload)
+            fresh['frame_path'] = '/new-frame/listing.json'
+            fresh['frame_sha256'] = 'new-frame'
+            fresh['listing']['last_seen_at'] = '2026-10-01T00:00:00+00:00'
+            worker.enqueue(conn, task['source_id'], 'detail', task['external_id'], fresh, refresh=True)
+        assert task_row(worker)['status'] == status
+        with worker.db.connection_scope() as conn:
+            fresh['listing']['source_url'] = 'https://demo.example/corrected/123'
+            worker.enqueue(conn, task['source_id'], 'detail', task['external_id'], fresh, refresh=True)
+        assert task_row(worker)['status'] == 'pending'
+        with worker.db.connection_scope() as conn:
+            conn.execute('UPDATE remediation_tasks SET payload=? WHERE task_id=?', (json.dumps(payload), task['task_id']))
+
+
+def test_changed_reviewed_implementation_allows_one_dead_letter_retry(setup):
+    worker, _, _, _ = setup
+    worker.max_tasks = 1
+    worker.tick(execute=True)
+    task = task_row(worker)
+    payload = json.loads(task['payload'])
+    receipt = {'retry_input_sha256': worker.retry_input_fingerprint(payload)}
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_tasks SET status='dead_letter',receipt=? WHERE task_id=?", (json.dumps(receipt), task['task_id']))
+        worker.binding['implementation_sha256'] = 'reviewed-parser-repair'
+        worker.enqueue(conn, task['source_id'], 'detail', task['external_id'], payload, refresh=True)
+    assert task_row(worker)['status'] == 'pending'
+
+
+def test_wrapped_typed_budget_deferral_is_not_a_permanent_failure(setup):
+    from jobagg.pipelines.http_checkpoint import HostIneligible
+    worker, _, _, _ = setup
+    try:
+        try:
+            raise HostIneligible('deadline', category='budget')
+        except HostIneligible as exc:
+            raise RuntimeError('adapter wrapper') from exc
+    except RuntimeError as exc:
+        assert worker.retry_after_error({}, worker.workspace, exc)['category'] == 'eligibility_deferred'

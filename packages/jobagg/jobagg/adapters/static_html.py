@@ -812,6 +812,11 @@ def parse_detail_page(
     html_text: str,
     page_url: str,
 ) -> JobRecord:
+    if source.id == "opcw_talentsoft_candidatespace":
+        from jobagg.vacancy_outcomes import VacancyUnavailable, unavailable_template
+        identity = re.search(r"_(\d+)\.aspx$", urlsplit(page_url).path)
+        if identity and unavailable_template(source.id, identity[1], page_url, page_url, html_text):
+            raise VacancyUnavailable("OPCW explicitly reports this vacancy no longer exists")
     json_ld_jobs = parse_json_ld_jobs(source, html_text, page_url)
     if json_ld_jobs:
         if source.id == "cern_custom_html":
