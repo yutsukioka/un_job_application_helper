@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import closing
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 import sqlite3
 from urllib.parse import urlencode
@@ -61,6 +62,31 @@ def _clock(value, now):
         return (None, "future_observation") if age < 0 else (age, "observed")
     except (TypeError, ValueError, AttributeError):
         return None, "invalid_observation_time"
+
+
+def _public_evidence(raw):
+    """Project typed facts and hashes only; internal paths/errors stay private."""
+    proof = json.loads(raw)
+    if not isinstance(proof, dict):
+        return {}
+    result = {}
+    for key in ("complete", "verified_zero"):
+        if type(proof.get(key)) is bool:
+            result[key] = proof[key]
+    for key in ("observed_count", "reported_total", "page_count"):
+        if type(proof.get(key)) is int and proof[key] >= 0:
+            result[key] = proof[key]
+    method = proof.get("method")
+    if isinstance(method, str) and re.fullmatch(r"[a-zA-Z0-9_]{1,80}", method):
+        result["method"] = method
+    captures = proof.get("capture_paths")
+    if isinstance(captures, list):
+        result["capture_sha256"] = [
+            entry["sha256"] for entry in captures
+            if isinstance(entry, dict) and isinstance(entry.get("sha256"), str)
+            and re.fullmatch(r"[a-fA-F0-9]{64}", entry["sha256"])
+        ]
+    return result
 
 
 def listing_inventory(
@@ -193,7 +219,7 @@ def listing_inventory(
                     "detail_published": counts.get("detail_published", 0),
                     "presence_unknown": counts.get("presence_unknown", 0),
                     "frame_sha256": frame["frame_sha256"],
-                    "evidence": json.loads(frame["proof_json"]),
+                    "evidence": _public_evidence(frame["proof_json"]),
                     "generation_id": frame["generation_id"],
                     "completeness_certified": False,
                 }

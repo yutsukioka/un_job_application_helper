@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 
 from starlette.responses import JSONResponse
+from job_api.private_access import _root_relative_route_path
 
 _READ_PATHS = {"/api/health", "/api/search", "/api/facets", "/api/taxonomies",
                "/api/updates", "/api/sources", "/api/sync/runs",
                "/api/job-detail", "/api/job-attachment", "/api/listing-inventory"}
 
 def database_read(scope):
-    path = scope.get("path", "")
+    path = _root_relative_route_path(scope)
     return (path in _READ_PATHS or path.startswith("/api/jobs/")
             or (path.startswith("/api/saved-searches/") and path.endswith("/run")))
 
@@ -55,7 +57,6 @@ class PublicationGateMiddleware:
         ready, token = publication_token(self.state_path)
         if not ready:
             return await self.unavailable(scope, receive, send)
-        import tempfile
         messages = []
         with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as body:
             async def collect(message):

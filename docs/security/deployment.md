@@ -1,33 +1,53 @@
 # Security Deployment Notes
 
-## Job API LAN Exposure
+## Local and LAN launch
 
-Default deployment is loopback-only:
+Run `python -m job_api.launcher` (or `job-api`) for the default
+`127.0.0.1:8765` listener. The launcher uses environment variables; it does not
+parse `--host` arguments or support a Unix-socket launch mode.
 
-- Host: `127.0.0.1`
-- Port: `8765`
-- LAN access: disabled
+For a physical device on a controlled LAN, create an external token file and
+start the validated launcher:
 
-Use this decision tree before changing the bind address:
+```bash
+umask 077
+TOKEN_FILE="$(mktemp "${TMPDIR:-/tmp}/atlas-private-api-token.XXXXXX")"
+openssl rand -base64 48 | tr -d '\n' > "$TOKEN_FILE"
+ATLAS_API_HOST=0.0.0.0 \
+ATLAS_ALLOW_LAN=1 \
+ATLAS_PRIVATE_API_MODE=token \
+ATLAS_PRIVATE_API_TOKEN_FILE="$TOKEN_FILE" \
+python -m job_api.launcher
+```
 
-1. If only local desktop or simulator clients need access, keep the default
-   `job-api` bind at `127.0.0.1:8765`.
-2. If another local process can use a Unix domain socket, set
-   `JOB_API_UNIX_SOCKET=/path/to/job-api.sock` and avoid TCP LAN exposure.
-3. If a physical device must reach the service over LAN, set
-   `JOB_API_ALLOW_LAN=1`, configure `JOB_API_TOKEN`, and start with
-   `job-api --host 0.0.0.0`.
+Delete the token file after stopping the service. Configure the client with the
+host's LAN address. Private routes require `Authorization: Bearer <token>`;
+public vacancy search, detail, and inventory routes remain unauthenticated.
+The Apple app currently has no token-entry UI, so public reads work over LAN
+but its private features require a client capable of sending the bearer header.
+HTTP token mode provides no transport encryption; use it only for temporary
+controlled-network testing.
 
-Startup refuses `0.0.0.0` unless LAN exposure is explicit and either
-`JOB_API_TOKEN` or `JOB_API_UNIX_SOCKET` is configured. Clients using token
-mode must send the token in the `X-Job-Api-Token` header.
-
-## Environment Variables
+## Active environment variables
 
 | Variable | Purpose |
 | --- | --- |
-| `JOB_API_ALLOW_LAN` | Must be exactly `1` to permit binding to `0.0.0.0`. |
-| `JOB_API_TOKEN` | Shared secret expected in the `X-Job-Api-Token` header. |
-| `JOB_API_UNIX_SOCKET` | Unix domain socket path for local socket mode. |
-| `JOB_API_SCORING_ROOT` | Allowlist root for `score_against` strategy files. Defaults to `<repo>/strategies`. |
-| `JOB_API_SCORING_MAX_BYTES` | Maximum `score_against` file size. Defaults to `2097152` bytes. |
+| `ATLAS_API_HOST` | Bind address; defaults to `127.0.0.1`. |
+| `ATLAS_API_PORT` | TCP port, 1–65535; defaults to `8765`. |
+| `ATLAS_ALLOW_LAN` | Must be `1` for a non-loopback bind. |
+| `ATLAS_PRIVATE_API_MODE` | `loopback` (default), `token`, or `disabled`; LAN requires `token`. |
+| `ATLAS_PRIVATE_API_TOKEN_FILE` | External regular token file; use exactly one token source. |
+| `ATLAS_PRIVATE_API_TOKEN` | Alternative direct token source, 32–4096 UTF-8 bytes. |
+| `ATLAS_CORS_ORIGINS` | Exact comma-separated browser origins; no wildcard. |
+| `JOB_API_STRATEGY_ROOT` | Root for scoring files; defaults to `<repo>/private`. Reads are capped at 1 MiB. |
+| `JOB_API_DB` | Live database path override. |
+| `JOB_API_SAVED_SEARCHES` | Saved-search storage path override. |
+| `JOB_API_TRACKER` | Tracker storage path override. |
+
+`ATLAS_TRUST_PROXY_HEADERS` must remain unset. Forwarded headers do not grant
+loopback access. The older `JOB_API_ALLOW_LAN`, `JOB_API_TOKEN`,
+`JOB_API_UNIX_SOCKET`, `JOB_API_SCORING_ROOT`, `JOB_API_SCORING_MAX_BYTES`, and
+`X-Job-Api-Token` contract is superseded and must not be used for deployment.
+
+See [private endpoint security](local_api_private_endpoint_security.md) and
+[validated launch architecture](../architecture/secure_local_api_launch.md).

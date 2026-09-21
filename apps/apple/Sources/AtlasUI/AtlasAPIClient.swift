@@ -467,7 +467,31 @@ public struct AtlasAPIClient: Sendable {
     }
 
     public func search(_ request: AtlasSearchRequest) async throws -> AtlasSearchResponse {
-        try await post("api/search", body: request)
+        try await Self.collectSearchPages(request) { page in
+            try await post("api/search", body: page)
+        }
+    }
+
+    static func collectSearchPages(
+        _ request: AtlasSearchRequest,
+        fetch: (AtlasSearchRequest) async throws -> AtlasSearchResponse
+    ) async throws -> AtlasSearchResponse {
+        var page = request
+        page.limit = min(request.limit, 200)
+        let first = try await fetch(page)
+        var rows = first.results
+        while request.limit > rows.count && !rows.isEmpty && request.offset + rows.count < first.total {
+            page.offset = request.offset + rows.count
+            guard page.offset <= 100_000 else { throw AtlasAPIError.invalidResponse }
+            page.limit = min(200, request.limit - rows.count)
+            page.includeFacets = false
+            let next = try await fetch(page)
+            if next.results.isEmpty { break }
+            rows.append(contentsOf: next.results)
+        }
+        return AtlasSearchResponse(total: first.total, limit: request.limit, offset: request.offset,
+                                   results: rows, facets: first.facets, facetLabels: first.facetLabels,
+                                   unclassifiedCount: first.unclassifiedCount)
     }
 
     public func jobDetail(_ jobKey: String) async throws -> AtlasJobDetail {
@@ -479,9 +503,11 @@ public struct AtlasAPIClient: Sendable {
     }
 
     public func saveSearch(name: String, request: AtlasSearchRequest, summary: String) async throws -> AtlasSavedSearch {
-        try await post(
+        var pageRequest = request
+        pageRequest.limit = min(request.limit, 200)
+        return try await post(
             "api/saved-searches",
-            body: AtlasSavedSearchPayload(name: name, request: request, summary: summary)
+            body: AtlasSavedSearchPayload(name: name, request: pageRequest, summary: summary)
         )
     }
 

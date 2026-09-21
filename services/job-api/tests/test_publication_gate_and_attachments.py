@@ -19,13 +19,13 @@ class GateTests(unittest.TestCase):
     def state(self, state="complete", generation="one"):
         self.path.write_text(json.dumps({"state": state, "generation_id": generation}))
 
-    def request(self, app, path="/api/jobs/example"):
+    def request(self, app, path="/api/jobs/example", root_path=""):
         async def run():
             output = []
             async def receive(): return {"type": "http.request", "body": b""}
             async def send(message): output.append(dict(message))
             await PublicationGateMiddleware(app, state_path=self.path)(
-                {"type": "http", "path": path, "method": "GET"}, receive, send)
+                {"type": "http", "path": path, "root_path": root_path, "method": "GET"}, receive, send)
             return output
         return asyncio.run(run())
 
@@ -33,6 +33,14 @@ class GateTests(unittest.TestCase):
     async def response(scope, receive, send):
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"old coherent data"})
+
+    def test_mounted_database_routes_are_gated(self):
+        self.state("publishing")
+        async def must_not_run(*args): self.fail("Mounted request bypassed gate")
+        for route in ("/api/search", "/api/jobs/path/key", "/api/job-detail", "/api/job-attachment",
+                      "/api/listing-inventory", "/api/saved-searches/name/run"):
+            self.assertEqual(self.request(must_not_run, "/mounted" + route, "/mounted")[0]["status"], 503)
+        self.assertEqual(self.request(self.response, "/mounted-other/api/search", "/mounted")[0]["status"], 200)
 
     def test_legacy_database_works_without_marker(self):
         result = self.request(self.response)

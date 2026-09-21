@@ -152,6 +152,7 @@ def export_jobs(
                 handle.write("\n  " if first else ",\n  ")
                 for chunk in encoder.iterencode(row):
                     handle.write(chunk.replace("\n", "\n  "))
+                handle.flush()
                 first = False
             handle.write("]" if first else "\n]")
         return

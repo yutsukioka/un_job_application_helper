@@ -61,10 +61,12 @@ The API defaults to `http://127.0.0.1:8765` and reads
 
 ## Security
 
-The local API is loopback-only by default. Binding it to all interfaces with
-`--host 0.0.0.0` requires `JOB_API_ALLOW_LAN=1` plus either `JOB_API_TOKEN`
-for the `X-Job-Api-Token` shared-secret header or `JOB_API_UNIX_SOCKET` for
-Unix-socket mode. See the [deployment decision tree](docs/security/deployment.md),
+The local API is loopback-only by default. LAN binding requires
+`ATLAS_API_HOST=0.0.0.0`, `ATLAS_ALLOW_LAN=1`, `ATLAS_PRIVATE_API_MODE=token`,
+and exactly one external token source (`ATLAS_PRIVATE_API_TOKEN_FILE` or
+`ATLAS_PRIVATE_API_TOKEN`). Start with `python -m job_api.launcher` or `job-api`.
+Private routes require `Authorization: Bearer <token>`; public job reads remain
+unauthenticated. See the [deployment decision tree](docs/security/deployment.md),
 [hardening audit](docs/security/hardening_audit.md), and
 [Job API changelog](services/job-api/CHANGELOG.md).
 
@@ -72,9 +74,9 @@ Security hardening index:
 
 | Criterion | Mitigation |
 | --- | --- |
-| [A1](docs/security/hardening_audit.md) | Default bind remains loopback; LAN bind requires explicit env guard and token or socket mode. |
-| [A2](docs/security/hardening_audit.md) | LAN requests require `X-Job-Api-Token` with constant-time comparison and failed-auth throttling. |
-| [A3](docs/security/hardening_audit.md) | `score_against` paths are confined by `JOB_API_SCORING_ROOT` and `JOB_API_SCORING_MAX_BYTES`. |
+| [A1](docs/security/hardening_audit.md) | Default bind remains loopback; LAN bind requires explicit opt-in and private token mode. |
+| [A2](docs/security/hardening_audit.md) | Private token-mode requests require an `Authorization: Bearer` credential with constant-time comparison. |
+| [A3](docs/security/hardening_audit.md) | `score_against` paths are confined by `JOB_API_STRATEGY_ROOT` and a fixed 1 MiB read cap. |
 | [A4](docs/security/hardening_audit.md) | Encrypted-sync wire contract blocks raw passphrases and unwrapped vault keys; see [contract](contracts/api/encrypted_sync.md). |
 | [B1](docs/security/hardening_audit.md) | Job API request models bound paging, text, notes, and list fields. |
 | [B2](docs/security/hardening_audit.md) | Tracker and saved-search writes use locked, same-directory atomic replacement. |

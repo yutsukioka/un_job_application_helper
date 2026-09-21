@@ -21,3 +21,12 @@ Source: goal objective in `/Users/yutsukioka2/.codex/attachments/32e6dfe2-3c64-4
 | D2 | `6cb211dfea246eef81f55379b717b2e0eb41620f` | `packages/jobagg/jobagg/filters/saved_searches.py`; `services/job-api/job_api/app.py`; `services/job-api/job_api/models.py` | `tests/security/test_D2_saved_search_name_validator.py` (8 tests) | PASS: `.venv/bin/pytest -q` -> 72 passed, 1 warning; `.venv/bin/ruff check services packages tests` -> pass | WAIVED for this criterion: broad `.venv/bin/bandit -q -r services packages` still fails outside D2 files (12 high, 47 medium, 1667 low); focused D2 file scan passes | TBD |
 | D3 | `8d0ca43bfcbbf95df5cb9b8ecec0583fb1c5f8ba` | `.github/workflows/ci.yml`; `pytest.ini`; `tests/security/conftest.py` | `tests/security/test_D3_ci_hardening.py` (3 tests); `tests/security/conftest.py` auto-marks security tests | PASS: `.venv/bin/pytest -q` -> 75 passed, 1 warning; `.venv/bin/pytest -q -m security` -> 66 passed, 9 deselected, 1 warning; focused workflow `bandit` gate -> pass; `pip-audit` -> pass after CI-equivalent pip upgrade; focused `ruff check --select=S --ignore=S104 ...` -> pass; `.venv/bin/ruff check services packages tests` -> pass | WAIVED for this criterion: broad `.venv/bin/bandit -q -r services packages` still fails outside D3 files (12 high, 47 medium, 1667 low); focused workflow bandit scope passes | TBD |
 | D4 | `adfeee9de1fd55c0e6c46e54bfcd7d54efe626d3` | `packages/jobagg/jobagg/robots.py` | `tests/security/test_D4_robots_policy_stance.py` (2 tests) | PASS: `.venv/bin/pytest -q` -> 77 passed, 1 warning; `.venv/bin/pytest -q -m security` -> 68 passed, 9 deselected, 1 warning; `.venv/bin/pytest -q packages/jobagg/tests/test_config_consistency.py` -> 3 passed; `.venv/bin/ruff check services packages tests` -> pass | WAIVED for this criterion: broad `.venv/bin/bandit -q -r services packages` still fails outside D4 files (12 high, 47 medium, 1667 low); focused `packages/jobagg/jobagg/robots.py` scan passes | TBD |
+
+## Current review context
+
+This table is a historical implementation record. `TBD` reviewer cells are not
+claims of independent approval and have not been retroactively filled in.
+Current scoped reviews and residual risks are linked in the
+[threat model](threat_model.md). For active deployment settings use
+[deployment.md](deployment.md); the older per-commit descriptions above do not
+supersede the current `ATLAS_*` launcher and bearer-authentication contract.

@@ -973,3 +973,22 @@ def test_legacy_saved_search_runs_and_deletes_by_exact_identity(tmp_path: Path, 
     assert "results" in response.json()
     assert client.delete(path).json() == {"deleted": True}
     assert client.get("/api/saved-searches").json() == []
+
+
+def test_search_zero_limit_returns_facets_without_rows(tmp_path):
+    response = _client(tmp_path).post("/api/search", json={"limit": 0, "include_facets": True})
+    assert response.status_code == 200
+    value = response.json()
+    assert value["limit"] == 0 and value["results"] == []
+    assert value["total"] > 0 and value["facets"]
+
+
+@pytest.mark.parametrize("route", ["/api/job-detail", "/api/jobs/by-key", "/api/jobs/", "/api/jobs/path/", "/api/job-attachment"])
+def test_public_job_routes_reject_overlong_identities(tmp_path, route):
+    client = _client(tmp_path)
+    key = "x" * 4097
+    if route.endswith("/"):
+        response = client.get(route + key)
+    else:
+        response = client.get(route, params={"job_key": key, "attachment_id": "a" * 64})
+    assert response.status_code == 422

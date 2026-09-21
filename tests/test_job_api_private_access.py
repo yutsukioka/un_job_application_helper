@@ -1157,3 +1157,10 @@ def test_new_public_job_routes_obey_publication_gate(tmp_path: Path, path: str) 
     response = _client(tmp_path, peer="192.0.2.44").get(path)
     assert response.status_code == 503
     assert response.json()["publication_status"] == "updating"
+
+
+def test_all_public_routes_have_publication_gate_coverage():
+    from job_api.publication_gate import database_read
+    for _, path in PUBLIC_ROUTE_CONTRACT:
+        assert database_read({"path": path})
+        assert database_read({"path": "/mounted" + path, "root_path": "/mounted"})

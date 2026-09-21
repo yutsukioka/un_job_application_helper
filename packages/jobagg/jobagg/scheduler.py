@@ -46,7 +46,7 @@ from jobagg.pipelines.bundles import (
     write_source_bundle,
     write_summary,
 )
-from jobagg.pipelines.bundle_verify import DEFAULT_MAX_BUNDLE_BYTES, verify_bundle_path
+from jobagg.pipelines.bundle_verify import verify_bundle_path
 from jobagg.pipelines.consolidation import (
     consolidate_bundle_databases,
     write_organization_summary,
@@ -332,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_verify.add_argument(
         "--max-bytes",
         type=_positive_int,
-        default=DEFAULT_MAX_BUNDLE_BYTES,
+        default=None,
         help="Maximum total bundle bytes allowed before any file is opened.",
     )
     bundle_verify.set_defaults(handler=handle_bundle_verify)

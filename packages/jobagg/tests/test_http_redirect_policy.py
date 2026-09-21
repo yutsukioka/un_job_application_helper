@@ -71,3 +71,15 @@ def test_tls_downgrade_is_rejected_before_following():
     with pytest.raises(SSRFProtectionError, match='downgrade'):
         client.get('https://source.test/a')
     assert len(transport.requests) == 1
+
+
+def test_cross_origin_redirect_drops_case_variant_credentials():
+    from jobagg.http import _ValidatedRedirectHandler
+    client, _ = make_client({}, ['source.test', 'cdn.test'])
+    request = urllib.request.Request('https://source.test/a')
+    request.headers.update({'Authorization': 'one', 'authorization': 'two',
+                            'X-Token': 'three', 'x-token': 'four', 'Accept': 'text/html'})
+    request.unredirected_hdrs.update({'AUTHORIZATION': 'five'})
+    redirected = _ValidatedRedirectHandler(client).redirect_request(
+        request, None, 302, 'Found', {}, 'https://cdn.test/b')
+    assert {name.lower() for name, _ in redirected.header_items()} == {'accept'}

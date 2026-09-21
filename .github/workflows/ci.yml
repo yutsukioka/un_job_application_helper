@@ -38,12 +38,21 @@ jobs:
           pytest tests
           pytest services/job-api/tests reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests
 
-      - name: Run security gates
-        run: |
-          bandit -q -r services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
-          pip-audit
-          ruff check --select=S --ignore=S104 services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
-          pytest -m security
+      - name: Bandit security scan
+        if: ${{ !cancelled() }}
+        run: bandit -q -r services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
+
+      - name: Dependency vulnerability audit
+        if: ${{ !cancelled() }}
+        run: pip-audit
+
+      - name: Ruff security scan
+        if: ${{ !cancelled() }}
+        run: ruff check --select=S --ignore=S104 services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
+
+      - name: Security regression tests
+        if: ${{ !cancelled() }}
+        run: pytest -m security
 
       - name: Validate JSON contracts
         run: |

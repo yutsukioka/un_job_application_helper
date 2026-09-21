@@ -34,7 +34,7 @@ def _client(tmp_path: Path, loopback_client) -> TestClient:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"limit": 0},
+        {"limit": -1},
         {"limit": 201},
         {"offset": -1},
         {"offset": 100_001},
@@ -67,7 +67,7 @@ def test_B1_assistant_request_rejects_oversized_document_list() -> None:
         AssistantRunRequest(job_key="source:job", requested_documents=["cv"] * 51)
 
 
-@given(st.one_of(st.integers(max_value=0), st.integers(min_value=201, max_value=1000)))
+@given(st.one_of(st.integers(max_value=-1), st.integers(min_value=201, max_value=1000)))
 def test_B1_search_limit_property_rejects_values_outside_contract(limit: int) -> None:
     with pytest.raises(ValidationError):
         SearchRequest(limit=limit)

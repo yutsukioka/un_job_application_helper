@@ -171,4 +171,45 @@ final class AtlasAPIClientTests: XCTestCase {
 
         XCTAssertEqual(message, "The request timed out.")
     }
+
+    func testSearchPagesLoadMoreAndOfflineSnapshotWithinServerBound() async throws {
+        for requested in [400, 10_000] {
+            var calls: [AtlasSearchRequest] = []
+            let response = try await AtlasAPIClient.collectSearchPages(
+                AtlasSearchRequest(text: "climate", limit: requested)
+            ) { page in
+                calls.append(page)
+                let end = min(page.offset + page.limit, 450)
+                let rows = (page.offset..<end).map { index in
+                    JobSearchResult(jobKey: "job-\(index)", title: "Role", organization: "UN",
+                                    sourceID: "source", dutyStation: "Nairobi", gradeCode: "P3",
+                                    contractLabel: "Staff", workModality: "Onsite", closingDate: nil,
+                                    needsReview: false, locationConfidence: nil, gradeConfidence: nil,
+                                    score: nil, scoreReasons: [], matchSummary: "", description: "")
+                }
+                return AtlasSearchResponse(total: 450, limit: page.limit, offset: page.offset,
+                                           results: rows, facets: page.includeFacets ? ["org": ["UN": 450]] : [:],
+                                           facetLabels: [:], unclassifiedCount: 0)
+            }
+            XCTAssertEqual(response.results.count, min(requested, 450))
+            XCTAssertEqual(Set(response.results.map(\.jobKey)).count, response.results.count)
+            XCTAssertEqual(response.facets["org"]?["UN"], 450)
+            XCTAssertEqual(calls.map(\.offset), requested == 400 ? [0, 200] : [0, 200, 400])
+            XCTAssertTrue(calls.allSatisfy { $0.limit <= 200 && $0.text == "climate" })
+            XCTAssertTrue(calls.dropFirst().allSatisfy { !$0.includeFacets })
+        }
+    }
+
+    func testFacetOnlySearchUsesOneZeroLimitRequest() async throws {
+        var calls = 0
+        let response = try await AtlasAPIClient.collectSearchPages(AtlasSearchRequest(limit: 0)) { page in
+            calls += 1
+            XCTAssertEqual(page.limit, 0)
+            return AtlasSearchResponse(total: 500, limit: 0, offset: 0, results: [],
+                                       facets: ["org": ["UN": 500]], facetLabels: [:], unclassifiedCount: 0)
+        }
+        XCTAssertEqual(calls, 1)
+        XCTAssertTrue(response.results.isEmpty)
+        XCTAssertEqual(response.total, 500)
+    }
 }

@@ -10,9 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 SQLITE_HEADER_MAGIC = b"SQLite format 3\x00"
-DEFAULT_MAX_BUNDLE_BYTES = int(
-    os.environ.get("JOBAGG_BUNDLE_MAX_BYTES", str(256 * 1024 * 1024))
-)
+DEFAULT_MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,10 +27,15 @@ class BundleVerifyResult:
 def verify_bundle_path(
     path: str | Path,
     *,
-    max_bytes: int = DEFAULT_MAX_BUNDLE_BYTES,
+    max_bytes: int | None = None,
 ) -> BundleVerifyResult:
     root = Path(path)
     errors: list[str] = []
+    if max_bytes is None:
+        try:
+            max_bytes = int(os.environ.get("JOBAGG_BUNDLE_MAX_BYTES", str(DEFAULT_MAX_BUNDLE_BYTES)))
+        except ValueError:
+            return BundleVerifyResult((), 0, ("JOBAGG_BUNDLE_MAX_BYTES must be a positive integer",))
     if max_bytes <= 0:
         return BundleVerifyResult((), 0, ("max_bytes must be positive",))
 

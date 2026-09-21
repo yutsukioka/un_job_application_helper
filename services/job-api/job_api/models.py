@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from jobagg.filters.saved_searches import validate_saved_search_name
+from jobagg.filters.saved_searches import MAX_SAVED_SEARCH_NAME_LENGTH, validate_saved_search_name
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -28,7 +28,7 @@ FilterList = conlist(ShortText, max_length=100)
 ResultList = conlist(dict[str, Any], max_length=200)
 ArtifactList = conlist(PathText, max_length=100)
 DocumentList = conlist(ShortText, max_length=50)
-LimitInt = conint(gt=0, le=200)
+LimitInt = conint(ge=0, le=200)
 OffsetInt = conint(ge=0, le=100_000)
 
 
@@ -95,7 +95,7 @@ class SearchResponse(BaseModel):
 
 
 class SavedSearchModel(BaseModel):
-    name: ShortText
+    name: constr(strip_whitespace=True, max_length=MAX_SAVED_SEARCH_NAME_LENGTH)
     request: SearchRequest
     summary: LongText = ""
     created_at: datetime | None = None

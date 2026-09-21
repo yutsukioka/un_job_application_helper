@@ -117,3 +117,12 @@ bearer-token source, and `JOB_API_STRATEGY_ROOT`. The `job-api` entry point dele
 to the validated launcher. New saved-search names are validated, while existing
 stored identities remain available through exact lookup, execution, ordinary
 deletion, and conditional deletion.
+
+Search accepts `limit: 0` for facet-only requests and at most 200 rows per
+response. The Apple client pages larger Load More and offline snapshot requests
+using `offset`, preserving the first page's facets. Saved searches store a
+bounded initial page size. Job keys are bounded to 4096 characters to support
+URL-derived identities; attachment IDs are bounded to 200 characters. Public
+inventory evidence exposes typed verification facts and capture hashes only.
+URL-trust labels compare hostnames only and are advisory, not scheme/port or
+transport-security attestations.

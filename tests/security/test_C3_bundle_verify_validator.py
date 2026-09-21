@@ -56,3 +56,12 @@ def test_C3_bundle_verify_accepts_minimal_valid_bundle(tmp_path: Path, capsys) -
 
     captured = capsys.readouterr()
     assert "ok" in captured.out.lower()
+
+
+def test_bundle_limit_environment_is_validated_at_call_time(tmp_path, monkeypatch):
+    from jobagg.pipelines.bundle_verify import verify_bundle_path
+    monkeypatch.setenv("JOBAGG_BUNDLE_MAX_BYTES", "invalid")
+    result = verify_bundle_path(tmp_path)
+    assert not result.ok and "positive integer" in result.errors[0]
+    monkeypatch.setenv("JOBAGG_BUNDLE_MAX_BYTES", "0")
+    assert verify_bundle_path(tmp_path).errors == ("max_bytes must be positive",)

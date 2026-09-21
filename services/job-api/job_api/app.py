@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote, urlsplit
 
+from fastapi import Path as PathParameter
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import (
     http_exception_handler,
@@ -196,24 +197,27 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return SearchResponse(**payload)
 
     @app.get("/api/job-attachment")
-    def job_attachment(job_key: str, attachment_id: str):
+    def job_attachment(
+        job_key: str = Query(min_length=1, max_length=4096),
+        attachment_id: str = Query(min_length=1, max_length=200),
+    ):
         _require_db(settings.db_path)
         return download_job_attachment(settings.db_path, job_key, attachment_id)
 
     @app.get("/api/job-detail")
-    def job_detail_query(job_key: str) -> dict[str, Any]:
+    def job_detail_query(job_key: str = Query(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/by-key")
-    def job_detail_by_key(job_key: str) -> dict[str, Any]:
+    def job_detail_by_key(job_key: str = Query(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/{job_key}")
-    def job_detail(job_key: str) -> dict[str, Any]:
+    def job_detail(job_key: str = PathParameter(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/jobs/path/{job_key:path}")
-    def job_detail_path(job_key: str) -> dict[str, Any]:
+    def job_detail_path(job_key: str = PathParameter(min_length=1, max_length=4096)) -> dict[str, Any]:
         return _job_detail_payload(settings.db_path, db(), job_key)
 
     @app.get("/api/facets")
@@ -548,7 +552,7 @@ def _job_detail_payload(
         if decoded_key != job_key:
             job = database.get_job(decoded_key)
     if job is None:
-        raise HTTPException(status_code=404, detail=f"Unknown job_key: {job_key}")
+        raise HTTPException(status_code=404, detail="Unknown job_key")
     job_key = str(job["job_key"])
     job["locations"] = list(database.iter_vacancy_locations(job_key))
     job["classification"] = _job_classification(db_path, job_key)

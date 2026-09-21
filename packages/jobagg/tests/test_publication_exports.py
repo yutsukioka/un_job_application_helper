@@ -294,8 +294,8 @@ def test_json_starts_writing_before_fetching_next_row(tmp_path):
 
     class Rows:
         def iter_jobs_with_classification(self, **kwargs):
-            yield {"body": "x" * 100_000}
-            assert target.stat().st_size > 0
+            yield {"body": "first"}
+            assert target.read_text() == '[\n  {\n    "body": "first"\n  }'
             yield {"body": "next"}
 
     export_jobs(Rows(), output_path=target)
