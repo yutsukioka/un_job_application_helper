@@ -20,7 +20,9 @@ from jobagg.normalize import build_job, clean_text
 from jobagg.utils import as_bool as _as_bool
 from jobagg.utils import as_int as _as_int
 from jobagg.utils import clean_html
-from jobagg.vacancy_outcomes import DetailIdentityMismatch, VacancyUnavailable, unavailable_template
+from jobagg.vacancy_outcomes import (
+    DetailIdentityMismatch, IncompleteDetailResponse, VacancyUnavailable, unavailable_template,
+)
 
 _ANCHOR_RE = re.compile(
     r"<a[^>]+href=[\"'](?P<href>[^\"']+)[\"'][^>]*>(?P<title>.*?)</a>",
@@ -342,10 +344,15 @@ class TaleoAdapter(JobAdapter):
         html_text = self.fetch_text(str(detail_url))
         if unavailable_template(self.source.id, str(expected), str(detail_url), str(detail_url), html_text):
             raise VacancyUnavailable("Taleo active template explicitly reports unavailable requisition")
-        job = self.parse_detail_html(html_text, str(detail_url))
-        returned = self._parse_taleo_detail_payload(html_text).get("external_id")
-        if (locale and not returned) or (returned and expected and str(returned) != str(expected)):
+        parsed = self._parse_taleo_detail_payload(html_text)
+        returned = parsed.get("external_id")
+        if not returned:
+            raise IncompleteDetailResponse("Taleo returned no native requisition identity")
+        if not expected or str(returned) != str(expected):
             raise DetailIdentityMismatch("Taleo returned requisition identity differs from listing")
+        if not parsed.get("title") or not parsed.get("description"):
+            raise IncompleteDetailResponse("Taleo returned no bound vacancy title/body")
+        job = self.parse_detail_html(html_text, str(detail_url))
         job.raw.update(detail_html=html_text, _taleo_listing=copy.deepcopy(item))
         for key in ("_taleo_posting_locale", "_taleo_available_locales", "_taleo_locale_listings", "_taleo_language_inventory", "_taleo_original_urls"):
             if key in item:

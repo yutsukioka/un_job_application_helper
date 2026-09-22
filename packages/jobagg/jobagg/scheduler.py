@@ -1230,6 +1230,7 @@ def _source_health_dry_run_row(source: OrganizationSource, *, output_dir: Path) 
         "detail_succeeded": latest.get("detail_succeeded", 0),
         "detail_failed": latest.get("detail_failed", 0),
         "detail_skipped": latest.get("detail_skipped", 0),
+        "detail_unavailable": latest.get("detail_unavailable", 0),
         "detail_backlog_counts": sidecar["detail_backlog_counts"],
         "circuit_breakers": sidecar["circuit_breakers"],
         "cooldown_until": sidecar["cooldown_until"],
@@ -1246,11 +1247,7 @@ def _latest_source_diagnostics(output_dir: Path, slug: str, source_id: str) -> d
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
-                SELECT sr.fetched, sr.missing, sr.closed, sr.errors_json,
-                       d.run_classification, d.publishability_classification,
-                       d.health_status, d.pagination_complete, d.empty_reason,
-                       d.missing_transition_allowed, d.detail_attempted,
-                       d.detail_succeeded, d.detail_failed, d.detail_skipped
+                SELECT sr.fetched, sr.missing, sr.closed, sr.errors_json, d.*
                 FROM source_runs sr
                 LEFT JOIN source_run_diagnostics d ON d.source_run_id = sr.id
                 WHERE sr.source_id = ?
@@ -1279,6 +1276,7 @@ def _latest_source_diagnostics(output_dir: Path, slug: str, source_id: str) -> d
         "detail_succeeded": int(row["detail_succeeded"] or 0),
         "detail_failed": int(row["detail_failed"] or 0),
         "detail_skipped": int(row["detail_skipped"] or 0),
+        "detail_unavailable": int(row["detail_unavailable"] or 0) if "detail_unavailable" in row.keys() else 0,
         "last_error_summary": _last_error_summary(errors, None),
     }
 
@@ -1426,6 +1424,7 @@ def _write_sync_bundles_health_report(
                 "detail_succeeded": diagnostics.detail_succeeded if diagnostics else 0,
                 "detail_failed": diagnostics.detail_failed if diagnostics else 0,
                 "detail_skipped": diagnostics.detail_skipped if diagnostics else 0,
+                "detail_unavailable": diagnostics.detail_unavailable if diagnostics else 0,
                 "detail_pending": sidecar["detail_backlog_counts"].get("pending", 0),
                 "detail_backlog_counts": sidecar["detail_backlog_counts"],
                 "pagination_complete": diagnostics.pagination_complete if diagnostics else None,
@@ -1637,6 +1636,7 @@ def _merge_consolidated_status_into_health_rows(source_rows: list[dict], db_path
                 "detail_succeeded": 0,
                 "detail_failed": 0,
                 "detail_skipped": 0,
+                "detail_unavailable": 0,
                 "detail_pending": 0,
                 "detail_backlog_counts": {},
                 "pagination_complete": _sqlite_bool(status.get("pagination_complete")),

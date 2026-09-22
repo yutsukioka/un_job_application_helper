@@ -227,16 +227,25 @@ def test_one_detail_failure_does_not_lose_peer_results_or_claim_history(tmp_path
 
 
 def test_deadline_stops_new_claims_and_joins_already_running_tasks(tmp_path, monkeypatch):
-    worker, _, _ = make_worker(tmp_path, monkeypatch, count=4, max_tasks=8, delay=0.3)
-    worker.max_seconds = 0.25
+    worker, _, _ = make_worker(tmp_path, monkeypatch, count=4, max_tasks=8, delay=3)
+    worker.max_seconds = 10
     report = worker.tick(execute=True)
     assert report["tick_stop_reason"] == "work_deadline"
     assert 1 <= report["concurrency"]["attempted_tasks"] <= 4
-    assert report["concurrency"]["control_cycle_complete"] is False
+    # Admission stopped early enough to finish and report inside the deadline.
+    assert report["concurrency"]["control_cycle_complete"] is True
     with worker.db.connect() as conn:
         assert conn.execute("SELECT count(*) FROM remediation_tasks WHERE status='inflight'").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM remediation_attempts WHERE kind='detail'").fetchone()[0] == 0
     assert all(item["finished_at"] <= report["generated_at"] for item in report["concurrency"]["task_intervals"])
+
+
+def test_subsecond_budget_does_not_consume_task_attempts(tmp_path, monkeypatch):
+    worker, calls, _ = make_worker(tmp_path, monkeypatch)
+    worker.max_seconds = 0.25
+    report = worker.tick(execute=True)
+    assert report["tick_stop_reason"] == "work_deadline"
+    assert report["concurrency"]["attempted_tasks"] == 0 and not calls
 
 
 def test_two_sources_share_one_immutable_blob_without_partial_write_race(tmp_path, monkeypatch):

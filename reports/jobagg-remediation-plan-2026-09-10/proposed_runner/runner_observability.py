@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -124,6 +125,9 @@ def storage_check(config):
     reserve = guard.get("min_free_bytes", 0)
     free = os.statvfs(mount)
     available = free.f_bavail * free.f_frsize
+    storage_health = record_storage_health(
+        config, available, reserve, persist=config.get("_record_storage_health", False)
+    )
     if available < reserve:
         raise ValueError("Configured storage free space is below static reserve")
     # Nonexistent mounted volume never gets created and no data path falls back.
@@ -136,7 +140,51 @@ def storage_check(config):
         "available_bytes": available,
         "min_free_bytes": reserve,
         "reserve_is_estimate_guarantee": False,
+        "early_warning": storage_health,
     }
+
+
+def record_storage_health(config, available, reserve, *, persist=True):
+    """Persistent local alert transitions before the hard reserve is exhausted.
+
+    Runway uses observed volume consumption, not an invented jobagg-only rate.
+    Measurements and clear events remain on the independent internal volume.
+    """
+    guard = config["storage_guard"]
+    warning = guard.get("warning_free_bytes", max(3 * reserve, 64 * 1024**3))
+    headroom = guard.get("publication_headroom_bytes", 8 * 1024**3)
+    runway_limit = guard.get("warning_runway_seconds", 48 * 3600)
+    for value in (warning, headroom, runway_limit):
+        if type(value) is not int or value < 0:
+            raise ValueError("Storage warning limits must be nonnegative integers")
+    directory = config["attempt_state_dir"]
+    if persist:
+        directory.mkdir(parents=True, exist_ok=True)
+    owner = (directory / "storage-health.lock").open("a+") if persist else nullcontext()
+    with owner as lock:
+        if persist:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        path = directory / "storage-health.json"
+        prior = json.loads(path.read_text()) if path.exists() else {}
+        now = datetime.now(timezone.utc).timestamp()
+        samples = [sample for sample in prior.get("samples", []) if 0 < now - sample["at"] <= 86400]
+        rate = None
+        if samples and now - samples[0]["at"] >= 60:
+            rate = max(0, (samples[0]["available_bytes"] - available) / (now - samples[0]["at"]))
+        runway = max(0, available - reserve - headroom) / rate if rate else None
+        status = ("critical" if available < reserve + headroom else
+                  "warning" if available < warning or (runway is not None and runway < runway_limit) else "ok")
+        events = prior.get("transitions", [])
+        if status != prior.get("status"):
+            events = [*events, {"at": now, "from": prior.get("status"), "to": status}][-100:]
+        result = {"status": status, "observed_at": utc(), "available_bytes": available,
+                  "reserve_bytes": reserve, "publication_headroom_bytes": headroom,
+                  "volume_consumption_bytes_per_second": rate, "estimated_runway_seconds": runway,
+                  "estimate_basis": "observed_volume_free_space; includes other writers",
+                  "transitions": events}
+        if persist:
+            write(path, {**result, "samples": [*samples, {"at": now, "available_bytes": available}][-96:]})
+        return result
 
 
 def start_attempt(config_path, raw):

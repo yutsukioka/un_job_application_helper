@@ -18,10 +18,15 @@ class DetailIdentityMismatch(ValueError):
     """A returned public identity is absent or disagrees with the queued job."""
 
 
+class IncompleteDetailResponse(ValueError):
+    """Successful transport returned no identifiable vacancy; retry is bounded."""
+
+
 class VacancyUnavailable(ValueError):
     """A source's explicit unavailable template; worker must bind its capture."""
 
 
+EXPLICIT_VACANCY_UNAVAILABLE = "explicit_vacancy_unavailable"
 UNAVAILABLE_STATUSES = frozenset({"unavailable_pending_inventory", "listing_detail_conflict"})
 
 
@@ -45,7 +50,8 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
     if not isinstance(text, str) or not external_id:
         return None
     request, response = urlsplit(request_url), urlsplit(response_url)
-    host = {"unicef_pageup": "jobs.unicef.org", "fao_taleo": "jobs.fao.org"}.get(source_id)
+    host = {"unicef_pageup": "jobs.unicef.org", "fao_taleo": "jobs.fao.org",
+            "opcw_talentsoft_candidatespace": "jobs.opcw.org"}.get(source_id)
     if not host or any(parts.scheme != "https" or parts.netloc != host
                        or parts.username or parts.password or parts.fragment
                        for parts in (request, response)):
@@ -53,6 +59,14 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
     if re.search(r"awswaf|cf-chl-|verify (?:you are human|that you're not a robot)|"
                  r"checking your browser|<title[^>]*>\s*(?:just a moment|access denied)", text, re.I):
         return None
+    if source_id == "opcw_talentsoft_candidatespace":
+        match = re.fullmatch(r"/job/job-[^/]+_(\d+)\.aspx", request.path)
+        panel = re.search(r'<div\b[^>]*id=[\"\'][^\"\']*defaultValidationSummary[\"\'][^>]*>(.*?)</div>', text, re.I | re.S)
+        if (not match or match[1] != str(external_id) or request != response
+                or request.query or not panel
+                or not re.search(r'<li>\s*This vacancy does not exist/no longer exists on this site\s*</li>', panel[1])):
+            return None
+        return {"category": EXPLICIT_VACANCY_UNAVAILABLE, "detector": "opcw_bound_unavailable_panel_v1"}
     if source_id == "unicef_pageup":
         match = re.fullmatch(r"/en-us/job/(\d+)(?:/[^?#]*)?", request.path)
         if (not match or match[1] != str(external_id)
@@ -60,7 +74,7 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
                 or parse_qs(response.query).get("jobnotfound") != ["true"]
                 or "job-externaljobno" in text.casefold()):
             return None
-        return {"category": "explicit_vacancy_unavailable", "detector": "unicef_jobnotfound_redirect_v1"}
+        return {"category": EXPLICIT_VACANCY_UNAVAILABLE, "detector": "unicef_jobnotfound_redirect_v1"}
     if (request.path != "/careersection/fao_external/jobdetail.ftl"
             or parse_qs(request.query).get("job") != [str(external_id)]
             or response.path not in {request.path, "/careersection/fao_external/unavailablerequisition.ftl"}
@@ -75,7 +89,7 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
             or urlsplit(parsed.form_actions[0]).path != "unavailablerequisition.ftl"
             or re.search(r"api\.fillList\(\s*['\"]requisitionDescriptionInterface['\"]", text)):
         return None
-    return {"category": "explicit_vacancy_unavailable", "detector": "fao_active_unavailable_template_v1"}
+    return {"category": EXPLICIT_VACANCY_UNAVAILABLE, "detector": "fao_active_unavailable_template_v1"}
 
 
 def classify_unavailable(source_id, external_id, metadata, body, *, redirects=()):

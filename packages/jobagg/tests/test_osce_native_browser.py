@@ -118,7 +118,8 @@ def native(tmp_path, monkeypatch):
     old.capture.default_header_origin = old.capture.origin(url)
     renderer = OSCENativeBrowser(client, old.capture, {
         'url_patterns': ['^' + re.escape(url) + '/.*$'], 'ready_selector': 'h1',
-        'detail_ready_selector': 'h1', 'timeout_seconds': 15, 'load_stylesheets': False,
+        # Six-hop inventories need pacing plus a useful final request allowance.
+        'detail_ready_selector': 'h1', 'timeout_seconds': 60, 'load_stylesheets': False,
         'transport': TRANSPORT,
     })
     yield renderer, url, replies, calls

@@ -374,6 +374,8 @@ def test_source_run_diagnostics_are_persisted_with_source_run(tmp_path):
             "detail_succeeded": 0,
             "detail_failed": 0,
             "detail_skipped": 0,
+            "detail_unavailable": 0,
+            "unavailable_vacancies": [],
             "empty_reason": "verified_total_zero",
             "zero_fetched_evidence": {"total": 0},
             "observed_agency_counts": {},

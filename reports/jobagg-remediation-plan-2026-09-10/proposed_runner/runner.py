@@ -471,8 +471,9 @@ def resolve(base, value):
     return Path(os.path.abspath(base / value))
 
 
-def load_config(path):
+def load_config(path, *, record_storage_health=False):
     config = read_json(path)
+    config["_record_storage_health"] = record_storage_health
     config["_config_sha256"] = digest(path)
     config["_config_path"] = path
     require(config.get("schema_version") == 1, "unsupported configuration schema")
@@ -598,6 +599,11 @@ def load_config(path):
             and guard.get("min_free_bytes", 0) >= 0,
             "Invalid storage min_free_bytes",
         )
+        for key in ("warning_free_bytes", "publication_headroom_bytes", "warning_runway_seconds"):
+            require(
+                type(guard.get(key, 0)) is int and guard.get(key, 0) >= 0,
+                "Invalid storage " + key,
+            )
     OBSERVABILITY.storage_check(config)
     manifest_bytes = config["source_manifest_path"].read_bytes()
     manifest = json.loads(manifest_bytes)
@@ -1852,7 +1858,7 @@ def main(argv=None):
             os.umask(0o077)
             raw = read_json(config_path)
             attempt, intent = OBSERVABILITY.start_attempt(config_path, raw)
-        config, expected = load_config(config_path)
+        config, expected = load_config(config_path, record_storage_health=args.execute)
         if not args.execute:
             result = {
                 "status": "dry_run",

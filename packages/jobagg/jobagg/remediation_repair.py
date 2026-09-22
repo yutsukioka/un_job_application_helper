@@ -307,7 +307,51 @@ def transient_failure(workspace, task):
     return [reference(path)], meta["url"]
 
 
+def classify_budget_listing(conn, workspace, shared_lock, task):
+    """Recover the old CSOD wrapper only from its typed, pre-dispatch receipts."""
+    if (task["source_id"] != "worldbank_csod" or task["kind"] != "listing"
+            or task["status"] != "blocked" or task["external_id"] != ""):
+        return None
+    _, paths = failure_artifacts(workspace, task)
+    if not paths:
+        return None
+    refs, urls, failures = [], [], 0
+    for path in paths:
+        meta = json.loads(path.read_text())
+        if (meta.get("phase") != {"kind": "listing", "job_id": None}
+                or not meta.get("started_at") or not meta.get("finished_at")):
+            return None
+        if meta.get("state") == "failed":
+            if (meta.get("error_type") != "HostIneligible"
+                    or meta.get("error") != "HostIneligible: Bounded worker deadline reached"
+                    or meta.get("status_code") is not None or meta.get("body_captured")
+                    or meta.get("effective_timeout_seconds") is not None):
+                return None
+            failures += 1
+        elif meta.get("state") != "response_captured" or meta.get("status_code") != 200:
+            return None
+        urls.append(meta["url"])
+        refs.append(reference(path))
+    if not failures or conn.execute(
+        "SELECT 1 FROM source_circuit_breakers WHERE source_id=? AND state IN ('open','half_open')",
+        (task["source_id"],),
+    ).fetchone():
+        return None
+    attempt = conn.execute("SELECT * FROM remediation_attempts WHERE attempt_id=?", (task["claim"],)).fetchone()
+    if (not attempt or attempt["task_id"] != task["task_id"] or attempt["status"] != "blocked"
+            or attempt["kind"] != "listing" or attempt["source_id"] != task["source_id"]
+            or json.loads(attempt["evidence"]) != json.loads(task["receipt"])):
+        return None
+    due, policy_refs = policy_state(workspace, shared_lock, task["source_id"], urls)
+    return {"category": "captured_legacy_listing_budget_deferral", "task_before": task,
+            "task_before_sha256": digest_value(task), "new_payload": task["payload"],
+            "eligible_at_floor": max(task["eligible_at"], due), "job_before_sha256": None,
+            "attempt_before": dict(attempt), "listing_attempt": None, "evidence": refs + policy_refs}
+
+
 def classify(conn, workspace, shared_lock, task):
+    if task["kind"] == "listing":
+        return classify_budget_listing(conn, workspace, shared_lock, task)
     payload, fixed, listing, refs, listing_attempt = original_listing(conn, workspace, task)
     current = conn.execute(
         "SELECT * FROM jobs WHERE job_key=?", (listing.identity_key(),)
@@ -394,7 +438,7 @@ def prepare(workspace, shared_lock):
     candidates, held = [], []
     with connection(workspace) as conn:
         for row in conn.execute(
-            "SELECT * FROM remediation_tasks WHERE kind='detail' AND status IN ('pending','blocked') ORDER BY task_id"
+            "SELECT * FROM remediation_tasks WHERE kind IN ('detail','listing') AND status IN ('pending','blocked') ORDER BY task_id"
         ):
             task = dict(row)
             try:

@@ -226,3 +226,39 @@ def test_transient_failure_cannot_bless_unrelated_payload_mutation(setup):
             (dump(payload), task["task_id"]),
         )
     assert repair.prepare(worker.workspace, worker.shared_lock)["candidates"] == []
+
+
+def test_legacy_listing_budget_repair_requires_typed_captures_and_preserves_holds(setup, monkeypatch):
+    worker, _, _, _ = setup
+    worker.initialize()
+    source, token = 'worldbank_csod', 'old-budget-attempt'
+    target = worker.workspace / 'captures' / token / 'http'
+    target.mkdir(parents=True)
+    metadata = {'phase': {'kind': 'listing', 'job_id': None}, 'state': 'failed',
+                'error_type': 'HostIneligible', 'error': 'HostIneligible: Bounded worker deadline reached',
+                'url': 'https://us.api.csod.com/rec-job-search/external/jobs',
+                'started_at': '2026-09-17T10:20:41Z', 'finished_at': '2026-09-17T10:20:43Z'}
+    path = target / '00001.json'; path.write_text(json.dumps(metadata))
+    receipt = json.dumps({'capture_directory': str(target.parent), 'error': 'old CSOD wrapper'})
+    with worker.db.connection_scope() as conn:
+        key = worker.enqueue(conn, source, 'listing', '', {})
+        conn.execute("UPDATE remediation_tasks SET status='blocked',claim=?,receipt=? WHERE task_id=?", (token, receipt, key))
+        conn.execute('INSERT INTO remediation_attempts VALUES(?,?,?,?,?,?,?,?)',
+                     (token, key, source, 'listing', 1, 2, 'blocked', receipt))
+        task = dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (key,)).fetchone())
+        monkeypatch.setattr(repair, 'policy_state', lambda *args: (123, []))
+        candidate = repair.classify_budget_listing(conn, worker.workspace, worker.shared_lock, task)
+        assert candidate['category'] == 'captured_legacy_listing_budget_deferral'
+        assert candidate['new_payload'] == task['payload'] and candidate['eligible_at_floor'] == max(task['eligible_at'], 123)
+        assert candidate['evidence'] == [repair.reference(path)]
+        metadata.update(error_type='HTTPError', status_code=403)
+        path.write_text(json.dumps(metadata))
+        assert repair.classify_budget_listing(conn, worker.workspace, worker.shared_lock, task) is None
+        metadata.update(error_type='HostIneligible', status_code=None)
+        path.write_text(json.dumps(metadata))
+        def held(*args):
+            raise ValueError('Host policy remains stopped')
+        monkeypatch.setattr(repair, 'policy_state', held)
+        with pytest.raises(ValueError, match='Host policy remains stopped'):
+            repair.classify_budget_listing(conn, worker.workspace, worker.shared_lock, task)
+        assert conn.execute('SELECT status FROM remediation_tasks WHERE task_id=?', (key,)).fetchone()[0] == 'blocked'

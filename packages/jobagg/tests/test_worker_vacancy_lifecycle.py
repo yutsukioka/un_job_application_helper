@@ -65,13 +65,22 @@ def test_unavailability_is_not_detail_success_or_global_integrity_pressure(case)
     assert len(calls) == 3
 
 
-def test_generic_portal_is_still_an_integrity_failure(case):
+def test_generic_portal_has_bounded_retries_and_never_counts_as_accepted(case, monkeypatch):
     worker, replies, calls = case
     replies[DETAIL] = b"<title>Job portal</title><p>This job is unavailable.</p>"
     report = worker.tick(execute=True)
-    assert detail_task(worker)["status"] == "blocked"
-    assert report["concurrency"]["integrity_errors"] == 1
+    assert detail_task(worker)["status"] == "pending"
+    assert report["concurrency"]["accepted_progress"] == 1  # Listing only; detail never accepted.
     assert report["concurrency"]["vacancies_unavailable"] == 0
+    for expected in ("pending", "blocked"):
+        due = detail_task(worker)["eligible_at"]
+        monkeypatch.setattr(time, "time", lambda: due + 1)
+        worker.tick(execute=True)
+        assert detail_task(worker)["status"] == expected
+    assert detail_task(worker)["attempts"] == 3
+    before = len(calls)
+    worker.tick(execute=True)
+    assert len(calls) == before
 
 
 def test_incomplete_census_cannot_retire_but_fresh_complete_absence_can(case):
@@ -139,3 +148,22 @@ def test_tampered_unavailable_evidence_cannot_remove_task_from_backlog(case):
     report = worker.tick(execute=True)
     assert detail_task(worker)["status"] == "unavailable_pending_inventory"
     assert report["concurrency"]["integrity_errors"] >= 1
+
+
+def test_budget_deferral_does_not_reset_incomplete_response_limit(case, monkeypatch):
+    worker, replies, _ = case
+    replies[DETAIL] = b'<title>Job Search</title><nav>Sign In Home</nav>'
+    worker.tick(execute=True)
+    assert json.loads(detail_task(worker)['receipt'])['incomplete_response_count'] == 1
+    for expected in ('pending', 'blocked'):
+        task = detail_task(worker)
+        now = task['eligible_at'] + 1
+        monkeypatch.setattr(time, 'time', lambda: now)
+        token = worker.claim(task)
+        worker._perform_claimed(task, now - 1, token)
+        deferred = detail_task(worker)
+        assert json.loads(deferred['receipt'])['incomplete_response_count'] == task['attempts'] // 2 + 1
+        now = deferred['eligible_at'] + 1
+        worker.tick(execute=True)
+        assert detail_task(worker)['status'] == expected
+    assert json.loads(detail_task(worker)['receipt'])['incomplete_response_count'] == 3

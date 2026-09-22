@@ -77,7 +77,7 @@ def test_locale_and_identity_fail_before_any_request(change):
 def test_valid_locale_request_cannot_promote_portal_fallback_to_detail():
     obj = adapter()
     obj.fetch_text = lambda url: '<title>Job portal</title><p>This job is unavailable.</p>'
-    with pytest.raises(ValueError, match='identity differs'):
+    with pytest.raises(ValueError, match='native requisition identity'):
         obj.fetch_detail_for_listing_item(listing())
 
 

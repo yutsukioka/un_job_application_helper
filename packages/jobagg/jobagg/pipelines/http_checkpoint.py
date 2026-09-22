@@ -223,7 +223,7 @@ class DurableCapture:
             self.client.default_headers = defaults
 
     @contextmanager
-    def host_lock(self, host):
+    def host_lock(self, host, *, request_allowance=0, probe_allowance=0):
         lock_path = self.lock_root / (
             "host-" + hashlib.sha256(host.encode()).hexdigest()[:24] + ".lock"
         )
@@ -240,6 +240,10 @@ class DurableCapture:
                     category="cooldown",
                     eligible_at=eligibility["eligible_at"],
                 )
+            if state.get("recovery"):
+                # A scarce recovery probe gets the full configured allowance;
+                # a clipped request must not strand its half-open lease.
+                request_allowance = max(request_allowance, probe_allowance)
             owner.seek(0)
             previous = float(owner.read().strip() or "0")
             if not math.isfinite(previous) or previous < 0:
@@ -248,8 +252,11 @@ class DurableCapture:
                 time.time() - previous
             )
             if pause > 0:
-                self._check_deadline(pause)
+                self._check_deadline(pause + request_allowance)
                 time.sleep(pause)
+            # Check after pacing, before charging a recovery probe. A local
+            # batch boundary must not consume the host's bounded probe quota.
+            self._check_deadline(request_allowance)
             state = begin_probe(state, time.time(), self.probe_owner)
             # Fsync the half-open claim before any request; a crash keeps the
             # probe charged and enforces its lease plus abandonment cooldown.
@@ -285,14 +292,7 @@ class DurableCapture:
     def request(self, url, *, _depth=0, _is_robots=False, _native_dispatch=None, **kwargs):
         self._check_deadline()
         configured_timeout = float(kwargs.get("timeout_seconds") or self.client.timeout_seconds)
-        if self.deadline_at is not None:
-            kwargs["timeout_seconds"] = max(
-                0.1,
-                min(
-                    float(kwargs.get("timeout_seconds") or self.client.timeout_seconds),
-                    self.deadline_at - time.time(),
-                ),
-            )
+        request_allowance = min(configured_timeout, 5.0) + 1.0
         host = (urlsplit(url).hostname or "").lower()
         if self.default_header_origin is None:
             self.default_header_origin = self.origin(url)
@@ -350,15 +350,18 @@ class DurableCapture:
                 pass
         redirect = None
         try:
-            with self.host_lock(host) as (state_path, state):
+            with self.host_lock(host, request_allowance=request_allowance,
+                                probe_allowance=configured_timeout + 2.0) as (state_path, state):
                 stage = "local_pre_dispatch"
                 try:
                     self.last_host = host
-                    self._check_deadline()
+                    self._check_deadline(request_allowance)
+                    kwargs["timeout_seconds"] = configured_timeout
                     if self.deadline_at is not None:
                         kwargs["timeout_seconds"] = min(
-                            float(kwargs["timeout_seconds"]), self.deadline_at - time.time()
+                            configured_timeout, self.deadline_at - time.time() - 1.0
                         )
+                    record["deadline_limited"] = kwargs["timeout_seconds"] < configured_timeout
                     self.dispatched += 1
                     record["state"] = "dispatched_before_response"
                     record["effective_timeout_seconds"] = float(kwargs.get("timeout_seconds") or self.client.timeout_seconds)
@@ -367,16 +370,25 @@ class DurableCapture:
                     )
                     save(record_path, record)
                     stage = "transport"
-                    if _native_dispatch is not None:
-                        observer = getattr(self, "native_observer", None)
-                        response = (observer(url, _native_dispatch=_native_dispatch, **kwargs)
-                                    if observer else _native_dispatch(url, **kwargs))
-                    else:
-                        response = self.transport(url, **kwargs)
+                    # Measure both urllib and native dispatch here. Native
+                    # transports do not necessarily provide elapsed diagnostics.
+                    self.client.last_request_diagnostics = {}
+                    transport_started = time.monotonic()
+                    try:
+                        if _native_dispatch is not None:
+                            observer = getattr(self, "native_observer", None)
+                            response = (observer(url, _native_dispatch=_native_dispatch, **kwargs)
+                                        if observer else _native_dispatch(url, **kwargs))
+                        else:
+                            response = self.transport(url, **kwargs)
+                    finally:
+                        record["transport_elapsed_seconds"] = max(0.0, time.monotonic() - transport_started)
+                        diagnostics = getattr(self.client, "last_request_diagnostics", None)
+                        if diagnostics:
+                            record["transport_diagnostics"] = dict(diagnostics)
+                            if diagnostics.get("headers_received") and diagnostics.get("status_code") is not None:
+                                record["status_code"] = diagnostics["status_code"]
                     stage = "capture_persistence"
-                    diagnostics = getattr(self.client, "last_request_diagnostics", None)
-                    if diagnostics:
-                        record["transport_diagnostics"] = dict(diagnostics)
                     body = response.content or response.text.encode()
                     artifact = record_path.with_suffix(".body.gz")
                     with artifact.open("xb") as body_file:
@@ -457,12 +469,14 @@ class DurableCapture:
                     category = record.get("failure_category") or (
                         classify_failure(exc) if stage == "transport" or status is not None else "local_failure"
                     )
+                    if (stage == "transport" and status is None and record.get("deadline_limited")
+                            and record["transport_elapsed_seconds"] >= record["effective_timeout_seconds"]
+                            and any(isinstance(error, TimeoutError) for error in exception_chain(exc))):
+                        # Only expiration of the clipped allowance is a local
+                        # budget event. Early timeouts still charge host recovery.
+                        record.update(failure_category="local_budget", failure_stage=stage)
+                        raise HostIneligible("Batch deadline limited request timeout", category="budget") from exc
                     record.update(failure_category=category, failure_stage=stage)
-                    diagnostics = getattr(self.client, "last_request_diagnostics", None)
-                    if stage == "transport" and diagnostics:
-                        record["transport_diagnostics"] = dict(diagnostics)
-                        if diagnostics.get("headers_received") and diagnostics.get("status_code") is not None:
-                            record.setdefault("status_code", diagnostics["status_code"])
                     if category in {"transient_transport", "rate_limit"}:
                         state.update(transient_failure(state, time.time(), category, record_path, retry_floor(retry, time.time())))
                         state["reason"] = "HTTP transport failure: " + type(exc).__name__
@@ -471,6 +485,10 @@ class DurableCapture:
                                      reason="HTTP review hold: " + type(exc).__name__, evidence=str(record_path))
                     raise
         except Exception as exc:
+            if isinstance(exc, HostIneligible) and exc.category == "budget":
+                record.setdefault("failure_category", "local_budget")
+                record.setdefault("failure_stage", "local_pre_dispatch")
+                record.setdefault("body_captured", False)
             record.update(error_type=type(exc).__name__, error=safe_error(exc))
             raise
         finally:
