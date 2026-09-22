@@ -16,6 +16,16 @@ It does not establish that all organizations are currently healthy.
   caused by clipping the configured allowance remains a local budget event,
   rather than starting a host cooldown. Genuine transport failures still use
   the existing 30-minute-to-six-hour backoff, Retry-After and bounded probes.
+  The admission allowance is `min(configured_timeout, 5) + 1` seconds; the
+  effective transport timeout is `min(configured_timeout, remaining - 1)`.
+  Thus the admission allowance is six seconds for configured timeouts of five
+  seconds or more; using the full configured timeout needs that timeout plus
+  one second of remaining batch time. Recovery probes require the full
+  configured timeout plus two seconds before admission. Checkpoint timing
+  measures both standard HTTP and native browser dispatch: only a timeout
+  that consumes the clipped allowance becomes a local budget event. Early
+  timeouts still count toward recovery; observed status and diagnostics are
+  preserved, and known HTTP errors retain their status-based handling.
 - Typed budget errors remain retryable through exception wrappers. Successful
   completion clears the current task error; old attempt receipts stay immutable.
   Blocked/dead-letter tasks with a recorded retry fingerprint can re-enter only
@@ -28,6 +38,13 @@ It does not establish that all organizations are currently healthy.
   ten-minute retry floors; scheduler/policy limits can make the actual delay
   longer. A different returned ID remains an integrity failure. An OPCW-specific
   unavailable panel becomes an inventory-reconciliation outcome, not a job body.
+  Standard sync also records explicit unavailable outcomes from OPCW and Taleo,
+  preserving the listing and prior detail evidence. Requests still consume the
+  run allowance, but unavailable outcomes receive neither detail success nor
+  breaker success/failure credit. Persisted diagnostics and operator reports
+  expose `detail_unavailable` separately. Unchanged listings wait for inventory
+  reconciliation; a changed listing, reappearance or explicit refresh permits a
+  new detail observation. Older backlog schemas migrate atomically.
 - Inspira changes consisting only of U+200E left-to-right marks in otherwise
   identical LTR text pass a narrow shortening exception. Original bytes and
   hashes remain intact. Other Unicode controls, RTL text and substantive
@@ -38,6 +55,11 @@ It does not establish that all organizations are currently healthy.
   never an old OK value. Unconfigured legacy OK diagnostics expire after six
   hours. Sources without published jobs are included when the worker is wired.
   Fetch success does not certify coverage or publication completeness.
+  Effective listing/API hosts are persisted using the scheduler's resolver, and
+  document URLs are included when reporting host holds. The read-only reader
+  remains compatible with older databases lacking host metadata. Worker-wired
+  API responses preserve the three legacy diagnostic fields without inheriting
+  stale legacy health or timestamps for missing workers or sources.
 
 ## World Bank's historical budget block
 
@@ -69,7 +91,17 @@ Add `--execute` to apply the inspected scope. The command takes the **same owner
 lock used by the dispatcher/publisher**, requires a completed publication gate,
 excludes the current generation, and selects only old completed generations with
 matching plan hashes and verified export journals. Legacy generations lacking
-sufficient evidence are retained. The maximum file count bounds each invocation.
+sufficient evidence are retained. The maximum file count bounds originals
+selected for retirement, not the historical scan or its verification reads.
+
+Every archived object encountered before the candidate limit ends the scan is
+stream-verified against its receipt, once per unique content hash per invocation.
+A scan can decompress all historical unique blobs while holding the shared owner
+lock, so its duration grows with retained history. Schedule it accordingly;
+successful preview/apply verifies the entries encountered, not the whole store
+when the candidate limit stops the scan early. Truncated, malformed or changed
+gzip content fails with `retained_artifact_hash_changed` before any new originals
+are retired.
 
 Eligible prepared exports and verified export backups become gzip objects named
 by their original SHA-256 under `retained-blobs/`. Atomic tombstones preserve the

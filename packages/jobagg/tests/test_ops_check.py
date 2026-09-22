@@ -137,3 +137,37 @@ def _write_bundle(
             ),
         )
     )
+
+
+def test_ops_check_excludes_unavailable_outcomes_from_failure_ratio(tmp_path):
+    path = tmp_path / "outcomes_jobs.sqlite3"
+    _write_bundle(path, source_id="outcomes", fetched=10, health_status="ok", pagination_complete=True, errors=[])
+    db = JobDatabase(path)
+    with db.connect() as conn:
+        conn.execute("UPDATE source_run_diagnostics SET detail_attempted=10, detail_failed=1, detail_unavailable=9")
+    report = collect_ops_check(db_path=path)
+    check = report.checks[0]
+    assert check.detail_attempted == 10 and check.detail_unavailable == 9
+    assert check.severity == "FAIL"
+    assert "detail failure ratio is 100%" in check.findings
+    markdown = ops_check_to_markdown(report)
+    assert "1/1 failed" in markdown
+    assert "9 unavailable (10 attempts)" in markdown
+
+
+def test_ops_check_all_unavailable_is_neutral_and_legacy_columns_still_read(tmp_path):
+    path = tmp_path / "outcomes_jobs.sqlite3"
+    _write_bundle(path, source_id="outcomes", fetched=10, health_status="ok", pagination_complete=True, errors=[])
+    db = JobDatabase(path)
+    with db.connect() as conn:
+        conn.execute("UPDATE source_run_diagnostics SET detail_attempted=10, detail_unavailable=10")
+    report = collect_ops_check(db_path=path)
+    assert report.checks[0].severity == "PASS"
+    assert report.checks[0].detail_unavailable == 10
+    assert "10 unavailable (10 attempts)" in ops_check_to_markdown(report)
+    with db.connect() as conn:
+        conn.execute("ALTER TABLE source_run_diagnostics DROP COLUMN detail_unavailable")
+    legacy = collect_ops_check(db_path=path)
+    assert legacy.checks[0].detail_unavailable == 0
+    assert legacy.checks[0].detail_attempted == 10
+    assert legacy.checks[0].severity == "PASS"

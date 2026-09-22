@@ -1077,10 +1077,17 @@ def _source_summaries(db_path: Path, worker_db_path: Path | None = None) -> list
         source_id = row["source_id"]
         diagnostic = diagnostics.get(source_id, {})
         if worker_db_path is not None:
-            diagnostic = current.get(source_id, {
-                "health_status": "unavailable" if health_unavailable else "not_checked",
-                "health_basis": "deterministic_worker_queue", "coverage_status": "incomplete",
-            })
+            # Keep historical counters without attributing legacy health or its
+            # observation time to a missing/unavailable worker generation.
+            diagnostic = {
+                **{key: diagnostic.get(key) for key in (
+                    "detail_attempted", "detail_failed", "missing_transition_allowed",
+                )},
+                **current.get(source_id, {
+                    "health_status": "unavailable" if health_unavailable else "not_checked",
+                    "health_basis": "deterministic_worker_queue", "coverage_status": "incomplete",
+                }),
+            }
         elif diagnostic.get("health_status") in {"ok", "ok_empty"}:
             try:
                 observed = datetime.fromisoformat(diagnostic["observed_at"].replace("Z", "+00:00"))

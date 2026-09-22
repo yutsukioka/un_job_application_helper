@@ -1,5 +1,6 @@
 """Retention preserves exact rollback bytes and cannot touch active generations."""
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -79,8 +80,6 @@ def test_corrupt_archive_never_replaces_original_or_serves_wrong_bytes(export_ca
     expected = {k: candidate[k] for k in ("sha256", "size")}
     store = root.parent.parent / "retained-blobs"
     store.mkdir()
-    import gzip
-
     blob = store / (expected["sha256"] + ".gz")
     blob.write_bytes(gzip.compress(b"wrong"))
     with pytest.raises(ValueError, match="archive_object_changed"):
@@ -91,6 +90,60 @@ def test_corrupt_archive_never_replaces_original_or_serves_wrong_bytes(export_ca
     blob.write_bytes(gzip.compress(b"wrong"))
     with pytest.raises(ValueError, match="hash_changed"):
         exports._fingerprint(candidate["path"])
+
+
+@pytest.mark.parametrize("execute", [False, True])
+@pytest.mark.parametrize("corruption", ["truncated", "wrong_payload", "invalid_header", "invalid_deflate"])
+def test_archived_corruption_aborts_scan_without_changing_evidence(export_case, execute, corruption):
+    plan, item, target, old, root, gate, lock = complete_case(export_case)
+    candidate, remaining = retention.candidates(root.parent.parent, target.parent)
+    expected = {key: candidate[key] for key in ("sha256", "size")}
+    retention.archive(candidate["path"], expected)
+    blob = root.parent.parent / "retained-blobs" / (expected["sha256"] + ".gz")
+    damaged = {
+        "truncated": blob.read_bytes()[:-4],
+        "wrong_payload": gzip.compress(b"wrong"),
+        "invalid_header": b"not gzip",
+        "invalid_deflate": b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\x06" + b"\x00" * 8,
+    }
+    blob.write_bytes(damaged[corruption])
+    evidence = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError, match="^retained_artifact_hash_changed$"):
+        retention.retain(root.parent.parent, target.parent, lock, execute=execute)
+    assert evidence == {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert Path(remaining["path"]).exists()
+    with pytest.raises(ValueError, match="^retained_artifact_hash_changed$"):
+        with retention.open_artifact(candidate["path"]):
+            pytest.fail("A corrupt archive must fail before yielding any bytes")
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_scan_verifies_shared_blobs_once_beyond_original_limit(export_case, monkeypatch, execute):
+    plan, item, target, old, root, gate, lock = complete_case(export_case)
+    args = (root.parent.parent, target.parent, lock)
+    retention.retain(*args, execute=True)
+    journal_path = root / "export-checkpoints.json"
+    receipts_path = root / "exports.json"
+    journal = json.loads(journal_path.read_text())
+    receipts = json.loads(receipts_path.read_text())
+    key = next(iter(journal["entries"]))
+    journal["entries"]["shared-reference"] = journal["entries"][key]
+    receipts["shared-reference"] = receipts[key]
+    journal_path.write_text(json.dumps(journal))
+    receipts_path.write_text(json.dumps(receipts))
+    evidence = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    hashed = []
+    stream_hash = retention._stream_hash
+
+    def track(stream):
+        hashed.append(Path(stream.name))
+        return stream_hash(stream)
+
+    monkeypatch.setattr(retention, "_stream_hash", track)
+    result = retention.retain(*args, max_files=1, execute=execute)
+    assert result["candidates"] == []
+    assert len(hashed) == len(set(hashed)) == 2
+    assert evidence == {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
 
 
 def test_symlinks_and_changed_generation_proof_fail_closed(export_case, tmp_path):

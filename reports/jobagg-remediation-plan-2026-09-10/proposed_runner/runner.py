@@ -599,6 +599,11 @@ def load_config(path, *, record_storage_health=False):
             and guard.get("min_free_bytes", 0) >= 0,
             "Invalid storage min_free_bytes",
         )
+        for key in ("warning_free_bytes", "publication_headroom_bytes", "warning_runway_seconds"):
+            require(
+                type(guard.get(key, 0)) is int and guard.get(key, 0) >= 0,
+                "Invalid storage " + key,
+            )
     OBSERVABILITY.storage_check(config)
     manifest_bytes = config["source_manifest_path"].read_bytes()
     manifest = json.loads(manifest_bytes)

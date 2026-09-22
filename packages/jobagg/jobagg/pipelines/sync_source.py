@@ -22,6 +22,11 @@ from jobagg.http_safe import SafeHTTPPolicy, allowed_hosts_for_source
 from jobagg.models import ChangeEvent, OrganizationSource, SourceRunDiagnostics, SyncResult
 from jobagg.observability.logging import get_logger
 from jobagg.robots import RobotsChecker, RobotsPolicy
+from jobagg.vacancy_outcomes import (
+    EXPLICIT_VACANCY_UNAVAILABLE,
+    UNAVAILABLE_STATUSES,
+    VacancyUnavailable,
+)
 
 _VERIFIED_EMPTY_REASONS = {"verified_total_zero", "verified_structural_empty", "verified_text_empty"}
 _MISSING_ALLOWED_HEALTH = {"ok", "ok_empty"}
@@ -401,6 +406,17 @@ def sync_source_with_selective_details(
             refresh_all_details=refresh_all_details,
         )
         if queue_reason is None:
+            backlog = db.get_detail_backlog(job_key)
+            if (backlog and backlog["detail_status"] == "unavailable_pending_inventory"
+                    and result.diagnostics.pagination_complete is True):
+                # A later complete listing still includes the unavailable job.
+                # Preserve that conflict instead of inferring closure or success.
+                db.update_detail_backlog_status(
+                    job_key=job_key, source_id=source.id,
+                    status="listing_detail_conflict", listing_hash=listing_hash,
+                    reason=EXPLICIT_VACANCY_UNAVAILABLE,
+                    error=backlog.get("last_error"),
+                )
             jobs.append(job)
             continue
 
@@ -555,7 +571,9 @@ def sync_source_with_selective_details(
                             transient_detail_failures,
                             host_cooldown_until.isoformat() if host_cooldown_until else "",
                         )
-                elif _should_open_detail_adapter_breaker(detail_attempts, detail_failures):
+                elif _should_open_detail_adapter_breaker(
+                    detail_attempts - result.vacancies_unavailable, detail_failures
+                ):
                     detail_breaker_opened = True
                     detail_aborted = True
                     host_cooldown_until = _open_detail_adapter_breaker(
@@ -602,7 +620,9 @@ def sync_source_with_selective_details(
                     elapsed,
                     0,
                 )
-                if _should_open_detail_adapter_breaker(detail_attempts, detail_failures):
+                if _should_open_detail_adapter_breaker(
+                    detail_attempts - result.vacancies_unavailable, detail_failures
+                ):
                     detail_breaker_opened = True
                     detail_aborted = True
                     host_cooldown_until = _open_detail_adapter_breaker(
@@ -628,6 +648,20 @@ def sync_source_with_selective_details(
                 elapsed,
                 detail_pacer.min_delay_seconds,
             )
+            continue
+        except VacancyUnavailable as exc:
+            result.vacancies_unavailable += 1
+            if len(result.diagnostics.unavailable_vacancies) < 20:
+                result.diagnostics.unavailable_vacancies.append({
+                    "category": EXPLICIT_VACANCY_UNAVAILABLE,
+                    "reason": str(exc), "job_key": job_key,
+                })
+            db.record_detail_backlog_attempt(
+                job_key=job_key, source_id=source.id,
+                status="unavailable_pending_inventory", listing_hash=listing_hash,
+                error=str(exc), reason=EXPLICIT_VACANCY_UNAVAILABLE,
+            )
+            jobs.append(job)
             continue
         except Exception as exc:
             elapsed = time.monotonic() - attempt_started_at
@@ -698,7 +732,9 @@ def sync_source_with_selective_details(
                     transient_detail_failures,
                     host_cooldown_until.isoformat() if host_cooldown_until else "",
                 )
-            if (not is_transient) and _should_open_detail_adapter_breaker(detail_attempts, detail_failures):
+            if (not is_transient) and _should_open_detail_adapter_breaker(
+                detail_attempts - result.vacancies_unavailable, detail_failures
+            ):
                 detail_breaker_opened = True
                 detail_aborted = True
                 host_cooldown_until = _open_detail_adapter_breaker(
@@ -727,7 +763,7 @@ def sync_source_with_selective_details(
         db,
         bounded_source,
         detail_breaker,
-        detail_attempts=detail_attempts,
+        detail_attempts=detail_attempts - result.vacancies_unavailable,
         detail_failures=detail_failures,
         opened=detail_breaker_opened,
     )
@@ -856,10 +892,22 @@ def _detail_queue_reason(
         "permanent_failed",
         "skipped",
         "transient_failed",
+        *UNAVAILABLE_STATUSES,
     } and (
         _listing_payload_satisfies_detail(source, listing_job)
     ):
         return "listing_payload_detail_complete"
+    if backlog_status in UNAVAILABLE_STATUSES:
+        # An unchanged conflicting listing is not a reason to repeat a known
+        # unavailable detail. An explicit refresh, changed listing, or a vacancy
+        # reappearing after missing/closure can establish a new outcome.
+        if backlog_hash != listing_hash:
+            return "listing_hash_changed"
+        last_listing = (current.get("raw") or {}).get("_jobagg_listing_verification", {}) if current else {}
+        if (current is None or current.get("status") != "open"
+                or last_listing.get("observed_in_latest_listing") is False):
+            return "unavailable_reappeared"
+        return None
     if backlog_status == "permanent_failed" and backlog_hash == listing_hash:
         quarantine_days = _optional_int(source.extra.get("detail_permanent_failure_quarantine_days"))
         if quarantine_days is None or quarantine_days <= 0:
@@ -1792,13 +1840,15 @@ def _apply_detail_diagnostics(
         return
     diagnostics.detail_attempted = detail_attempts
     diagnostics.detail_failed = detail_failures
-    diagnostics.detail_succeeded = max(0, detail_attempts - detail_failures)
+    diagnostics.detail_unavailable = result.vacancies_unavailable
+    evaluated_attempts = detail_attempts - result.vacancies_unavailable
+    diagnostics.detail_succeeded = max(0, evaluated_attempts - detail_failures)
     diagnostics.detail_skipped = detail_skipped
-    if detail_attempts == 0 or detail_failures == 0:
+    if evaluated_attempts == 0 or detail_failures == 0:
         return
-    ratio = detail_failures / detail_attempts
+    ratio = detail_failures / evaluated_attempts
     summary = (
-        f"detail refresh failed for {detail_failures}/{detail_attempts} jobs"
+        f"detail refresh failed for {detail_failures}/{evaluated_attempts} jobs"
         f" ({ratio:.0%})"
     )
     if detail_errors:

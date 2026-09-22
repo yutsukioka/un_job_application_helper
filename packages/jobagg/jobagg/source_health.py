@@ -85,8 +85,15 @@ def read_worker_health(database, *, now=None):
             host_holds.add(path.stem)
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
+        # Published/older generations remain readable without running a writer
+        # migration or changing their immutable workspace binding.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
+        if "host" in columns:
+            sources = conn.execute("SELECT source_id,host FROM remediation_sources")
+        else:
+            sources = conn.execute("SELECT source_id,NULL AS host FROM remediation_sources")
         result = {}
-        for row in conn.execute("SELECT source_id FROM remediation_sources"):
+        for row in sources:
             source = row["source_id"]
             held = bool(holds.get(source)) or bool(
                 conn.execute(
@@ -94,22 +101,26 @@ def read_worker_health(database, *, now=None):
                     (source,),
                 ).fetchone()
             )
-            # A blocked task already produces degraded health. Inspect pending
-            # listing/detail payloads too, so an active host hold takes priority.
+            # The first request can use a different host from public listing
+            # URLs. Check it even with an empty or fully completed task queue.
+            # Pending/blocked documents can also use independent hosts.
             if host_holds:
+                hosts = {row["host"]} if row["host"] else set()
                 for task in conn.execute(
                     "SELECT payload FROM remediation_tasks WHERE source_id=? AND status IN ('pending','blocked')",
                     (source,),
                 ):
                     payload = json.loads(task["payload"])
                     listing = payload.get("listing") or {}
-                    for key in ("source_url", "apply_url"):
-                        host = urlsplit(listing.get(key) or "").hostname
-                        if (
-                            host
-                            and "host-" + hashlib.sha256(host.encode()).hexdigest()[:24]
-                            in host_holds
-                        ):
-                            held = True
+                    document = payload.get("document") or {}
+                    candidates = (
+                        payload.get("source_url"), payload.get("apply_url"), payload.get("url"),
+                        listing.get("source_url"), listing.get("apply_url"), document.get("url"),
+                    )
+                    hosts.update(urlsplit(value).hostname for value in candidates if value)
+                held = held or any(
+                    "host-" + hashlib.sha256(host.encode()).hexdigest()[:24] in host_holds
+                    for host in hosts if host
+                )
             result[source] = source_health(conn, source, now=now, hold=held)
         return result

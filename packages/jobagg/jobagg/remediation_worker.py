@@ -260,6 +260,12 @@ class SerializedWorkerDatabase(JobDatabase):
             yield conn
 
 
+def source_request_host(source):
+    """Host the scheduler checks before a source's first API/listing request."""
+    url = source.extra.get("cxs_base_url") or source.extra.get("listing_url") or source.base_url
+    return (urlsplit(url).hostname or "").lower()
+
+
 class Worker:
     def __init__(
         self,
@@ -401,6 +407,9 @@ CREATE TABLE IF NOT EXISTS remediation_documents(task_id TEXT PRIMARY KEY,job_ke
 CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,media_type TEXT,size_bytes INTEGER NOT NULL,content BLOB NOT NULL);
 """.replace("DEFAULT0", "DEFAULT 0")
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
+            if "host" not in columns:
+                conn.execute("ALTER TABLE remediation_sources ADD COLUMN host TEXT")
             # A killed process may have sent a request. Never silently refund or retry it.
             conn.execute(
                 "UPDATE remediation_tasks SET status='interrupted',last_error='Previous durable claim lacks an atomic completion; review required' WHERE status='inflight'"
@@ -408,6 +417,10 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             for source in self.by_id.values():
                 conn.execute(
                     "INSERT OR IGNORE INTO remediation_sources(source_id) VALUES(?)", (source.id,)
+                )
+                conn.execute(
+                    "UPDATE remediation_sources SET host=? WHERE source_id=? AND host IS NULL",
+                    (source_request_host(source), source.id),
                 )
 
     def retry_input_fingerprint(self, payload):
@@ -546,8 +559,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         payload = json.loads(task["payload"])
         # Workday's public site and first API request can use different hosts.
         # Documents already carry their exact current public request URL.
-        url = payload.get("url") or source.extra.get("cxs_base_url") or source.extra.get("listing_url") or source.base_url
-        return (urlsplit(url).hostname or "").lower()
+        if payload.get("url"):
+            return (urlsplit(payload["url"]).hostname or "").lower()
+        return source_request_host(source)
 
     def choose(self, *, excluded_kinds=(), excluded_sources=(), excluded_hosts=(), deadline=None):
         """Choose without multiplying policy-file reads by the pending queue size."""

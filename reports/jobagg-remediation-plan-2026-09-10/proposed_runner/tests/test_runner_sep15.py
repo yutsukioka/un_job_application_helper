@@ -188,6 +188,20 @@ def test_storage_identity_reserve_and_escape_checks(tmp_path, monkeypatch):
         obs.storage_check(config)
 
 
+@pytest.mark.parametrize('key', ['warning_free_bytes', 'publication_headroom_bytes', 'warning_runway_seconds'])
+@pytest.mark.parametrize('value', [1.5, True, -1])
+def test_invalid_storage_warning_config_fails_before_volume_access(fixture, monkeypatch, key, value):
+    fixture.configure(storage_guard={
+        'mount_root': str(fixture.root / 'volume'),
+        'sentinel_path': str(fixture.root / 'volume/sentinel'),
+        'sentinel_sha256': 'a' * 64,
+        key: value,
+    })
+    monkeypatch.setattr(obs, 'storage_check', lambda config: pytest.fail('invalid config reached volume access'))
+    with pytest.raises(ValueError, match='Invalid storage ' + key):
+        runner.load_config(fixture.config_path)
+
+
 def test_lexical_config_paths_survive_parent_alias(fixture):
     real = fixture.root / "real"
     real.mkdir()

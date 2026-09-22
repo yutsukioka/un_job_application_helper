@@ -135,6 +135,7 @@ class SyncResult:
     closed: int = 0
     errors: list[str] = field(default_factory=list)
     diagnostics: SourceRunDiagnostics | None = None
+    vacancies_unavailable: int = 0
 
     @property
     def changed(self) -> int:
@@ -177,6 +178,8 @@ class SourceRunDiagnostics:
     scope_validation_status: str | None = None
     missing_transition_allowed: bool = False
     observed_at: datetime = field(default_factory=utc_now)
+    detail_unavailable: int = 0
+    unavailable_vacancies: list[dict[str, str]] = field(default_factory=list)
 
 
 def _identity_part(value: object | None) -> str:

@@ -370,16 +370,25 @@ class DurableCapture:
                     )
                     save(record_path, record)
                     stage = "transport"
-                    if _native_dispatch is not None:
-                        observer = getattr(self, "native_observer", None)
-                        response = (observer(url, _native_dispatch=_native_dispatch, **kwargs)
-                                    if observer else _native_dispatch(url, **kwargs))
-                    else:
-                        response = self.transport(url, **kwargs)
+                    # Measure both urllib and native dispatch here. Native
+                    # transports do not necessarily provide elapsed diagnostics.
+                    self.client.last_request_diagnostics = {}
+                    transport_started = time.monotonic()
+                    try:
+                        if _native_dispatch is not None:
+                            observer = getattr(self, "native_observer", None)
+                            response = (observer(url, _native_dispatch=_native_dispatch, **kwargs)
+                                        if observer else _native_dispatch(url, **kwargs))
+                        else:
+                            response = self.transport(url, **kwargs)
+                    finally:
+                        record["transport_elapsed_seconds"] = max(0.0, time.monotonic() - transport_started)
+                        diagnostics = getattr(self.client, "last_request_diagnostics", None)
+                        if diagnostics:
+                            record["transport_diagnostics"] = dict(diagnostics)
+                            if diagnostics.get("headers_received") and diagnostics.get("status_code") is not None:
+                                record["status_code"] = diagnostics["status_code"]
                     stage = "capture_persistence"
-                    diagnostics = getattr(self.client, "last_request_diagnostics", None)
-                    if diagnostics:
-                        record["transport_diagnostics"] = dict(diagnostics)
                     body = response.content or response.text.encode()
                     artifact = record_path.with_suffix(".body.gz")
                     with artifact.open("xb") as body_file:
@@ -461,17 +470,13 @@ class DurableCapture:
                         classify_failure(exc) if stage == "transport" or status is not None else "local_failure"
                     )
                     if (stage == "transport" and status is None and record.get("deadline_limited")
+                            and record["transport_elapsed_seconds"] >= record["effective_timeout_seconds"]
                             and any(isinstance(error, TimeoutError) for error in exception_chain(exc))):
-                        # An artificially clipped timeout says nothing about
-                        # the host's ability to meet the configured allowance.
+                        # Only expiration of the clipped allowance is a local
+                        # budget event. Early timeouts still charge host recovery.
                         record.update(failure_category="local_budget", failure_stage=stage)
                         raise HostIneligible("Batch deadline limited request timeout", category="budget") from exc
                     record.update(failure_category=category, failure_stage=stage)
-                    diagnostics = getattr(self.client, "last_request_diagnostics", None)
-                    if stage == "transport" and diagnostics:
-                        record["transport_diagnostics"] = dict(diagnostics)
-                        if diagnostics.get("headers_received") and diagnostics.get("status_code") is not None:
-                            record.setdefault("status_code", diagnostics["status_code"])
                     if category in {"transient_transport", "rate_limit"}:
                         state.update(transient_failure(state, time.time(), category, record_path, retry_floor(retry, time.time())))
                         state["reason"] = "HTTP transport failure: " + type(exc).__name__

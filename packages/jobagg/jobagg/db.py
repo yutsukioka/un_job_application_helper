@@ -17,6 +17,7 @@ from jobagg.hashing import ensure_job_hash, posting_fingerprint
 from jobagg.models import ChangeEvent, JobRecord, SourceRunDiagnostics, SyncResult
 from jobagg.normalize import clean_text
 from jobagg.oracle_public import public_description_parts
+from jobagg.vacancy_outcomes import UNAVAILABLE_STATUSES
 
 
 def _dt(value: datetime | None) -> str | None:
@@ -226,6 +227,7 @@ class JobDatabase:
                     unchanged INTEGER NOT NULL,
                     missing INTEGER NOT NULL,
                     closed INTEGER NOT NULL,
+                    vacancies_unavailable INTEGER NOT NULL DEFAULT 0,
                     errors_json TEXT NOT NULL,
                     observed_at TEXT NOT NULL
                 );
@@ -252,6 +254,8 @@ class JobDatabase:
                     detail_succeeded INTEGER NOT NULL DEFAULT 0,
                     detail_failed INTEGER NOT NULL DEFAULT 0,
                     detail_skipped INTEGER NOT NULL DEFAULT 0,
+                    detail_unavailable INTEGER NOT NULL DEFAULT 0,
+                    unavailable_vacancies TEXT NOT NULL DEFAULT '[]',
                     empty_reason TEXT,
                     zero_fetched_evidence TEXT NOT NULL DEFAULT '{}',
                     observed_agency_counts TEXT NOT NULL DEFAULT '{}',
@@ -283,7 +287,9 @@ class JobDatabase:
                             'permanent_failed',
                             'skipped',
                             'adapter_failed',
-                            'blocked_by_circuit_breaker'
+                            'blocked_by_circuit_breaker',
+                            'unavailable_pending_inventory',
+                            'listing_detail_conflict'
                         )),
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     last_attempt_at TEXT,
@@ -681,6 +687,9 @@ class JobDatabase:
                 ("weak_detail_jobs", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 self._ensure_column(conn, "consolidated_source_status", column, column_type)
+            self._ensure_column(conn, "source_runs", "vacancies_unavailable", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "source_run_diagnostics", "detail_unavailable", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "source_run_diagnostics", "unavailable_vacancies", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(
                 conn,
                 "source_run_diagnostics",
@@ -721,7 +730,9 @@ class JobDatabase:
                             'permanent_failed',
                             'skipped',
                             'adapter_failed',
-                            'blocked_by_circuit_breaker'
+                            'blocked_by_circuit_breaker',
+                            'unavailable_pending_inventory',
+                            'listing_detail_conflict'
                         )),
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     last_attempt_at TEXT,
@@ -1007,10 +1018,9 @@ class JobDatabase:
             WHERE type = 'table' AND name = 'detail_backlog'
             """
         ).fetchone()
-        if row is None or "blocked_by_circuit_breaker" in str(row["sql"] or ""):
+        if row is None or "listing_detail_conflict" in str(row["sql"] or ""):
             return
-        conn.executescript(
-            """
+        script = """
             ALTER TABLE detail_backlog RENAME TO detail_backlog_old;
 
             CREATE TABLE detail_backlog (
@@ -1024,7 +1034,9 @@ class JobDatabase:
                         'permanent_failed',
                         'skipped',
                         'adapter_failed',
-                        'blocked_by_circuit_breaker'
+                        'blocked_by_circuit_breaker',
+                        'unavailable_pending_inventory',
+                        'listing_detail_conflict'
                     )),
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 last_attempt_at TEXT,
@@ -1052,7 +1064,18 @@ class JobDatabase:
             CREATE INDEX IF NOT EXISTS idx_detail_backlog_source_status
                 ON detail_backlog (source_id, detail_status, cooldown_until);
             """
-        )
+        # Execute this fixed migration under a savepoint: executescript would
+        # commit the rename/create before a later copy failure can roll it back.
+        conn.execute("SAVEPOINT migrate_detail_backlog")
+        try:
+            for statement in script.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
+        except BaseException:
+            conn.execute("ROLLBACK TO migrate_detail_backlog")
+            conn.execute("RELEASE migrate_detail_backlog")
+            raise
+        conn.execute("RELEASE migrate_detail_backlog")
 
     def _seed_grade_mappings(self, conn: sqlite3.Connection) -> None:
         from jobagg.classification.grade_mapping import (
@@ -2789,9 +2812,9 @@ class JobDatabase:
                 """
                 INSERT INTO source_runs (
                     source_id, fetched, inserted, updated, unchanged, missing,
-                    closed, errors_json, observed_at
+                    closed, vacancies_unavailable, errors_json, observed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     result.source_id,
@@ -2801,6 +2824,7 @@ class JobDatabase:
                     result.unchanged,
                     result.missing,
                     result.closed,
+                    result.vacancies_unavailable,
                     json.dumps(result.errors, ensure_ascii=True),
                     _dt(observed_at),
                 ),
@@ -2831,7 +2855,8 @@ class JobDatabase:
                     site_number, expected_site_name, observed_site_name, endpoint_family,
                     http_status, total_reported_by_source, pages_fetched,
                     pagination_complete, list_error_count, detail_attempted,
-                    detail_succeeded, detail_failed, detail_skipped, empty_reason,
+                    detail_succeeded, detail_failed, detail_skipped,
+                    detail_unavailable, unavailable_vacancies, empty_reason,
                     zero_fetched_evidence, observed_agency_counts,
                     observed_organization_counts, count_delta_pct, health_status,
                     run_classification, publishability_classification,
@@ -2840,7 +2865,7 @@ class JobDatabase:
                     scope_validation_status,
                     missing_transition_allowed, observed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_run_id) DO UPDATE SET
                     source_id = excluded.source_id,
                     adapter_version = excluded.adapter_version,
@@ -2859,6 +2884,8 @@ class JobDatabase:
                     detail_succeeded = excluded.detail_succeeded,
                     detail_failed = excluded.detail_failed,
                     detail_skipped = excluded.detail_skipped,
+                    detail_unavailable = excluded.detail_unavailable,
+                    unavailable_vacancies = excluded.unavailable_vacancies,
                     empty_reason = excluded.empty_reason,
                     zero_fetched_evidence = excluded.zero_fetched_evidence,
                     observed_agency_counts = excluded.observed_agency_counts,
@@ -2894,6 +2921,8 @@ class JobDatabase:
                     diagnostics.detail_succeeded,
                     diagnostics.detail_failed,
                     diagnostics.detail_skipped,
+                    diagnostics.detail_unavailable,
+                    json.dumps(diagnostics.unavailable_vacancies, sort_keys=True, ensure_ascii=True),
                     diagnostics.empty_reason,
                     json.dumps(diagnostics.zero_fetched_evidence, sort_keys=True, ensure_ascii=True),
                     json.dumps(diagnostics.observed_agency_counts, sort_keys=True, ensure_ascii=True),
@@ -2951,6 +2980,7 @@ class JobDatabase:
                 data["blocked"] = bool(data.get("blocked", 0))
                 data["transient_error"] = bool(data.get("transient_error", 0))
                 data["missing_transition_allowed"] = bool(data["missing_transition_allowed"])
+                data["unavailable_vacancies"] = json.loads(data.get("unavailable_vacancies") or "[]")
                 data["zero_fetched_evidence"] = json.loads(data["zero_fetched_evidence"] or "{}")
                 data["observed_agency_counts"] = json.loads(data["observed_agency_counts"] or "{}")
                 data["observed_organization_counts"] = json.loads(
@@ -3034,6 +3064,7 @@ class JobDatabase:
         listing_hash: str,
         error: str | None = None,
         cooldown_until: datetime | None = None,
+        reason: str | None = None,
     ) -> None:
         if status not in {
             "complete",
@@ -3042,7 +3073,7 @@ class JobDatabase:
             "skipped",
             "adapter_failed",
             "blocked_by_circuit_breaker",
-        }:
+        } | UNAVAILABLE_STATUSES:
             raise ValueError(f"Unsupported detail backlog status: {status}")
         now_dt = datetime.now(tz=UTC)
         now = _dt(now_dt)
@@ -3055,9 +3086,9 @@ class JobDatabase:
                 INSERT INTO detail_backlog (
                     job_key, source_id, detail_status, attempt_count,
                     last_attempt_at, last_success_at, last_error,
-                    cooldown_until, listing_hash_at_detail_fetch, updated_at
+                    cooldown_until, listing_hash_at_detail_fetch, queued_reason, updated_at
                 )
-                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_key) DO UPDATE SET
                     source_id = excluded.source_id,
                     detail_status = excluded.detail_status,
@@ -3067,6 +3098,7 @@ class JobDatabase:
                     last_error = excluded.last_error,
                     cooldown_until = excluded.cooldown_until,
                     listing_hash_at_detail_fetch = excluded.listing_hash_at_detail_fetch,
+                    queued_reason = COALESCE(excluded.queued_reason, detail_backlog.queued_reason),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -3078,6 +3110,7 @@ class JobDatabase:
                     last_error,
                     cooldown_text,
                     listing_hash,
+                    reason,
                     now,
                 ),
             )
@@ -3130,7 +3163,7 @@ class JobDatabase:
         error: str | None = None,
         cooldown_until: datetime | None = None,
     ) -> None:
-        if status not in {"pending", "adapter_failed", "blocked_by_circuit_breaker"}:
+        if status not in {"pending", "adapter_failed", "blocked_by_circuit_breaker"} | UNAVAILABLE_STATUSES:
             raise ValueError(f"Unsupported detail backlog status update: {status}")
         now = _dt(datetime.now(tz=UTC))
         with self.connect() as conn:

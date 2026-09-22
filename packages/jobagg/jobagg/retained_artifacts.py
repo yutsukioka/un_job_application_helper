@@ -19,6 +19,7 @@ import re
 import stat
 import tempfile
 import time
+import zlib
 
 from jobagg.atomic_files import atomic_write_text
 
@@ -70,6 +71,17 @@ def _stream_hash(stream):
     return {"sha256": digest.hexdigest(), "size": size}
 
 
+def _verify_blob(blob, expected):
+    """Treat decoding errors and changed bytes as the same integrity failure."""
+    try:
+        with gzip.open(blob, "rb") as stream:
+            actual = _stream_hash(stream)
+    except (EOFError, gzip.BadGzipFile, zlib.error) as exc:
+        raise ValueError("retained_artifact_hash_changed") from exc
+    if actual != expected:
+        raise ValueError("retained_artifact_hash_changed")
+
+
 @contextmanager
 def open_artifact(path):
     """Read original bytes, even after lossless archival; no materializing write."""
@@ -80,9 +92,7 @@ def open_artifact(path):
         return
     receipt, blob = _receipt(path)
     # Validate before allowing a recovery copy to consume any bytes.
-    with gzip.open(blob, "rb") as stream:
-        if _stream_hash(stream) != {k: receipt[k] for k in ("sha256", "size")}:
-            raise ValueError("retained_artifact_hash_changed")
+    _verify_blob(blob, {k: receipt[k] for k in ("sha256", "size")})
     with gzip.open(blob, "rb") as stream:
         yield stream
 
@@ -152,7 +162,11 @@ def archive(path, expected):
 
 
 def candidates(state_dir, output_dir, *, retain_days=7, now=None, max_files=100):
-    """Only journal-bound files from complete, non-current old generations."""
+    """Select historical originals and verify every archived blob encountered.
+
+    ``max_files`` limits originals selected, not historical verification I/O.
+    Reaching that limit ends the scan; this is not a whole-store integrity audit.
+    """
     if not isinstance(retain_days, int) or retain_days < 1:
         raise ValueError("retain_days_must_be_positive")
     from jobagg.pipelines.publication_exports import _fingerprint
@@ -165,6 +179,7 @@ def candidates(state_dir, output_dir, *, retain_days=7, now=None, max_files=100)
         raise ValueError("unresolved_publication_prevents_retention")
     cutoff = (time.time() if now is None else now) - retain_days * 86400
     found = []
+    verified = {}
     for root in sorted((state_dir / "generations").iterdir()):
         if root.is_symlink() or not root.is_dir() or root.name == gate.get("generation_id"):
             continue
@@ -218,6 +233,12 @@ def candidates(state_dir, output_dir, *, retain_days=7, now=None, max_files=100)
                         key: receipt[key] for key in ("sha256", "size")
                     } != expected or not blob.exists():
                         raise ValueError("retention_export_binding_changed")
+                    digest = receipt["sha256"]
+                    if digest not in verified:
+                        _verify_blob(blob, {key: receipt[key] for key in ("sha256", "size")})
+                        verified[digest] = receipt["size"]
+                    elif verified[digest] != receipt["size"]:
+                        raise ValueError("retained_artifact_hash_changed")
                     continue
                 if _fingerprint(path) != expected:
                     raise ValueError("retention_export_binding_changed")
