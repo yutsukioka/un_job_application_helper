@@ -24,7 +24,38 @@ Paste your content under each header. All sections are required unless marked op
 ## SKILLS_TAXONOMY
 [Paste a list of your core technical and functional skills, organized by category (e.g., "Data Analysis", "Project Management").]
 
+## USER_CERTIFICATIONS_TEXT
+[Optional for Option 9: earned credentials, issuing bodies, award dates and known validity/expiry status. Leave blank if none are supplied.]
+
+## USER_LANGUAGES_TEXT
+[Optional for Option 9: language levels, actual speaking/listening/reading/writing use, and any assessments with dates.]
+
+## PORTAL_SKILL_ENTRIES
+[Optional for Option 9: copy the actual selectable Skill / Certification / Language names and types. State the portal source; a personal skills list is not a verified portal list.]
+
+## PORTAL_PROFICIENCY_GUIDANCE
+[Optional for Option 9: exact proficiency choices and any item-specific help, including how certification proficiency is defined. The World Bank workflow defaults to High / Medium / Low as advisory ratings when definitions are absent.]
+
+## PORTAL_ENTRY_MODE
+[Optional for Option 9: CONTROLLED_LIST | FREE_TEXT | UNKNOWN. Without a verified list or free-text mode, generated item names are drafts.]
+
 ## LIMITS
+
+For the named UNESCO skills, the following optional source sections may be
+added above LIMITS: `EMPLOYMENT_HISTORY_FORM_REFERENCE`, `PORTAL_FIELD_SCHEMA`,
+`PORTAL_DOMAIN_OPTIONS`, `PORTAL_DOMAIN_SELECTION_RULES`,
+`EXPERIENCE_AS_OF_DATE`, `USER_PUBLICATIONS_TEXT`, `PORTAL_PUBLICATION_GUIDANCE`.
+Those skills also accept raw inputs directly. Their field-specific rules take
+precedence over the generic example limits below; dropdowns have no text budget.
+For UNESCO use `TARGET_SYSTEM: OTHER` and `TARGET_ORGANIZATION: UNESCO`.
+For UNOPS use `TARGET_SYSTEM: OTHER` and `TARGET_ORGANIZATION: UNOPS`;
+optional `UNOPS_ADAPTER: apex-unops-application-fit`. Supply `PORTAL_FIELD_SCHEMA`
+and dated Position Area options/help when available. The catalog defaults to
+`private/inputs/taxonomies/unops/UNOPS_Skills_2026-09-27.csv` with its adjacent
+source manifest. A requested selection budget of 20 is a drafting default,
+not a verified portal cap. For UNOPS, replace the generic numeric examples below
+with field-specific verified limits or UNKNOWN; do not inherit these examples.
+
 [Define the character constraints for the application fields.]
 
 CHAR_LIMIT: 2000

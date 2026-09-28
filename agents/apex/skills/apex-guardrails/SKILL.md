@@ -198,6 +198,62 @@ When multiple artifacts or messages disagree, prefer sources in this order:
 Different platforms require different paste-safe formats. Every generation
 task should be treated as one of these profiles.
 
+### UNOPS Phase 8 preparation
+
+For an explicitly identified UNOPS target (`TARGET_SYSTEM: OTHER`,
+`TARGET_ORGANIZATION: UNOPS`), prepare or reuse the current
+[UNOPS fit plan](../apex-unops-application-fit/SKILL.md) before generating
+selected Phase 8 outputs. This applies to direct generator requests too.
+Run preparation once per source set; pass the same fit plan to all selected
+outputs and do not recursively invoke generators from the preparation hook.
+Installation, research and review-only requests do not authorize regeneration.
+Option 10 alone prepares the fit plan and role/skills companion only.
+
+The fit plan indexes source facts; raw evidence and controlled approved updates
+remain authoritative. Check its source hashes and vacancy before reuse. Missing
+field options or limits block affected portal-ready values, not supported drafts.
+Use actual UNOPS field labels and verified numeric limits (or an explicit user
+writing budget); unknown limits stay unknown. Do not inherit default character
+caps, proficiency scales, or role-field splits from another system. An admin
+profile request uses Option 10's observed role-field companion when Options
+1/5/8 do not match the observed layout; preserve those options' native contracts.
+Option 9 uses the supplied UNOPS schema rather than adding an unobserved rating.
+
+For UNOPS Option 6 only, total evidenced skill-use intervals, union overlaps,
+and leave unknown durations as placeholders. Role dates alone establish an
+upper bound. Keep exact comma-containing labels quoted in display lists and
+as single elements in the fit-plan arrays. Other systems retain their current
+Option 6 calculation and display contracts. Keep narrative titles, employers,
+dates, action ownership and metric anchors consistent across selected outputs.
+The hook adds no permission for portal writes or unselected documents.
+
+### UNESCO named deliverables
+
+The named UNESCO skills can run directly from their own required inputs;
+they do not require a strategy report, keyword extraction or a context pack.
+Use the requested output's canonical skill as the field/format contract:
+
+- `apex-generate-unesco-employment-history`: preserve the actual document
+  template, native text and chronology. Numeric controls apply only where
+  the template or applicable instructions establish them.
+- `apex-select-domain-of-expertise`: exact controlled labels/IDs and experience
+  bands; do not lint, normalize or character-fit dropdown labels.
+- `apex-curate-publications`: preserve titles and native field text; use
+  CAPEL's exact validation path for numeric text limits. Its subject Domain
+  is separate from the expertise dropdown taxonomy.
+
+For UNESCO authoring, expertise and EHF are a cooperating pair under their
+canonical contracts: one shared source ledger and role-to-narrative crosswalk,
+even when only one skill is invoked. Review-only and explicit narrower scope
+remain controlling. This pairing does not authorize other application outputs
+or relax source grounding, experience-period rules or the update-intent gate.
+
+Keep unresolved records/placeholders in the review material, outside clean
+portal rows. For immutable metadata or a protected template field, an
+impossible fit is a held value with a reason, not a silently truncated entry.
+Do not require vacancy keyword coverage in a publication title or controlled
+taxonomy label. Review-only requests do not authorize rewriting prior outputs.
+
 ### Profile A: inspira_field_strict
 Use for Inspira-style single text fields with strict limits.
 - Single paragraph per field

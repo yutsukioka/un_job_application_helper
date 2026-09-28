@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Adapt Word Cover Letter"
+  short_description: "Replace approved content while preserving Word format"
+  default_prompt: "Use $apex-adapt-word-cover-letter to insert my approved date and cover-letter body into the existing DOCX, preserve all other content and formatting, and save under my requested filename."

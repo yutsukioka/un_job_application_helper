@@ -1,0 +1,6 @@
+interface:
+  display_name: "Apex ▸ Application Preparation"
+  short_description: "Archive outgoing and prepared contexts for a selected vacancy"
+  default_prompt: "Use $apex-application-preparation to archive my current context, prepare the selected vacancy, and archive the completed context. For UNOPS, open the application in Codex Browser, let me sign in when needed, and extract the actual application questions without answering or submitting."
+policy:
+  allow_implicit_invocation: true

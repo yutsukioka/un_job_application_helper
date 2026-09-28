@@ -91,6 +91,10 @@ Round plan:
    - read `ccog_reference_resolved.md`
    - run `apex-orchestrator-report` as a skill, not as the coordinator
    - write `phase1_7_strategy_report.md`
+   - preserve its Phase 1.4 `## Skill / Certification / Language Evidence Map`
+     from the same `apex-candidate-evidence-bank` invocation as Phase 1.3;
+     retain source anchors, full-vacancy items, and missing evidence, leaving
+     final proficiency assessment to Option 9
    - ensure every core requirement maps to evidence, a placeholder, or a gap note
 
 During TEST:

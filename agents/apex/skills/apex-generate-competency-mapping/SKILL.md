@@ -58,6 +58,15 @@ Do not add any other headings or narrative text.
   and the candidate’s role description; if uncertain, err on the side
   of lower scores.
 
+## UNOPS adapter
+
+For an identified UNOPS target, apply the
+[UNOPS preparation hook](../apex-guardrails/SKILL.md#unops-phase-8-preparation)
+and consume its current fit plan. Its evidenced skill-use intervals override
+whole-role duration assumptions below for UNOPS only. Preserve the two output
+headings; quote labels containing commas in display lists and keep canonical
+assignments in JSON arrays. Unknown skill-use time remains a placeholder.
+
 ## Total experience calculation rules
 
 - Use role dates to compute durations (years/months).

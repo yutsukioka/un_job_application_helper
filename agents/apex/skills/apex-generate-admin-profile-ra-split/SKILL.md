@@ -45,6 +45,17 @@ Optional:
 - `apex-bullet-enhancer` output
 - `apex-star-story-blueprints` output (to seed achievements)
 - LIMITS (if present; may include numeric limits, but if not present or unlimited; no need to apply character limitation.)
+- `PORTAL_FIELD_SCHEMA` or a supplied vacancy-specific ATS page map, including
+  actual field labels, types and observed limits. Keep an unknown limit distinct
+  from an explicitly unlimited field; neither calls for arbitrary compression.
+
+When a live field map is supplied, provide a transfer crosswalk alongside the
+role sections below. Responsibilities and Achievements remain separate payloads;
+exclude role headings, counts and review notes from those textareas. For numeric
+Direct Reports controls, identify the supported numeric count separately from
+staff-type explanation. Unresolved leaving-reason choices remain review material,
+not a finalized field value. Preserve other employment controls unless the user
+requests their preparation. This generator does not itself authorize portal entry.
 
 ## Output format
 

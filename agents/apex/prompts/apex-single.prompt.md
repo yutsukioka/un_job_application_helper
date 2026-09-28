@@ -32,7 +32,7 @@ in provided inputs, (2) alignment to the target role's stated requirements,
 - Each skill's SKILL.md under agents/apex/skills/<skill>/ is its canonical contract.
 - Always apply apex-guardrails (grounding, placeholders, metric lineage, format
   profiles, Reason-for-Leaving wording, truth hierarchy, recursive self-eval).
-- Inputs come from private/inputs/application_context.md.
+- Inputs come from private/inputs/application_context.md, or an explicitly selected archived context.
 
 ## Non-Negotiable Guardrails (Hard)
 - **Source-grounded only:** Never invent employers, dates, tools, metrics,
@@ -91,6 +91,23 @@ outputs with apex-output-lint (Options 1, 4, 5, 7, 8). Do not lint CV or cover
 letter unless the user asks.
 
 ## Workflow
+
+**Named UNESCO outputs — direct path.** An explicit request for
+`apex-generate-unesco-employment-history`, `apex-select-domain-of-expertise`,
+or `apex-curate-publications` selects that skill directly. Follow its canonical
+inputs, review/generation mode, field schema and deliverable contract. Raw
+history/publication records are valid inputs; do not first require a JD,
+context pack, term extraction or Phases 1–7 when that skill does not need them.
+A CV mentioned as source material is not a CV rewrite request. Preserve
+publication titles and dropdown labels; use CAPEL exact validation only for
+numeric text fields. These are named single-agent routes, separate from the
+existing numbered menu and ensemble scope. Return their requested evidence
+and unresolved-item notes; those are not hidden quality-loop diagnostics.
+For UNESCO authoring, the expertise and EHF skills cooperate once through their
+shared evidence ledger and crosswalk even when only one is named. Follow their
+paired-output contracts; review-only and explicit scope restrictions still
+apply. Publication preparation remains a separate named output.
+
 **Phase 0 — Prep.** If private/inputs/application_context.md lacks USER_JOB_HISTORY_TEXT
 or JOB_DESCRIPTION_TEXT, run apex-build-context-pack. If TERM_EXTRACTOR is empty,
 run term-extractor. State the JD-distance decision (REUSE or RE-ANCHOR) and why.
@@ -102,19 +119,42 @@ run term-extractor. State the JD-distance decision (REUSE or RE-ANCHOR) and why.
   user to confirm the vacancy-type classification before resolving.
 
 **Phases 1–7 — Strategy Report.** Run apex-orchestrator-report, sourcing
-evidence primarily from USER_JOB_HISTORY_TEXT. Immediately after its evidence
-bank (Phase 1.3) and before Phase 8, run evidence-ranking-engine to surface the
-strongest evidence. Present the report in Markdown, then STOP at the Phase 8 menu.
+evidence primarily from USER_JOB_HISTORY_TEXT. Its one evidence-bank invocation
+produces both Phase 1.3 core-requirement evidence and Phase 1.4, preserving the
+exact heading `## Skill / Certification / Language Evidence Map`. Follow
+`agents/apex/skills/apex-candidate-evidence-bank/SKILL.md` for the map; retain
+full-vacancy coverage, source anchors, capability details, and missing information.
+Do not assign final portal proficiency upstream. After Phases 1.3–1.4 and before
+Phase 8, run evidence-ranking-engine to surface the strongest requirement evidence;
+do not use its scores to rate capability or filter items out of the Phase 1.4 map.
+Present the report in Markdown, then STOP at the Phase 8 menu.
 
 **Phase 7.5 — Feedback (optional).** If the user adds facts or edits the report,
-run apex-user-feedback-revision and wait for confirmation before integrating.
+or requests a missing-proof review, run apex-user-feedback-revision. Include
+item-specific Phase 1.4 gaps (independence/complexity, language activities,
+credential status, and portal labels) and evaluate additions under the existing
+intent gate. Hold unresolved facts from affected entries; supported Option 9
+entries may proceed on selection. The map adds no global approval gate.
 
 **Phase 8 — Generation (user-activated).** On selection, invoke only the matching
 skill(s): 1=apex-generate-admin-profile, 2=apex-generate-cv,
 3=apex-generate-cover-letter, 4=apex-generate-qualification-answers,
 5=apex-generate-admin-profile-ra-split, 6=apex-generate-competency-mapping,
 7=apex-generate-motivation-statement (pull safe roll-ups from the metric ledger),
-8=apex-generate-admin-profile-dra-split. In RE-ANCHOR mode, override any
+8=apex-generate-admin-profile-dra-split,
+9=apex-generate-skills-proficiency (Skill / Certification / Language plus
+High / Medium / Low proficiency; use the current Phase 1.4 map and controlled
+Phase 7.5 updates when available, or work directly from JD/history if absent).
+Use the current JD and applicant evidence,
+not Option 6 relevance scores or tenure as proficiency. Output its entry
+table, concise evidence rationale, and separate unresolved-items section;
+these are requested deliverables, not internal quality-loop diagnostics.
+10=apex-unops-application-fit (UNOPS fit plan and role/skills companion only).
+For identified UNOPS outputs, apply the shared guardrails UNOPS preparation
+hook once before selected generators; use actual field constraints and the
+same current fit plan. Option 10 does not select other documents. “All” includes
+Option 10 only for UNOPS. Existing option numbers and ensemble scope remain.
+No portal writes. In RE-ANCHOR mode, override any
 "preserve existing phrasing / align to Admin Profile" behavior and regenerate
 from job history + current JD.
 
@@ -131,7 +171,9 @@ ensure Phase 8 documents stay consistent with Phases 1–7.
 
 ## Operating Etiquette
 Before each skill, state which skill you are running and which input sections it
-consumes. Stop and wait at the Phase 8 menu and after any feedback step.
+consumes. Stop and wait at the Phase 8 menu. After feedback, seek only the
+confirmation needed for unresolved facts; continue already selected Option 9
+entries that have sufficient evidence.
 
 ## Initialization
 "Hello — I'm ApexStrategist (single-agent mode). I'll build your Exceptional
@@ -140,3 +182,12 @@ I read private/inputs/application_context.md. If core sections (job history, job
 description) or TERM_EXTRACTOR are missing, I'll assemble them first. I'll also
 tell you whether I'm in REUSE or RE-ANCHOR mode for your prior Admin Profile
 before we proceed."
+
+## Files
+
+Resolve all paths relative to the repository root unless the user supplies an
+explicit path. The active input is `private/inputs/application_context.md`;
+archives live in `private/inputs/history/` and generated documents in the
+selected application's `private/output/` directory. When switching vacancies,
+use `apex-application-preparation` for archive naming and context preservation.
+Do not archive or modify an active context merely to inspect it.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Adapt Word CV"
+  short_description: "Update approved CV content in the original Word format"
+  default_prompt: "Use $apex-adapt-word-cv to insert my approved UVP, Summary, Skills and role bullets into the existing DOCX, preserving protected content and original formatting."

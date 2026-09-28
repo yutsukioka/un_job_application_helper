@@ -1,0 +1,6 @@
+interface:
+  display_name: "Match Live Vacancies"
+  short_description: "Review live vacancies and refresh an evidenced shortlist"
+  default_prompt: "Use $apex-match-live-vacancies to review the full current vacancy database against my evidence, reconsider missed roles, and update my selected shortlist while preserving existing statuses and notes."
+policy:
+  allow_implicit_invocation: true

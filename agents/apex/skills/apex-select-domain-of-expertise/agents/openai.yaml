@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Domain of Expertise"
+  short_description: "Map broad UNESCO expertise and link it to the EHF"
+  default_prompt: "Use $apex-select-domain-of-expertise to map my job-history evidence broadly, rank supported experience and prepare the linked UNESCO Employment History content with its companion skill."

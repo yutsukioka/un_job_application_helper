@@ -102,13 +102,14 @@ Downstream generators must not silently absorb unresolved or conflicting updates
 
 ### Recommended feedback loop
 
-1. Run `apex-orchestrator-report` to produce the Phase 1-7 strategy report.
+1. Run `apex-orchestrator-report` to produce the Phase 1-7 strategy report, including Phase 1.4 Skill / Certification / Language Evidence Map from the existing evidence-bank invocation.
 2. Run `apex-user-feedback-revision` (Phase 7.5) to:
    - surface `Gap / Missing proof`
    - surface `Mitigation strategies`
    - surface `## Metrics & Specifics Needed`
+   - surface Phase 1.4 item-specific evidence gaps for Option 9 (independence/complexity, language activities, credential status, or portal labels)
    - evaluate user edits or ad-hoc additions without blind adoption
-3. After the user confirms or fills missing items, regenerate selected Phase 8 documents.
+3. After the user confirms or fills missing items, regenerate selected Phase 8 documents. Supported Option 9 entries may proceed on selection while unresolved items remain separate; Phase 1.4 adds no global approval gate.
 
 ## Target application system (IMPORTANT)
 
@@ -122,6 +123,8 @@ High-level behavior:
 - **INSPIRA**: strict character limits for specific fields (e.g., "Summary of duties..." often 1000 chars incl. spaces). Typically separate fields exist such as "Reason for leaving".
 - **UNICEF**: "Your responsibilities" field is often longer (e.g., 2500 chars incl. spaces). "Reason for leaving" is typically separate.
 - **IOM** (and some Oracle-based systems): often separate "Responsibilities" and "Achievements" (may be unlimited). Prefer content quality over compression unless a numeric limit is provided.
+- **UNOPS**: use `TARGET_SYSTEM: OTHER` and `TARGET_ORGANIZATION: UNOPS`. Option 10 prepares exact catalog skills and evidenced Position Areas; use observed field limits and keep unknown limits unresolved. Selected UNOPS generators share its fit plan through the guardrails preparation hook.
+- **World Bank**: use `TARGET_SYSTEM: OTHER`; Option 9 prepares Skill / Certification / Language entries with the confirmed High / Medium / Low choices. These proficiency recommendations use an advisory evidence rubric, not an official World Bank scoring scale.
 
 ## CAPEL / character control
 
@@ -143,21 +146,23 @@ Do NOT lint CV or cover letter unless the user explicitly asks.
 
 ## Skills
 
+- `apex-match-live-vacancies`: Rescan the live vacancy database against candidate evidence, review eligibility and earlier omissions, and update a selected shortlist while preserving existing entries, statuses and notes.
 - `apex-build-context-pack`: Build or refresh `private/inputs/application_context.md` with all raw application inputs.
+- `apex-application-preparation`: Archive the outgoing application context byte-for-byte under its position name, extract a selected live-database vacancy into the three job-input sections, reset prior classification/keywords, and set source-qualified ATS limits while preserving candidate evidence.
 - `term-extractor`: Extract exactly five high-priority terms from a job description with star ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in a strict four-line format.
 - `apex-jd-keyword-bank`: Extract a larger 20-40 phrase keyword bank from the JD (optional; complements `term-extractor`).
 - `apex-ccog-resolver`: Dynamically resolve relevant CCOG entries from the full ICSC database for a specific vacancy. Reads the full database, scores entries against JD signals and the user-confirmed vacancy-type classification only, selects a compact 10-20 entry subset, and clears the full database from context.
 
 - `apex-jd-core-requirements`: Extract the top 5-7 core requirements (and any knockout criteria) from the job description and requirement text.
-- `apex-candidate-evidence-bank`: Map job-history evidence to JD core requirements and identify gaps with mitigation ideas.
+- `apex-candidate-evidence-bank`: Map job-history evidence to JD core requirements (Phase 1.3), identify gaps with mitigation ideas, and prepare the Phase 1.4 Skill / Certification / Language Evidence Map across the full vacancy. Capture source-grounded capability and missing information; final proficiency remains Option 9's responsibility.
 - `apex-keyword-insertion-map`: Identify 8–12 must-use phrases and specify where to place them across relevant Phase 8 outputs.
 - `apex-bullet-enhancer`: Rewrite 2-3 existing job bullets with stronger action verbs, measurable outcomes, and keyword alignment.
 - `apex-star-story-blueprints`: Generate 3-4 STAR story blueprints tied to critical requirements.
-- `apex-uvp-statement`: Produce a concise 1-2 sentence UVP tailored to the role and organization.
+- `apex-uvp-statement`: Produce a concise 1–2 sentence UVP tailored to the role and organization.
 - `apex-cover-letter-pointers`: Provide strategic recommendations for tailoring a cover letter to the target role.
 - `apex-impression-tips`: Provide tone/language guidance and final polish tips to improve application impact.
-- `apex-coaching-reflection`: Generate 1-2 open-ended reflection questions for interview and role-fit preparation.
-- `apex-user-feedback-revision` (Phase 7.5): Extract missing-proof items from the strategy report and evaluate user edits/ad-hoc additions using an intent gate and Candidate Assertion Ledger. Optionally writes `private/inputs/user_feedback_updates.md` for controlled regeneration.
+- `apex-coaching-reflection`: Generate 1–2 open‑ended reflection questions for interview and role-fit preparation.
+- `apex-user-feedback-revision` (Phase 7.5): Extract missing-proof items, including Phase 1.4 evidence gaps needed for Option 9, and evaluate user edits/ad-hoc additions using an intent gate and Candidate Assertion Ledger. Optionally writes `private/inputs/user_feedback_updates.md` for controlled regeneration.
 
 Phase 8 document generation options (current mapping):
 
@@ -169,8 +174,64 @@ Phase 8 document generation options (current mapping):
 - `apex-generate-competency-mapping` (Option 6): Competency Mapping: skills per job with relevance scores and total experience per skill.
 - `apex-generate-motivation-statement` (Option 7): Motivation Statement: Inspira-style VACC framework motivation statement, max 2000 characters with spaces.
 - `apex-generate-admin-profile-dra-split` (Option 8): Admin Profile (ATS Duties, Responsibilities & Achievements separated): per role, Duties, Responsibilities, and Achievements as separate sections, bullets allowed, plus Direct Reports and Reason for Leaving. It cooperates with Option 5 for Achievements, Direct Reports, and Reason for Leaving.
+- `apex-generate-skills-proficiency` (Option 9): Skill / Certification / Language entries with High, Medium, or Low proficiency, selected from the vacancy and grounded in applicant evidence. Use the current Phase 1.4 evidence map and controlled Phase 7.5 updates when available; direct JD/job-history generation remains supported. Keep proficiency separate from Option 6 relevance scores and tenure; keep unresolved entries in a separate review section.
+
+- `apex-unops-application-fit` (Option 10): UNOPS fit plan and role/skills companion, with exact dictionary labels, evidence-backed Position Areas, requirement coverage and unresolved field constraints. Standalone invocation does not regenerate other outputs; selected UNOPS documents reuse the fit plan.
+
+Named UNESCO deliverables (direct invocation; numbered options unchanged):
+
+- `apex-generate-unesco-employment-history`: prepare/fill the UNESCO EHF and synchronize its role narratives with the companion expertise map; preserve document fields and layout.
+- `apex-select-domain-of-expertise`: broadly map job-history evidence to the verified UNESCO inventory, rank supported experience, and synchronize the companion EHF through a shared evidence ledger and crosswalk.
+- `apex-curate-publications`: review attribution/status and prepare the actual Title / optional Year / free-text Domain publication fields.
+
+These skills accept raw inputs directly; they do not require Phases 1–7 or a completed context pack. Use `TARGET_SYSTEM: OTHER` with `TARGET_ORGANIZATION: UNESCO` when a context pack is used. Preserve immutable titles and controlled labels; use `capel-fit` exact validation for numeric native-text limits. Keep unresolved records outside clean portal rows. They prepare artifacts and do not submit profile changes.
+
+For UNESCO authoring, either the expertise or EHF skill activates the paired
+workflow in their canonical contracts, once per run. Review-only and explicit
+scope restrictions remain in force. Publications and other application outputs
+are separate; invoking the pair does not request their regeneration.
+
+Word document adaptation (approved-content transfer):
+
+- `apex-adapt-word-unu-p11`: transfer selected Phase 8 outputs into the UNU P11
+  Word form, preserving native controls, tables and formatting; validate P11
+  word/character limits and keep unresolved personal declarations separate.
+
+- `apex-adapt-word-cv`: transfer approved UVP, Summary, Skills and role bullets
+  into an existing Word CV while preserving protected content and original
+  formatting. Use for faithful DOCX adaptation, not CV regeneration or redesign.
+- `apex-adapt-word-cover-letter`: replace approved date/body text in an existing
+  Word cover letter and save under the requested name while preserving its
+  formatting, salutation, contacts and sign-off. Also supplies the shared OOXML
+  helper used by the Word CV adapter.
 
 Utilities / enforcement:
+
+The ATS input skills below use Codex Browser (the in-app browser), not
+Computer Use. Their documented unified-runtime browser surface is permitted;
+native-app and desktop APIs are excluded. If the browser route is unavailable,
+keep the affected step pending and continue independent local work.
+
+- `apex-unops-ats-input`: inspect UNOPS Careers Marketplace forms and enter or
+  revise selected approved duties, Position Areas, skills, screening answers and
+  attachments through Codex Browser. Verify saved values, distinguish shared
+  profile scope, preserve unselected fields and leave submission to the user.
+- `apex-unicef-ats-input`: enter approved Option 1 responsibilities, selected
+  application answers and referee details, and final CV/cover-letter files into
+  an existing UNICEF PageUp draft. Preserve unselected fields, verify saved
+  changes, and leave the application unsubmitted.
+- `apex-inspira-ats-input`: fill selected Inspira draft fields from approved
+  Options 1, 4 and 7 and replace requested CV/cover-letter attachments. Preserve
+  unselected fields, verify saved changes, and never submit or certify the application.
+- `apex-iom-ats-input`: inspect IOM WAVE / Oracle vacancies and application pages,
+  extract the three job-input sections, compare the context, and map live fields
+  to Phase 8. Enter selected approved draft content only when requested; never
+  submit, sign or assert completeness. Keep comparison artifacts separate from
+  a context being used by another active run.
+- `apex-wmo-ats-input`: inspect WMO Oracle vacancies and application pages,
+  extract the three job-input sections, and map observed fields to requested
+  Phase 8 outputs. Enter selected approved draft content only when requested;
+  keep `application_context.md` unchanged and never submit or sign.
 
 - `apex-guardrails`: Enforce workflow constraints such as source-grounding, placeholder use, keyword integrity, and format profiles.
 - `apex-output-lint`: Validate and minimally fix formatting for e-recruitment field constraints (profile-based).
@@ -181,3 +242,11 @@ Utilities / enforcement:
 Each skill definition is located at:
 
 - `agents/apex/skills/<skill-name>/SKILL.md`
+
+ATS skills use the `apex-<organization>-ats-input` naming pattern; Word adapters
+use `apex-adapt-word-<document>`. Keep each folder name, `SKILL.md` frontmatter
+name and `agents/openai.yaml` invocation in
+agreement. This catalog documents routing; Codex `$` discovery also requires the
+skill to be exposed in a scanned location. This setup uses reversible symlinks
+at `~/.agents/skills/<skill-name>` pointing to the canonical repository folders.
+Restart Codex if a newly installed or renamed skill does not appear.

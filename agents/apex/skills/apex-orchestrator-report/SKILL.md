@@ -3,7 +3,8 @@ name: apex-orchestrator-report
 description: >-
    Produce the full Exceptional Application Strategy Report (Phases 1-7)
    and then present the Phase 8 document generation menu. This
-   orchestrator sequences: core requirements, evidence mapping, headline
+   orchestrator sequences: core requirements, evidence mapping, Skill /
+   Certification / Language evidence preparation, headline
    optimization, keyword planning, bullet enhancements, STAR blueprints,
    UVP, cover pointers, impression tips, and coaching reflections. It
    then stops and waits for the user's Phase 8 selections.
@@ -48,6 +49,9 @@ Read from `private/inputs/application_context.md`. Expected sections:
 - (Optional) `JD_KEYWORD_BANK`
 - `SKILLS_TAXONOMY`
 - `LIMITS` (must include `TARGET_SYSTEM` and character guidance if applicable)
+- (Optional) `USER_CERTIFICATIONS_TEXT`, `USER_LANGUAGES_TEXT`,
+  `PORTAL_SKILL_ENTRIES`, `PORTAL_ENTRY_MODE` and `PORTAL_PROFICIENCY_GUIDANCE`;
+  missing optional evidence or portal labels does not block the strategy report.
 
 If critical sections are missing (especially `USER_JOB_HISTORY_TEXT` or `JOB_DESCRIPTION_TEXT`),
 stop and recommend running `apex-build-context-pack`.
@@ -56,7 +60,7 @@ stop and recommend running `apex-build-context-pack`.
 
 - Use Markdown headings for Phases 1–7.
 - Provide concise, actionable bullets (avoid walls of text).
-- Conclude with the Phase 8 menu (8 selectable items).
+- Conclude with the Phase 8 menu (10 selectable items).
 - Do not generate Phase 8 documents until user chooses.
 
 ## Steps
@@ -75,6 +79,16 @@ stop and recommend running `apex-build-context-pack`.
 1.2 Use `apex-jd-core-requirements` to identify the top 5-7
 core requirements + knockout criteria if present.
 1.3 Use `apex-candidate-evidence-bank` to map candidate's evidence to each core requirement and identify gaps with 1-2 concrete mitigation strategies per gap.
+1.4 Present **Skill / Certification / Language Evidence Map** using the additional
+`## Skill / Certification / Language Evidence Map` section returned by that same
+`apex-candidate-evidence-bank` invocation. Preserve this exact section heading and
+identify it as Phase 1.4 immediately after Phase 1.3; do not rerun the bank or
+duplicate the map in Phase 1.3. Follow the [evidence-bank contract](../apex-candidate-evidence-bank/SKILL.md)
+for the map's fields and source handling. Cover relevant skills, credentials,
+and languages across the full vacancy, including items beyond the top 5-7 core
+requirements. Preserve source anchors, demonstrated capability, missing details,
+and portal-label provenance when supplied. This prepares evidence only: final
+portal labels and High / Medium / Low recommendations belong to Option 9.
 
 (Optional) If the JD is complex and `JD_KEYWORD_BANK` is missing, recommend running:
 - `apex-jd-keyword-bank` and pasting into JD_KEYWORD_BANK.
@@ -99,6 +113,14 @@ Use `apex-impression-tips` to provide tone/language recommendations and final re
 ### Phase 7 — Coaching reflection
 Use `apex-coaching-reflection` to pose 1-2 open-ended reflection questions.
 
+### Phase 7.5 — Feedback when requested or when new assertions are supplied
+Use `apex-user-feedback-revision` to surface the Phase 1.4 map's specific
+evidence gaps alongside the existing missing-proof review. Route new or revised
+facts through its intent gate and Candidate Assertion Ledger. Keep unresolved
+Option 9 items separate; supported entries may proceed when Option 9 is selected.
+This adds no new global approval gate and does not change the Phase 8 selection
+requirement.
+
 ### Phase 8 — Menu presentation (no generation yet)
 Present the menu below and stop.
 
@@ -108,7 +130,7 @@ Present the menu below and stop.
 
 **Phase 8: Document Generation (User-Activated)**
 
-Select one or more of these 8 items to generate. You may choose any
+Select one or more of these 10 items to generate. You may choose any
 combination (for example, "1, 3, 4" or "all"):
 
 1. **`apex-generate-admin-profile` — Option 1**
@@ -135,11 +157,40 @@ combination (for example, "1, 3, 4" or "all"):
 8. **`apex-generate-admin-profile-dra-split` — Option 8**
    Admin Profile (ATS Duties, Responsibilities & Achievements separated): per role, Duties, Responsibilities, and Achievements as separate sections, bullets allowed, plus Direct Reports and Reason for Leaving. It cooperates with Option 5 for Achievements, Direct Reports, and Reason for Leaving.
 
+9. **`apex-generate-skills-proficiency` — Option 9**
+   Skill / Certification / Language: vacancy-aligned entries with evidence-based High, Medium, or Low proficiency, plus separate evidence and confirmation notes. Uses supplied portal labels exactly; otherwise proposes draft labels. Proficiency is separate from Option 6 relevance scores and tenure.
+
+10. **`apex-unops-application-fit` — Option 10**
+    UNOPS application fit: evidence-backed Position Areas, exact dictionary skills, requirement coverage and a role/skills companion. Applies to UNOPS only; other documents require their own selection. “All” includes this option only for an identified UNOPS target.
+
 Reply with your selection(s). I will generate only the selected items.
+
+UNESCO applicants may also select named outputs without changing the numbered options:
+
+- `apex-generate-unesco-employment-history`: EHF drafting with its companion
+  expertise map and role-to-narrative evidence links.
+- `apex-select-domain-of-expertise`: verified area/subarea selections and
+  ranked supported experience, with a companion EHF and shared evidence ledger.
+- `apex-curate-publications`: publication review or exact portal entries.
+
+These skills support direct raw-input invocation without Phases 1–7. A UNESCO
+authoring request to either expertise or EHF activates their paired workflow
+once; respect review-only and explicit narrower scope. Apply each canonical
+skill's fields, sources and limits; other outputs remain separately selected.
+Do not dispatch them to Option 1, Option 4, Option 6 or Option 9 merely because
+their inputs mention history, a CV, screening or skills. Their runtime is
+single-agent; selecting one does not expand the ensemble's supported outputs.
 
 ---
 
 ## Phase 8 generation guidance (for when the user selects)
+For an identified UNOPS target, first apply the
+[UNOPS preparation hook](../apex-guardrails/SKILL.md#unops-phase-8-preparation).
+Run it once and pass its current fit plan to the selected generators. A standalone
+Option 10 selection does not select any other documents. Options 1–9 retain
+their meaning; actual UNOPS field constraints take precedence over platform
+analogies or fallback caps. Missing constraints hold affected portal values only.
+
 When generating documents, apply the correct format profiles:
 
 - Option 1: `inspira_field_strict` or `unicef_field_strict` (based on TARGET_SYSTEM).  
@@ -159,6 +210,12 @@ When generating documents, apply the correct format profiles:
   1950–2000 band.
 
 - Option 8: `ats_dra_split` (bullets allowed). Cooperates with Option 5 (`apex-generate-admin-profile-ra-split`) for Achievements, Direct Reports, and Reason for Leaving. Use `apex-output-lint` only if user requests linting.
+
+- Option 9: structured entry table and separate evidence/confirmation sections under `apex-generate-skills-proficiency`. Pass the current Phase 1.4 evidence map and controlled Phase 7.5 updates when available; its direct JD/job-history route remains valid when a map is absent. Use its advisory proficiency rubric unless the application provides definitions. Do not assign proficiency from JD priority, Option 6 relevance, or tenure alone; keep unresolved ratings outside the entry table. No strict lint or CAPEL by default; apply numeric field limits only when supplied. This option prepares an artifact and does not write to a recruitment portal.
+
+- Option 10: `strategy_markdown` review and JSON sidecars; clean companion values only for observed fields. Follow `apex-unops-application-fit`; no portal writes.
+
+Ensemble v2 currently supports Options 1-4 and 7. Generate Options 5, 6, 8, 9, and 10 with their single-agent skills; selecting them does not expand the ensemble scope.
 
 If the user generates multiple documents, recommend running `apex-cross-doc-consistency` to flag any mismatches.
 
