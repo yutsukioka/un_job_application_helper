@@ -1,0 +1,464 @@
+{
+  "snapshot_date": "2026-09-13",
+  "source": {
+    "har_sha256": "64fc478e26e6130cf3101618fd7d11223c054356914f57db1621485d74673616",
+    "entry_count": 496,
+    "captured_from": "2026-09-13T10:33:29.502Z",
+    "captured_through": "2026-09-13T10:36:59.516Z",
+    "company_basis": "verified_company_hint_in_each_capture",
+    "provenance_reference": "unesco-taxonomy-provenance.md",
+    "manifest_reference": "unesco-source-manifest-2026-09-13.json",
+    "canonical_records_sha256": "ae62227c76e96af2215953af8618eb2777eebcb2339308921911551905a879b5"
+  },
+  "counts": {
+    "areas": 19,
+    "subareas": 420
+  },
+  "canonical_records_sha256": "ae62227c76e96af2215953af8618eb2777eebcb2339308921911551905a879b5",
+  "taxonomy_responses": [
+    {
+      "entry_index_zero_based": 433,
+      "response_sha256": "c5b701e3b044c8d71d757ff24af4e16e897b56d11432428fe8d043af09204610",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 435,
+      "response_sha256": "fc83eaa93f38eb636045d3045c290ede9d1fcbc4f77007e57996b06698ece1fb",
+      "picklist": "SubArea",
+      "parent_id": "38734",
+      "total_count_including_placeholder": 2
+    },
+    {
+      "entry_index_zero_based": 436,
+      "response_sha256": "a863acfc9468ceb98c1d0af7c3f54638960e5c049072786704904b1ffda8d29b",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 437,
+      "response_sha256": "5def822a7bcb85c34b1db8761d4f640c461f27246d107b0fb78e4005f1cccd9b",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 438,
+      "response_sha256": "7d762ea69ac0815bd20580ae7ae47484554fb827824c8c4648af06ee83f36baf",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 439,
+      "response_sha256": "3469f11eb1696401ec504266dd7cb60248fef938d5c17d651701bf68aec1f38f",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 440,
+      "response_sha256": "3eddbd418d97c0d21528215409c67e6e53f6b2a35dabf33940f4666fce51fcfe",
+      "picklist": "SubArea",
+      "parent_id": "38735",
+      "total_count_including_placeholder": 17
+    },
+    {
+      "entry_index_zero_based": 441,
+      "response_sha256": "a01570c6a8e506588e9961c3c8ffd90ecec2adb7cb97d245a7c0945ba3e52578",
+      "picklist": "SubArea",
+      "parent_id": "38735",
+      "total_count_including_placeholder": 17
+    },
+    {
+      "entry_index_zero_based": 442,
+      "response_sha256": "ce9eece5706031098c4c390e79d0cf5e01e22b238ac4a155ad571fecd7fc8fb9",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 443,
+      "response_sha256": "7e2f868b30757c2625e5c26c1236501ed6bbef3ed61849ac27aa347ed702af85",
+      "picklist": "SubArea",
+      "parent_id": "38736",
+      "total_count_including_placeholder": 36
+    },
+    {
+      "entry_index_zero_based": 444,
+      "response_sha256": "215a34d7701b5e5fb6b7436e490fecf7b54a9cf7f06cd4545e5c864c382acdf6",
+      "picklist": "SubArea",
+      "parent_id": "38736",
+      "total_count_including_placeholder": 36
+    },
+    {
+      "entry_index_zero_based": 445,
+      "response_sha256": "899c270bf9c3f3f8b323882b9245dc573842c87a4aac1fa62ca50c8aace2e112",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 446,
+      "response_sha256": "ccfa23ba3582c4dfe44a86d71add847321ad0e5a8760eafda19156a06f86833b",
+      "picklist": "SubArea",
+      "parent_id": "38737",
+      "total_count_including_placeholder": 15
+    },
+    {
+      "entry_index_zero_based": 447,
+      "response_sha256": "43b24091de24f1dfd212163590c6bc3cc1160943bae510a3530631b80d420f7a",
+      "picklist": "SubArea",
+      "parent_id": "38737",
+      "total_count_including_placeholder": 15
+    },
+    {
+      "entry_index_zero_based": 448,
+      "response_sha256": "b39b194cb7d67e27f8b9f8aa3b4edf5c1dbb9d86af791d223575525b939899b4",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 449,
+      "response_sha256": "30022253a45d606cc3d3abe25d754c019bc834e55a110d3f0a1a840d262a5d42",
+      "picklist": "SubArea",
+      "parent_id": "38738",
+      "total_count_including_placeholder": 44
+    },
+    {
+      "entry_index_zero_based": 450,
+      "response_sha256": "a533bfb4f38af0a7b2ef0db197d84d6f01d4f81b5379cf2faa3ba409e8e3653e",
+      "picklist": "SubArea",
+      "parent_id": "38738",
+      "total_count_including_placeholder": 44
+    },
+    {
+      "entry_index_zero_based": 451,
+      "response_sha256": "2230fcd12fc666e4bdd2e25fd624d68788835862c31819304e0e64ade2f1dd7f",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 452,
+      "response_sha256": "b992d9b8e34ad4622b464c4f6d2471755b255c3337324cb242a8117853b3d63f",
+      "picklist": "SubArea",
+      "parent_id": "38739",
+      "total_count_including_placeholder": 8
+    },
+    {
+      "entry_index_zero_based": 453,
+      "response_sha256": "f6fcf6fd8e6bdaeeccce0774a356c1ba0e2bb37018a9a9e619bb2646e0d94011",
+      "picklist": "SubArea",
+      "parent_id": "38739",
+      "total_count_including_placeholder": 8
+    },
+    {
+      "entry_index_zero_based": 454,
+      "response_sha256": "7d68ae536ea35681e788cc9bafaaa26947b220616c5d22375ff950f3547e3852",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 455,
+      "response_sha256": "efe35a309689a6de00bf5a794bc12a819b2fdcdde6f42f7b22ba7f379c1c5132",
+      "picklist": "SubArea",
+      "parent_id": "38740",
+      "total_count_including_placeholder": 74
+    },
+    {
+      "entry_index_zero_based": 456,
+      "response_sha256": "9998a4e934f340a1431c887c7ccfab31a730ed7ec6c1b7ebf54096a0d87f0900",
+      "picklist": "SubArea",
+      "parent_id": "38740",
+      "total_count_including_placeholder": 74
+    },
+    {
+      "entry_index_zero_based": 457,
+      "response_sha256": "ad4ec6a9f8a6b6e3531303a1e5e0f15106ae16ac283a5f1f9ed559e86aaee8f5",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 458,
+      "response_sha256": "345fe771906f9f9379e1355cbe6c260446bc7522e61e7aba73ee84451fc1a9c1",
+      "picklist": "SubArea",
+      "parent_id": "38741",
+      "total_count_including_placeholder": 11
+    },
+    {
+      "entry_index_zero_based": 459,
+      "response_sha256": "23f90b7c500d9b4cbf42a1b56dff117bbb31a2edb28034382459e446bdbf3bf8",
+      "picklist": "SubArea",
+      "parent_id": "38741",
+      "total_count_including_placeholder": 11
+    },
+    {
+      "entry_index_zero_based": 460,
+      "response_sha256": "16c2a9763b72c4b42cd9d2014f2075a0321edc6682efedb680dcf46d4321682a",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 461,
+      "response_sha256": "5e707b5fc93b5db08840b53f08541a32eaf6a4307b70959226f023baffb9bcd0",
+      "picklist": "SubArea",
+      "parent_id": "38742",
+      "total_count_including_placeholder": 3
+    },
+    {
+      "entry_index_zero_based": 462,
+      "response_sha256": "af7d4872408d860ff5802b254bcef643b9444324b0130f7b5029d9cf97d5dc4a",
+      "picklist": "SubArea",
+      "parent_id": "38742",
+      "total_count_including_placeholder": 3
+    },
+    {
+      "entry_index_zero_based": 463,
+      "response_sha256": "5f5358d5eee244dc6605ed226d2dcd3a8f370d30e8e8bfc2382d5e81cfd00b07",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 464,
+      "response_sha256": "ad54a314cecca6afd5ed04118dc59e32a8400b1af228c990e74106b1c41e48e2",
+      "picklist": "SubArea",
+      "parent_id": "38743",
+      "total_count_including_placeholder": 7
+    },
+    {
+      "entry_index_zero_based": 465,
+      "response_sha256": "1d14818075345658f91ba5367b44e4243193fbe28b58ad0ffc58ed527d8f41dd",
+      "picklist": "SubArea",
+      "parent_id": "38743",
+      "total_count_including_placeholder": 7
+    },
+    {
+      "entry_index_zero_based": 466,
+      "response_sha256": "d204319bfb727c9e58f88e786afec97d8cd082e3b1edc87eac0bc29b72d0b803",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 467,
+      "response_sha256": "2d7d446d83810f3ad656d33aca0dc38219926de21aa961fc9fe3c9bd97864908",
+      "picklist": "SubArea",
+      "parent_id": "38744",
+      "total_count_including_placeholder": 10
+    },
+    {
+      "entry_index_zero_based": 468,
+      "response_sha256": "b0fd71edbcff99d30dba352b31122dd9b8f13a476b829879a3926cbb43e09802",
+      "picklist": "SubArea",
+      "parent_id": "38744",
+      "total_count_including_placeholder": 10
+    },
+    {
+      "entry_index_zero_based": 469,
+      "response_sha256": "6417d4c61dee409787a6b76149b724317646a0e2d875e7975fe2f3c28c845e10",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 470,
+      "response_sha256": "970f93efe24fce38add88d5bfbc0f3e6160e32b78558279a6d2cea44056ffe9d",
+      "picklist": "SubArea",
+      "parent_id": "38745",
+      "total_count_including_placeholder": 19
+    },
+    {
+      "entry_index_zero_based": 471,
+      "response_sha256": "6884c046e4dce4b8c9431264d7d546c6fe94c70314c9955ca3dd27bc3be20965",
+      "picklist": "SubArea",
+      "parent_id": "38745",
+      "total_count_including_placeholder": 19
+    },
+    {
+      "entry_index_zero_based": 472,
+      "response_sha256": "688886f7c052baa19231655bbe5bd9878f172a722d1954447f249819c11f4595",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 473,
+      "response_sha256": "ec3c6fdf551ddd2ad009144a51b1ab4da4f1ab3a9b20ded643eb050fae63d6eb",
+      "picklist": "SubArea",
+      "parent_id": "38746",
+      "total_count_including_placeholder": 10
+    },
+    {
+      "entry_index_zero_based": 474,
+      "response_sha256": "aec5f372d4a878c403bd5cc0a90da11a1f3545999d1760c6338b31a9b7ab4c43",
+      "picklist": "SubArea",
+      "parent_id": "38746",
+      "total_count_including_placeholder": 10
+    },
+    {
+      "entry_index_zero_based": 475,
+      "response_sha256": "c8ebced3d1a914150ae0ebd801c5333a705d256be64c95a319c2f5d5e6eb8bf4",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 476,
+      "response_sha256": "3f73b8ab673694f1f87b987911f85daa5cfdba690ffcf80b1fc7421adfea6ca5",
+      "picklist": "SubArea",
+      "parent_id": "38747",
+      "total_count_including_placeholder": 7
+    },
+    {
+      "entry_index_zero_based": 477,
+      "response_sha256": "5d9ce9a2af3bb9a74753a35edae47cfa3cd01065fcbbd99ebda65a0de14b9d0f",
+      "picklist": "SubArea",
+      "parent_id": "38747",
+      "total_count_including_placeholder": 7
+    },
+    {
+      "entry_index_zero_based": 478,
+      "response_sha256": "5affd38f6d1774bedd394724dcbe87a2a0c1c827b03219dea97af3a0e69f3ada",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 479,
+      "response_sha256": "8be5c5566d739cd762d41f74d3acc040eec1d942afe8ad947ac4e3798b9aa5da",
+      "picklist": "SubArea",
+      "parent_id": "38748",
+      "total_count_including_placeholder": 62
+    },
+    {
+      "entry_index_zero_based": 480,
+      "response_sha256": "09c9962e3e79fa49d1a94f9fa762e41ed00387232a51a1223fc6d8b1a5b219d7",
+      "picklist": "SubArea",
+      "parent_id": "38748",
+      "total_count_including_placeholder": 62
+    },
+    {
+      "entry_index_zero_based": 481,
+      "response_sha256": "836666dad86f93a9641d39fdd2000448df3651936b102fdaa85c2381bec24186",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 482,
+      "response_sha256": "f96fc79ee7a06b0ee183f07262435587a89b8c5d188778c449038e0622a29776",
+      "picklist": "SubArea",
+      "parent_id": "38749",
+      "total_count_including_placeholder": 2
+    },
+    {
+      "entry_index_zero_based": 483,
+      "response_sha256": "8dce08c8107dd90efc036ba9723de58f0c1b316ac62884f885bf2eaa59724d2b",
+      "picklist": "SubArea",
+      "parent_id": "38749",
+      "total_count_including_placeholder": 2
+    },
+    {
+      "entry_index_zero_based": 484,
+      "response_sha256": "c9ca0ad4dd3b2d9972ca3177391208cbf86126dcda30ef236869fc9f844e90f7",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 485,
+      "response_sha256": "b6453737d2f2babc8222f077667cb582bd6ea7ec9321795f7e585523d7ad8ef0",
+      "picklist": "SubArea",
+      "parent_id": "38750",
+      "total_count_including_placeholder": 11
+    },
+    {
+      "entry_index_zero_based": 486,
+      "response_sha256": "d7460ef5033cc13bd391b9d4f21b1a39286eba554a728cfd77f3d91d9b726e23",
+      "picklist": "SubArea",
+      "parent_id": "38750",
+      "total_count_including_placeholder": 11
+    },
+    {
+      "entry_index_zero_based": 487,
+      "response_sha256": "8326a8543391718008a3247a69bd5dc0fe67e1cb30bac830c0364384efa7579f",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 488,
+      "response_sha256": "6db9d670176f76debfa06ce45ac1aacef36f92ef47a15d5edb2c1bb5ab8730e2",
+      "picklist": "SubArea",
+      "parent_id": "38751",
+      "total_count_including_placeholder": 35
+    },
+    {
+      "entry_index_zero_based": 489,
+      "response_sha256": "ebaf454efc89e80ea37300b53d90a35ab7271ba85e195a1e12f52df69163cfc3",
+      "picklist": "SubArea",
+      "parent_id": "38751",
+      "total_count_including_placeholder": 35
+    },
+    {
+      "entry_index_zero_based": 490,
+      "response_sha256": "92b4c52fb3950b9b78d3c7efc98a912fc1591704876ff4aa652c6a885f4c5f0b",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 491,
+      "response_sha256": "68613afd4e83465a3fca8a12be46a0ad7671b6491f3f360e420de967fa2bdb5e",
+      "picklist": "SubArea",
+      "parent_id": "38752",
+      "total_count_including_placeholder": 66
+    },
+    {
+      "entry_index_zero_based": 492,
+      "response_sha256": "8c68d8e1451303426832df6cb78fd9b93505d00e453f09ac685736536850ed2f",
+      "picklist": "SubArea",
+      "parent_id": "38752",
+      "total_count_including_placeholder": 66
+    },
+    {
+      "entry_index_zero_based": 493,
+      "response_sha256": "3dede0b2800eae3c982b39df39a43a729922fb5019d4b2af3942cfa12161594d",
+      "picklist": "AreaExpertise",
+      "parent_id": null,
+      "total_count_including_placeholder": 20
+    },
+    {
+      "entry_index_zero_based": 494,
+      "response_sha256": "94ba7ed58e8a078454370a05ccbdbd20a7d01adf9c5b9d2f362f80dbb9c7b93d",
+      "picklist": "SubArea",
+      "parent_id": "38752",
+      "total_count_including_placeholder": 66
+    }
+  ],
+  "years_source": {
+    "har_sha256": "64fc478e26e6130cf3101618fd7d11223c054356914f57db1621485d74673616",
+    "entry_index_zero_based": 495,
+    "captured_at": "2026-09-13T10:36:59.516Z",
+    "response_sha256": "bfb6ce098c45895cf9186ed345464880a8d0ee13a002431a300860767f254fdb",
+    "picklist_id": "YearsOfExperience"
+  },
+  "expertise_fields_source": {
+    "sha256": "64fc478e26e6130cf3101618fd7d11223c054356914f57db1621485d74673616",
+    "bytes": 28178383,
+    "entryCount": 496,
+    "sourceEntryIndex": 410,
+    "indexConvention": "zero-based",
+    "sourceMethod": "rcmV12CandidateProfileControllerProxy.getCandidateProfileVO",
+    "responseSha256": "e732e198a09f1a05f5b36c68f4a25b4a43c3bc556d1e3e5fc15429890329bbcb",
+    "reviewedAtUTC": "2026-09-13T10:45:01.889205+00:00"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ IOM ATS Input"
+  short_description: "Inspect IOM forms and enter approved draft content"
+  default_prompt: "Use $apex-iom-ats-input with Codex Browser, not Computer Use, to inspect my IOM vacancy and application pages, compare the extracted context, and map the live fields to my requested Phase 8 outputs without submitting."

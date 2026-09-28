@@ -1,0 +1,208 @@
+{
+  "sourceUrl": "https://www.unesco.org/sites/default/files/medias/fichiers/2025/02/UNESCO%20Employment%20History%20Form.docx",
+  "retrievedDate": "2026-09-13",
+  "source": "UNESCO public DOCX linked by the observed candidate-profile header",
+  "sha256": "364ed4385a5542fde650a7e7bab5b7e03fae9792ad668e69f3d0b1e21194a30c",
+  "bytes": 42506,
+  "templatePathDate": "2025/02; not an asserted revision date",
+  "packageParts": [
+    {
+      "path": "[Content_Types].xml",
+      "bytes": 2782,
+      "sha256": "13cefbc15699612ce6c70774a2127552b825508e8cce7e2d316e0d75f4be23fe",
+      "policy": "preserve"
+    },
+    {
+      "path": "_rels/.rels",
+      "bytes": 883,
+      "sha256": "74d51edee3a58e2579b973d064c4cb071b94789dc5e3e6eaf2520eeedcb4d233",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/document.xml",
+      "bytes": 208707,
+      "sha256": "ab39c24a34ae6b5ac13ce6e434d9b129e4c74a2ffad79db01384a4e2a7a598f3",
+      "policy": "editable"
+    },
+    {
+      "path": "word/_rels/document.xml.rels",
+      "bytes": 2043,
+      "sha256": "e5c19941d5a62602bb983211e72404daa76ed82d4f4e9d087a858d1b5b5c19d8",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/footnotes.xml",
+      "bytes": 2843,
+      "sha256": "f1cb021b4acc44b0e81117812dc1f3d46376bbe8a0c1e77005e57db3bc5fdc5d",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/endnotes.xml",
+      "bytes": 2837,
+      "sha256": "5950db75b06b21647fbdc19d89d32966761d4d597879b86b0bb053d5a905b655",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/header1.xml",
+      "bytes": 5760,
+      "sha256": "73f8131d1ca989148f3d3e68118e25c6d3f4142fd7a0052bbfdf1d9704ce3b6f",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/footer1.xml",
+      "bytes": 3213,
+      "sha256": "e43459f13141fa9361bc72528b948132334a82cf2940b6d46c24ede3375bd769",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/_rels/header1.xml.rels",
+      "bytes": 289,
+      "sha256": "94bca6aec3177c3b64686e1248ecfb39e9750dc067c2274af33e6b442d1f6617",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/theme/theme1.xml",
+      "bytes": 6799,
+      "sha256": "2fc1eb21b61950e440496e896ec96386689edad2ca3bd95df0c134b32afe6431",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/media/image1.png",
+      "bytes": 4695,
+      "sha256": "52f5d7611ae8400733b80fea5c0fab11226453cd8378749e5675f40f1faa4de1",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/settings.xml",
+      "bytes": 5742,
+      "sha256": "14fde3cc1b7988f6d945efbd6f1d417ab8b7ae85dac5012e486da3a4f7ef299a",
+      "policy": "editable"
+    },
+    {
+      "path": "word/_rels/settings.xml.rels",
+      "bytes": 429,
+      "sha256": "b1a3a29f2a85d1179f1c9eb8a07f3ac34c7c2af8645797a4e6a37295f9651fee",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/item1.xml",
+      "bytes": 128,
+      "sha256": "fa2fe0496782615cb38c496727e134e55c188321fe32e16345f019e7eef27288",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/itemProps1.xml",
+      "bytes": 339,
+      "sha256": "3c7ab9e0263d77207fb0e54586ab7ece70e5a6c0358b13016b4f9a5280192483",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/item2.xml",
+      "bytes": 290,
+      "sha256": "b21b9cc9ff7d68daa06bcedaff78dd324bc614fe6c7d930ff92d2fd4a04a1106",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/itemProps2.xml",
+      "bytes": 425,
+      "sha256": "a50aa9497f9ada8711f549dd7ce9bd93872fecbe48ab79290fc5ed76dcd729b4",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/item3.xml",
+      "bytes": 219,
+      "sha256": "5efcaf9ad70d9c29f406ee438f8f428b021a881d2c5afff0e53b00b1f67ae51e",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/itemProps3.xml",
+      "bytes": 335,
+      "sha256": "201e7ed6d4d5b5ea130f7e8093edf940a45ae2e865545398c83a116b5ae5f182",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/item4.xml",
+      "bytes": 12341,
+      "sha256": "e545ba34a12cfa68bc9bdd4b6a50593cf7d6093513c5875ceb2ca5f0f4d565c9",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/itemProps4.xml",
+      "bytes": 1149,
+      "sha256": "805d88b9b16389eec7c06d2baecafe5e473d1c63cfd9d07b865ce61d935235cc",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/numbering.xml",
+      "bytes": 4125,
+      "sha256": "c602e88fa31bd76319cfaf94fde6f9b99c5196b5f306c6ac7175674a8f19961e",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/styles.xml",
+      "bytes": 32662,
+      "sha256": "2826a069ffd1a32edcdc80ffe496f981b12eaea565fe22095c0fa37b8d383ba3",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/webSettings.xml",
+      "bytes": 881,
+      "sha256": "1db4e67ff8b1ac46bb70115eb3b24129a3075e1a5a3e1dbb06bbb20eccfc5ef1",
+      "policy": "preserve"
+    },
+    {
+      "path": "word/fontTable.xml",
+      "bytes": 3330,
+      "sha256": "b2a63d70fd08eeadac55bb9c0bc69d51990a3973d61b33f840f2ecc8c8196d23",
+      "policy": "preserve"
+    },
+    {
+      "path": "docProps/core.xml",
+      "bytes": 801,
+      "sha256": "cbe1694de1eaad2dcb7b341ca8a4146713c69f08d12ead1f93a1c8e0c00375b9",
+      "policy": "preserve"
+    },
+    {
+      "path": "docProps/app.xml",
+      "bytes": 1047,
+      "sha256": "a5d299d31717fa965c536a35786ca45833a9b5e6e1d2e6e9f1f8fbe9ea34b55e",
+      "policy": "preserve"
+    },
+    {
+      "path": "docProps/custom.xml",
+      "bytes": 949,
+      "sha256": "3d8ebd9bf76ac91af599f78c4feb7181fbe6d93b5fa089918eec1c27936ef04c",
+      "policy": "preserve"
+    },
+    {
+      "path": "docMetadata/LabelInfo.xml",
+      "bytes": 323,
+      "sha256": "84cb2be8953806af4a22849cd7c0deebfed127a5327f81efad9df5f0887d4803",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/_rels/item1.xml.rels",
+      "bytes": 296,
+      "sha256": "80482f86e196171d66001e0e74d1900408a3aaf2463e54005d251b5f2db9a0b0",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/_rels/item2.xml.rels",
+      "bytes": 296,
+      "sha256": "2a6aee4c8a9714223a3568077411a0c82d11b484b1c9ab93a19d50b99c57baa5",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/_rels/item3.xml.rels",
+      "bytes": 296,
+      "sha256": "3aa4054f7f463c6d441102c960783aa7f937d6945a0a885b624a66aafaeedb6c",
+      "policy": "preserve"
+    },
+    {
+      "path": "customXml/_rels/item4.xml.rels",
+      "bytes": 296,
+      "sha256": "3c0d4d955517fe8112c945b1e56f63d5bef3c0005ccb627e40acda432e1cdc1d",
+      "policy": "preserve"
+    }
+  ]
+}

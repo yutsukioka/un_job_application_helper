@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ UNOPS ATS Input"
+  short_description: "Inspect UNOPS forms and revise approved draft content"
+  default_prompt: "Use $apex-unops-ats-input with Codex Browser to inspect my UNOPS application, enter or revise the selected approved fields and attachments, verify saved changes, and leave it unsubmitted."

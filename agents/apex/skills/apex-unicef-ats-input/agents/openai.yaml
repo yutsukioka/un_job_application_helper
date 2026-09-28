@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ UNICEF ATS Input"
+  short_description: "Fill approved UNICEF fields and save an unsubmitted draft"
+  default_prompt: "Use $apex-unicef-ats-input with the documented Codex Browser APIs, including the cua_repl browser surface when available, to enter my approved Option 1 responsibilities, specified answers and referees, and final CV and cover letter into the selected UNICEF draft, then save and exit without submitting. Do not use desktop automation."

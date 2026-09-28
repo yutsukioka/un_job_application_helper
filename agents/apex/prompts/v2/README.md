@@ -14,8 +14,14 @@ v1 prompts in the parent directory (single-agent linear mode).
 
 ## Phase 8 ensemble scope
 
+Strategy folds include Phase 1.4, `## Skill / Certification / Language Evidence Map`,
+from the existing evidence-bank invocation. C1 preserves its source evidence
+and missing details for Phase 7.5 and subsequent Option 9 generation; strategy
+folds do not assign final proficiency. See the
+[evidence-bank contract](../../skills/apex-candidate-evidence-bank/SKILL.md).
+
 Ensemble v2 generation currently covers Phase 8 Options 1-4 and Option 7.
-Options 5, 6, and 8 fall back to v1 single-agent generation unless the user
+Options 5, 6, 8, 9, and 10 fall back to v1 single-agent generation unless the user
 explicitly expands the v2 D/C2 scopes.
 
 ## File naming

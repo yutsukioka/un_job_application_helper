@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Publication Curation"
+  short_description: "Review publications and prepare truthful profile entries"
+  default_prompt: "Use $apex-curate-publications to review my publication list and prepare supported entries for the specified application fields."

@@ -26,7 +26,8 @@ It does not rewrite documents; it flags issues with specific locations and sugge
 
 Required:
 
-- At least two generated documents from Phase 8 (any combination of Options 1–8).
+- At least two generated application artifacts (Options 1–9 or the named
+  UNESCO EHF, expertise-selection and publication outputs).
 
 Optional:
 
@@ -49,11 +50,23 @@ Optional:
    source inputs. Flag any conflicting numbers.
 5. **Keyword usage:** Verify that high-priority keywords (★★★ and
    above) appear consistently across documents. Flag any document that
-   omits a critical keyword present in others.
+   omits a critical keyword present in others when that keyword is applicable
+   to the document. For Option 9, assess equivalent capability coverage using
+   the supplied portal taxonomy; do not require unavailable exact JD labels
+   or unsupported skills merely because they appear in other documents.
 6. **Narrative coherence:** Verify that the UVP, STAR stories, and key
    selling points referenced in the strategy report are reflected in
    the generated documents. Flag missing narrative threads.
 7. **Format compliance (only if strict-field outputs included):** If Option 1 or Option 4 outputs are included, flag bullets/line breaks/curly quotes that violate strict paste rules.
+8. **Skills, certifications, languages, and proficiency (when Option 9 is included):** Compare entry labels, credential status, language claims, and proficiency rationales against the CV, qualification answers, and source evidence. Flag unsupported upgrades, expired credentials presented as current, and conflicting language claims. Treat Option 6 relevance scores and experience totals as separate concepts, not proficiency equivalents. Draft labels and unresolved confirmation notes are review material; flag their accidental promotion into submission-ready claims.
+9. **Named UNESCO outputs:** reconcile EHF job identity/dates and exact source
+   facts, domain pair membership and per-domain period/cutoff evidence, and
+   publication attribution/status/title identity. Keep publication Domain
+   free text distinct from expertise categories. Do not require matching
+   keywords in immutable titles or invent proficiency from experience bands.
+   Apply each actual field's format; preserve native punctuation and keep
+   unresolved rows out of the clean selection/entry lists. An optional blank
+   publication year is not a contradictory or missing mandatory claim.
 
 ## Output format
 

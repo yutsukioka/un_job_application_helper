@@ -154,7 +154,7 @@ R1 feeds R2.
 
 ### Phase 8 ensemble scope
 Ensemble v2 generation currently covers Phase 8 Options 1-4 and Option 7.
-Options 5, 6, and 8 fall back to v1 single-agent generation unless the user
+Options 5, 6, 8, 9, and 10 fall back to v1 single-agent generation unless the user
 explicitly expands the v2 D/C2 scopes.
 
 ### Closer rule (v2)

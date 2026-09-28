@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Adapt Word UNU P11"
+  short_description: "Transfer Phase 8 content into the native UNU P11 form"
+  default_prompt: "Use $apex-adapt-word-unu-p11 to transfer my selected Phase 8 application outputs into the UNU P11 Word form, preserving its formatting and native controls and reporting unresolved fields."

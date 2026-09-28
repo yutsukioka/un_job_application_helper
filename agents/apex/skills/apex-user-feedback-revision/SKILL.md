@@ -5,6 +5,7 @@ description: >-
   evidence gaps, mitigation strategies, and metrics/specifics needed from the
   Phase 1-7 strategy report, then evaluating user ad-hoc additions or edited
   strategy-report content for grounding, consistency, and integration readiness.
+  Surfaces Phase 1.4 skill, certification and language evidence gaps for Option 9.
   Produces a review artifact and, only when explicitly authorized, a controlled
   integration patch for Phase 8 regeneration.
 ---
@@ -70,10 +71,19 @@ One of:
   `YES` or `NO` (default: `NO`)
 - `TARGET_SCOPE`:
   restrict analysis to specific requirements, sections, or questions
+- `SKILL_CERTIFICATION_LANGUAGE_EVIDENCE_MAP`:
+  the Phase 1.4 section from the current vacancy's report, if supplied
+  separately; otherwise read it from that report
+- Current applicant source inputs and portal guidance to check changed
+  claims and whether a previously recorded gap has already been resolved
 
 ## Default file discovery
 
 If no explicit path is provided, select files deterministically:
+
+Prefer the active workflow's report for the current vacancy. When its
+vacancy identifier or output directory is known, restrict the search below
+to matching reports; do not take another vacancy's newer report.
 
 1. Search `private/output/` recursively for `phase1_7_strategy_report*.md` and choose
    the most recently modified file.
@@ -99,6 +109,36 @@ Extract these items grouped by requirement where possible:
 
 Apply robust heading matching if capitalization varies, but preserve the
 substance of the original report.
+
+### Option 9 evidence follow-up (Phase 1.4)
+
+If the report contains `Skill / Certification / Language Evidence Map`,
+read its item records, source references and `Gap / Missing proof` fields.
+Recognize the heading regardless of its depth under Phase 1.4. For each
+material unresolved issue, preserve its item ID and identify:
+
+- missing personal tool use, independence, complexity or relevant practice;
+- unknown or uneven job-relevant language activities;
+- credential award, issuer, expiry/renewal or current-status uncertainty;
+- unverified portal labels or undefined certification proficiency meaning;
+- unsupported or conflicting additions to the map.
+
+Deduplicate these against `Metrics & Specifics Needed` and existing feedback.
+Prioritize required criteria, then preferred items. Check supplied sources
+and approved updates before requesting a fact again. Distinguish a factual
+gap from a portal-label gap: supported capability can still be assessed
+using draft labels when the portal list is unavailable.
+
+Report which items have enough supported evidence for Option 9 to assess
+and which specific entries need more information. **Do not assign final
+proficiency or generate the Option 9 entry list.** Hold only the affected
+claims or ratings; supported entries and other selected outputs may proceed
+under existing generation authorization. An unknown field definition does
+not justify a new global approval gate.
+
+If an older report has no Phase 1.4 map, note its absence rather than
+pretending it passed review. Option 9 can still use the raw JD and applicant
+sources under its own contract; the missing map is not a mandatory blocker.
 
 ## Non-golden-record policy (hard rule)
 
@@ -131,8 +171,9 @@ Each Candidate Assertion must be classified on these axes:
 - `OPINION_OR_FRAMING`: narrative preference, tone preference, or emphasis choice
 
 ### Evidence status
-- `SUPPORTED`: explicitly grounded in existing source inputs or clearly present
-  in the revised strategy report as user-provided source text
+- `SUPPORTED`: grounded in existing source inputs or an approved factual
+  update, with no unresolved contradiction. A new assertion's presence in
+  an edited report or Phase 1.4 map does not establish its own support.
 - `UNSUPPORTED_BUT_PLAUSIBLE`: not contradicted, but not independently grounded
   elsewhere
 - `CONFLICTING`: contradicts dates, titles, metrics, or scope already present in
@@ -167,6 +208,8 @@ Treat newly added or materially changed content inside:
 - `Gap / Missing proof`,
 - `Mitigation strategies`,
 - `## Metrics & Specifics Needed`,
+- `Skill / Certification / Language Evidence Map`, including changes to
+  personal ownership, language capability, credential status or portal match,
 - and any clearly user-added notes
 
 as Candidate Assertions subject to the same evaluation rules as chat-based
@@ -198,6 +241,10 @@ Required structure:
 ### B) Metrics & specifics needed (consolidated)
 - ...
 
+### C) Option 9 evidence follow-up (when a Phase 1.4 map is available)
+| Item ID / requirement | Supported evidence available | Unresolved issue | Specific clarification needed | Effect on Option 9 |
+|---|---|---|---|---|
+
 ## 2) User additions / edits evaluated
 ### A) Candidate Assertion Ledger
 | ID | Claim | Source | Type | Evidence status | Conflict check | Integration decision | What the system needs |
@@ -211,6 +258,8 @@ Required structure:
 - What still needs confirmation
 - What must not be integrated yet
 - Next-step instruction for Phase 8 regeneration
+- Option 9: supported items available for assessment; affected entries held;
+  unverified portal labels that may remain drafts, when relevant
 ```
 
 ### Artifact 2: `private/inputs/user_feedback_updates.md`
@@ -253,13 +302,15 @@ Required structure:
 ## Steps
 
 1. Locate the applicable strategy report(s).
-2. Extract the missing-proof sections and the consolidated metrics-needed list.
+2. Extract the missing-proof sections, consolidated metrics-needed list and
+   Phase 1.4 map if present; deduplicate item-specific Option 9 questions.
 3. If a revised strategy report exists, compare it to the baseline and isolate
    changed or newly added substantive claims.
 4. If chat-based ad-hoc entry exists, split it into atomic Candidate Assertions.
 5. Evaluate each Candidate Assertion using the ledger categories and checks.
+   Carry item-specific decisions into the Option 9 follow-up without
+   converting capability evidence into final proficiency ratings.
 6. Write `private/output/0x_user_feedback_revision.md`.
 7. If `USER_INTENT_APPLY_UPDATES: YES`, also write
    `private/inputs/user_feedback_updates.md`.
 8. Return a concise completion summary with the artifact path(s) written.
-

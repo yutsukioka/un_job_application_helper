@@ -1,0 +1,2721 @@
+{
+  "schema_version": 1,
+  "organization": "UNESCO",
+  "snapshot_date": "2026-09-13",
+  "page_locale": "en_GB",
+  "source": {
+    "har_sha256": "64fc478e26e6130cf3101618fd7d11223c054356914f57db1621485d74673616",
+    "entry_count": 496,
+    "captured_from": "2026-09-13T10:33:29.502Z",
+    "captured_through": "2026-09-13T10:36:59.516Z",
+    "company_basis": "verified_company_hint_in_each_capture",
+    "provenance_reference": "unesco-taxonomy-provenance.md",
+    "manifest_reference": "unesco-source-manifest-2026-09-13.json",
+    "canonical_records_sha256": "ae62227c76e96af2215953af8618eb2777eebcb2339308921911551905a879b5"
+  },
+  "counts": {
+    "areas": 19,
+    "subareas": 420
+  },
+  "coverage_complete": true,
+  "years_of_experience": {
+    "picklist_id": "YearsOfExperience",
+    "complete": true,
+    "options": [
+      {
+        "id": "40051",
+        "label": "1-3",
+        "disabled": false
+      },
+      {
+        "id": "40052",
+        "label": "4-7",
+        "disabled": false
+      },
+      {
+        "id": "40053",
+        "label": "8-10",
+        "disabled": false
+      },
+      {
+        "id": "40050",
+        "label": "10 +",
+        "disabled": false
+      }
+    ]
+  },
+  "areas": [
+    {
+      "id": "38734",
+      "label": "Administration",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41008",
+          "label": "Administration",
+          "disabled": false,
+          "parent_id": "38734"
+        }
+      ]
+    },
+    {
+      "id": "38735",
+      "label": "Building Related Services",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41026",
+          "label": "Architecture",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41028",
+          "label": "Carpenter",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41030",
+          "label": "Catering",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41032",
+          "label": "Cleaning Services",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41034",
+          "label": "Driver",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41036",
+          "label": "Electrician",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41038",
+          "label": "Fireman",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41040",
+          "label": "Insurance Services",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41042",
+          "label": "Mailing",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41044",
+          "label": "Maintenance and Repair Services",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41046",
+          "label": "Printing",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41048",
+          "label": "Procurement",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41052",
+          "label": "Security and Safety",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41050",
+          "label": "Security guard",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41054",
+          "label": "Transportation",
+          "disabled": false,
+          "parent_id": "38735"
+        },
+        {
+          "id": "41056",
+          "label": "Travel",
+          "disabled": false,
+          "parent_id": "38735"
+        }
+      ]
+    },
+    {
+      "id": "38736",
+      "label": "Communication and Information",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41060",
+          "label": "Access to Knowledge",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41058",
+          "label": "Access to Knowledge for People With Disabilities",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41062",
+          "label": "Communication for Development",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41064",
+          "label": "Communication, Information and Gender",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41066",
+          "label": "Development Communication",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41068",
+          "label": "Documentary Heritage",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41074",
+          "label": "Free and Open Source Software (FOSS)",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41070",
+          "label": "Freedom of Expression",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41072",
+          "label": "Freedom of Expression On Internet",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41076",
+          "label": "ICT for Education, Science And Culture",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41078",
+          "label": "Information Ethics",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41082",
+          "label": "Information Literacy",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41086",
+          "label": "Information Preservation",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41080",
+          "label": "Information and Communication Technologies (ICT)",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41084",
+          "label": "Information and Knowledge Management",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41088",
+          "label": "Internet Governance",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41092",
+          "label": "Journalism Education and Training",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41090",
+          "label": "Journalism Professional Standards and Ethics",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41094",
+          "label": "Linguistic Diversity on Internet",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41096",
+          "label": "Local and Community Media",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41100",
+          "label": "Media Capacity Building",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41106",
+          "label": "Media Citizen Participation",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41102",
+          "label": "Media Development",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41104",
+          "label": "Media and Information Legislation",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41098",
+          "label": "Media in Conflict and Post Conflit Areas",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41108",
+          "label": "Memory of the World",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41110",
+          "label": "Open Access to Education Resources",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41112",
+          "label": "Participatory Communication",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41114",
+          "label": "Peace Building",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41116",
+          "label": "Preservation of Documentary Heritage",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41118",
+          "label": "Press Freedom",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41122",
+          "label": "Public Information and Outreach",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41120",
+          "label": "Public Service Broadcasting",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41124",
+          "label": "Training of Media Professionals and Journalists",
+          "disabled": false,
+          "parent_id": "38736"
+        },
+        {
+          "id": "41126",
+          "label": "Urban Planning",
+          "disabled": false,
+          "parent_id": "38736"
+        }
+      ]
+    },
+    {
+      "id": "38737",
+      "label": "Computer Sciences / Information Technologies",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "40948",
+          "label": "Computer Network Engineering",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40974",
+          "label": "Computer Programming",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40944",
+          "label": "Computer Security",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40956",
+          "label": "Computer System Maintenance",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "41010",
+          "label": "Database Administration",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40994",
+          "label": "Design",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40972",
+          "label": "Graphics",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40954",
+          "label": "Management Information System",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "41024",
+          "label": "Network Hardware",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40960",
+          "label": "Software",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40958",
+          "label": "System Administration",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40918",
+          "label": "Systems Development Specialists",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40932",
+          "label": "User Support",
+          "disabled": false,
+          "parent_id": "38737"
+        },
+        {
+          "id": "40946",
+          "label": "Web Design",
+          "disabled": false,
+          "parent_id": "38737"
+        }
+      ]
+    },
+    {
+      "id": "38738",
+      "label": "Culture",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41128",
+          "label": "Archaeology",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41130",
+          "label": "Architecture",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41132",
+          "label": "Armed Conflict and Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41136",
+          "label": "Art (Crafts and Design)",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41138",
+          "label": "Art History",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41134",
+          "label": "Arts Education",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41140",
+          "label": "Conservation (of Cultural and Natural Heritage Sites)",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41142",
+          "label": "Conventions, Protection of the Cultural Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41144",
+          "label": "Copyright and Anti piracy",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41146",
+          "label": "Cultural Development",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41148",
+          "label": "Cultural Dialogue",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40921",
+          "label": "Cultural Event Organisation",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41150",
+          "label": "Cultural Expressions",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41154",
+          "label": "Cultural Management",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40919",
+          "label": "Cultural Objects",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40917",
+          "label": "Cultural Policies and Measures",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "41152",
+          "label": "Cultural and Creative Industries",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40923",
+          "label": "Culture and Gender",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40925",
+          "label": "Diversity of Cultural Expressions",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40927",
+          "label": "Endangered Languages",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40929",
+          "label": "Ethnology",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40931",
+          "label": "Heritage Impact Assessment",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40933",
+          "label": "History",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40935",
+          "label": "Illicit Traffic and Restitution of Cultural Property",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40937",
+          "label": "Indigenous People Issues",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40939",
+          "label": "Information Technologies for Cultural Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40941",
+          "label": "Intangible/Living Heritage (Oral Traditions; Traditional Music and Dance; Traditional and Indigenous Knowledge)",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40943",
+          "label": "Intellectual Property",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40947",
+          "label": "Inter Religious Dialogue",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40945",
+          "label": "Intercultural Dialogue",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40949",
+          "label": "Libraries",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40951",
+          "label": "Linguistics",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40953",
+          "label": "Manuscript Restoration",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40955",
+          "label": "Movable Heritage and Museums",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40957",
+          "label": "Museum",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40959",
+          "label": "Restoration",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40961",
+          "label": "Sites Management",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40963",
+          "label": "Sub Aquatic Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40965",
+          "label": "Tangible Cultural Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40967",
+          "label": "Tourism, Cultural and Sustainable",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40969",
+          "label": "Underwater Cultural Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40971",
+          "label": "World Cultural Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        },
+        {
+          "id": "40973",
+          "label": "World Natural Heritage",
+          "disabled": false,
+          "parent_id": "38738"
+        }
+      ]
+    },
+    {
+      "id": "38739",
+      "label": "Documentation and Library",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "40975",
+          "label": "Archives",
+          "disabled": false,
+          "parent_id": "38739"
+        },
+        {
+          "id": "40977",
+          "label": "Cataloguing and Indexing",
+          "disabled": false,
+          "parent_id": "38739"
+        },
+        {
+          "id": "40979",
+          "label": "Collection Development",
+          "disabled": false,
+          "parent_id": "38739"
+        },
+        {
+          "id": "40981",
+          "label": "Curators",
+          "disabled": false,
+          "parent_id": "38739"
+        },
+        {
+          "id": "40983",
+          "label": "Documentalists",
+          "disabled": false,
+          "parent_id": "38739"
+        },
+        {
+          "id": "40985",
+          "label": "Librarians",
+          "disabled": false,
+          "parent_id": "38739"
+        },
+        {
+          "id": "40987",
+          "label": "Records Management",
+          "disabled": false,
+          "parent_id": "38739"
+        }
+      ]
+    },
+    {
+      "id": "38740",
+      "label": "Education",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "40989",
+          "label": "Administration of Special Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "40991",
+          "label": "Adult Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "40993",
+          "label": "Anthropology and Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "40995",
+          "label": "Basic Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "40997",
+          "label": "Cognitive Studies in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "40999",
+          "label": "Communication Technologies in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41001",
+          "label": "Cultural And Linguistic Diversity in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41003",
+          "label": "Curriculum Development",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41005",
+          "label": "Didactics",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41007",
+          "label": "Early Childhood Care and Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41013",
+          "label": "Economic Crisis and Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41009",
+          "label": "Economics and Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41011",
+          "label": "Economics of Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41023",
+          "label": "Education Leadership",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41035",
+          "label": "Education Policy Studies",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41027",
+          "label": "Education Policy and Management",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41029",
+          "label": "Education Sciences",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41033",
+          "label": "Education Statistics",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41025",
+          "label": "Education and Management",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41017",
+          "label": "Education for All",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41019",
+          "label": "Education for Sustainable Development",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41031",
+          "label": "Education in Post Conflict and Post Disaster Situations.",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41021",
+          "label": "Education of Handicapped",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41015",
+          "label": "Educational Planning and Management",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41037",
+          "label": "Elementary Inclusive Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41039",
+          "label": "Elementary School Science Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41041",
+          "label": "Enhancing Learning",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41043",
+          "label": "Fellowship Administration",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41045",
+          "label": "Gender and Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41047",
+          "label": "Governance and Institutional Development",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41053",
+          "label": "HIV and AIDS Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41049",
+          "label": "Health Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41051",
+          "label": "Higher Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41055",
+          "label": "Human Rights in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41057",
+          "label": "Inclusive Education Practices/Policies/Methodologies",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41061",
+          "label": "Information Systems for the Management of Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41059",
+          "label": "Information and Communication Technologies and Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41063",
+          "label": "Languages in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41065",
+          "label": "Learning Assessment",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41067",
+          "label": "Legal Issues in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41069",
+          "label": "Lifelong Learning",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41071",
+          "label": "Linguistics",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41073",
+          "label": "Literacy",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41075",
+          "label": "Management of Education Systems",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41077",
+          "label": "Mathematics Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41079",
+          "label": "Mother Tongue Instruction",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41081",
+          "label": "Multilingual Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41083",
+          "label": "Non Formal Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41085",
+          "label": "Non Formal Education Management",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41087",
+          "label": "Organizational Behaviour",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41089",
+          "label": "Peace, Citizenship and Democratic Values Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41091",
+          "label": "Pedagogy",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41093",
+          "label": "Policy Formulation",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41095",
+          "label": "Pre Primary Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41099",
+          "label": "Primary Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41097",
+          "label": "Primary and Lower Secondary Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41101",
+          "label": "Quality Assurance of Teachers Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41103",
+          "label": "Quality Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41105",
+          "label": "Research Methods and Data Analysis in Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41107",
+          "label": "Right to Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41109",
+          "label": "Right to Education (Including Gender And Inclusive Education)",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41111",
+          "label": "School Health",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41113",
+          "label": "Science Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41115",
+          "label": "Science and Technology Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41117",
+          "label": "Secondary Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41119",
+          "label": "Sociolinguistics",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41121",
+          "label": "Sociology of Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41123",
+          "label": "Special Need Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41125",
+          "label": "Teachers Education",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41127",
+          "label": "Teaching Students with Disabilities",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41129",
+          "label": "Technical and Vocational Education and Training",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41131",
+          "label": "Textbook Development",
+          "disabled": false,
+          "parent_id": "38740"
+        },
+        {
+          "id": "41133",
+          "label": "University and Higher Education",
+          "disabled": false,
+          "parent_id": "38740"
+        }
+      ]
+    },
+    {
+      "id": "38741",
+      "label": "External Relations",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41135",
+          "label": "Branding",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41137",
+          "label": "Conference and Events Organization",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41139",
+          "label": "Diplomacy",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41141",
+          "label": "Fundraising",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41143",
+          "label": "International Organizations",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41145",
+          "label": "International Relations",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41147",
+          "label": "Marketing",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41149",
+          "label": "Partnerships",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41151",
+          "label": "Political Science",
+          "disabled": false,
+          "parent_id": "38741"
+        },
+        {
+          "id": "41153",
+          "label": "Public Private Partnerships",
+          "disabled": false,
+          "parent_id": "38741"
+        }
+      ]
+    },
+    {
+      "id": "38742",
+      "label": "Field Operations Coordination",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "40992",
+          "label": "Administration",
+          "disabled": false,
+          "parent_id": "38742"
+        },
+        {
+          "id": "41006",
+          "label": "Management",
+          "disabled": false,
+          "parent_id": "38742"
+        }
+      ]
+    },
+    {
+      "id": "38743",
+      "label": "Finances",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41155",
+          "label": "Accounting",
+          "disabled": false,
+          "parent_id": "38743"
+        },
+        {
+          "id": "41156",
+          "label": "Budget Management",
+          "disabled": false,
+          "parent_id": "38743"
+        },
+        {
+          "id": "41157",
+          "label": "Cost Accounting",
+          "disabled": false,
+          "parent_id": "38743"
+        },
+        {
+          "id": "41158",
+          "label": "Finances",
+          "disabled": false,
+          "parent_id": "38743"
+        },
+        {
+          "id": "41159",
+          "label": "Payroll",
+          "disabled": false,
+          "parent_id": "38743"
+        },
+        {
+          "id": "41160",
+          "label": "Treasury",
+          "disabled": false,
+          "parent_id": "38743"
+        }
+      ]
+    },
+    {
+      "id": "38744",
+      "label": "General Administrative Support",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41161",
+          "label": "Accounting support",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41162",
+          "label": "Administrative Assistance",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41163",
+          "label": "Assistance to Senior Manager",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41164",
+          "label": "Bilingual Secretary (English/French)",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41165",
+          "label": "Office assistant",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41167",
+          "label": "Secretarial assistance",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41168",
+          "label": "Trilingual secretary (English/French/Arabic)",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41169",
+          "label": "Trilingual secretary (English/French/Spanish)",
+          "disabled": false,
+          "parent_id": "38744"
+        },
+        {
+          "id": "41170",
+          "label": "Web administration support",
+          "disabled": false,
+          "parent_id": "38744"
+        }
+      ]
+    },
+    {
+      "id": "38745",
+      "label": "Human Resources",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41171",
+          "label": "Benefits and Entitlements",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41172",
+          "label": "Career Development",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41173",
+          "label": "Compensation",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41174",
+          "label": "Employment Law",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41175",
+          "label": "Generalist",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41176",
+          "label": "Insurance",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41177",
+          "label": "Mobility / Rotation",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41178",
+          "label": "Occupational Health and Safety",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41179",
+          "label": "Organizational Design and Job Classification",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41180",
+          "label": "Pension",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41181",
+          "label": "Performance Management",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41182",
+          "label": "Policies",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41183",
+          "label": "Recruitment",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41185",
+          "label": "Staff Relations",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41184",
+          "label": "Staff Well Being",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41186",
+          "label": "Statistics",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41187",
+          "label": "Training and Learning",
+          "disabled": false,
+          "parent_id": "38745"
+        },
+        {
+          "id": "41188",
+          "label": "Workforce Planning",
+          "disabled": false,
+          "parent_id": "38745"
+        }
+      ]
+    },
+    {
+      "id": "38746",
+      "label": "Law",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41189",
+          "label": "Copyright",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41190",
+          "label": "Employment Law",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41191",
+          "label": "International Instruments",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41192",
+          "label": "International Law",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41193",
+          "label": "Investigations",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41194",
+          "label": "Legal specialists",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41195",
+          "label": "National Law",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41196",
+          "label": "Private Law",
+          "disabled": false,
+          "parent_id": "38746"
+        },
+        {
+          "id": "41197",
+          "label": "Public Law",
+          "disabled": false,
+          "parent_id": "38746"
+        }
+      ]
+    },
+    {
+      "id": "38747",
+      "label": "Management/Audit/Oversight",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41198",
+          "label": "Audit",
+          "disabled": false,
+          "parent_id": "38747"
+        },
+        {
+          "id": "41199",
+          "label": "Change management",
+          "disabled": false,
+          "parent_id": "38747"
+        },
+        {
+          "id": "41200",
+          "label": "Evaluation",
+          "disabled": false,
+          "parent_id": "38747"
+        },
+        {
+          "id": "41201",
+          "label": "Management",
+          "disabled": false,
+          "parent_id": "38747"
+        },
+        {
+          "id": "41202",
+          "label": "Risk Management",
+          "disabled": false,
+          "parent_id": "38747"
+        },
+        {
+          "id": "41203",
+          "label": "Strategic planning and management",
+          "disabled": false,
+          "parent_id": "38747"
+        }
+      ]
+    },
+    {
+      "id": "38748",
+      "label": "Natural Sciences",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41204",
+          "label": "Agriculture and Engineering Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41205",
+          "label": "Arid and Semi Arid Zones",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41206",
+          "label": "Astronomy",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41207",
+          "label": "Basic Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41208",
+          "label": "Biodiversity",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41209",
+          "label": "Biodiversity and Climate Change",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41210",
+          "label": "Bioethics",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41211",
+          "label": "Biosphere Reserves",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41212",
+          "label": "Biotechnology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41213",
+          "label": "Capacity Building",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41214",
+          "label": "Chemistry",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41215",
+          "label": "Climate",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41216",
+          "label": "Climate Change",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41217",
+          "label": "Coastal Eco hydrology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41218",
+          "label": "Coastal Zone",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41219",
+          "label": "Conservation Biology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41220",
+          "label": "Conservation of Nature",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41221",
+          "label": "Disaster Preparedness and Mitigation",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41222",
+          "label": "Disaster Reduction",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41223",
+          "label": "Earth Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41226",
+          "label": "Eco Hydrology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41224",
+          "label": "Ecological Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41225",
+          "label": "Ecosystem Health",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41227",
+          "label": "Engineering Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41228",
+          "label": "Environmental Ethics",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41229",
+          "label": "Environmental Law",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41230",
+          "label": "Environmental Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41231",
+          "label": "Erosion and Sedimentation",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41232",
+          "label": "Forestry",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41233",
+          "label": "Gender and Disaster Risk",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41234",
+          "label": "Geography",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41235",
+          "label": "Geology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41236",
+          "label": "Geosciences",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41237",
+          "label": "Global Water Assessment / Water Management",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41238",
+          "label": "Hydrological Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41239",
+          "label": "Life Sciences",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41240",
+          "label": "Marine Science",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41241",
+          "label": "Mathematics",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41242",
+          "label": "Meteorology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41243",
+          "label": "Oceanography",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41244",
+          "label": "Physics",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41245",
+          "label": "Protected Area Management",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41246",
+          "label": "Remote Sensing",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41247",
+          "label": "Renewable and Alternative Energies",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41248",
+          "label": "Science Communication",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41249",
+          "label": "Science Education",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41251",
+          "label": "Science Governance",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41252",
+          "label": "Science Legislation",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41253",
+          "label": "Science Policies",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41254",
+          "label": "Science and Technology",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41250",
+          "label": "Science, Technology and Gender",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41255",
+          "label": "Sea Law",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41256",
+          "label": "Small Islands Developing States",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41257",
+          "label": "Space Education",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41258",
+          "label": "Sustainable Development",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41259",
+          "label": "Tsunami",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41260",
+          "label": "Urban Drainage",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41261",
+          "label": "Urban Water Management",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41263",
+          "label": "Water Hazard and Risk Management",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41262",
+          "label": "Water Law",
+          "disabled": false,
+          "parent_id": "38748"
+        },
+        {
+          "id": "41264",
+          "label": "Water Resources",
+          "disabled": false,
+          "parent_id": "38748"
+        }
+      ]
+    },
+    {
+      "id": "38749",
+      "label": "Programme Coordination",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "40962",
+          "label": "Programme Coordination",
+          "disabled": false,
+          "parent_id": "38749"
+        }
+      ]
+    },
+    {
+      "id": "38750",
+      "label": "Public Information",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41265",
+          "label": "Audio video specialists",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41266",
+          "label": "Photographers",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41267",
+          "label": "Press",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41268",
+          "label": "Printed media",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41270",
+          "label": "Public Information and outreach",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41269",
+          "label": "Publication Management",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41271",
+          "label": "Radio media",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41272",
+          "label": "Social Networks",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41273",
+          "label": "Visual media",
+          "disabled": false,
+          "parent_id": "38750"
+        },
+        {
+          "id": "41274",
+          "label": "Web Media",
+          "disabled": false,
+          "parent_id": "38750"
+        }
+      ]
+    },
+    {
+      "id": "38751",
+      "label": "Social and Human Sciences",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41275",
+          "label": "Anthropology",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41276",
+          "label": "Anti Doping",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41277",
+          "label": "Bioethics",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41278",
+          "label": "Civil Society",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41279",
+          "label": "Democracy",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41280",
+          "label": "Discrimination",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41281",
+          "label": "Economic Sociology",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41282",
+          "label": "Education of Children In Need",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41283",
+          "label": "Elaboration of International, Regional/Sub Regional Strategies",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41284",
+          "label": "Ethics",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41285",
+          "label": "Gender Equality",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41286",
+          "label": "History",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41289",
+          "label": "Human Rights",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41288",
+          "label": "Human Rights and Gender Equality",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41287",
+          "label": "Human Rights and HIV/AIDS",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41290",
+          "label": "International Law",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41291",
+          "label": "Local Democracy",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41292",
+          "label": "Management Development",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41293",
+          "label": "Migration",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41294",
+          "label": "Multicultural Policies",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41295",
+          "label": "Philosophy",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41296",
+          "label": "Physical Education And Sports",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41297",
+          "label": "Policy and Cooperation",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41298",
+          "label": "Political Science",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41299",
+          "label": "Poverty Eradication",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41300",
+          "label": "Psychology",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41301",
+          "label": "Public Administration",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41302",
+          "label": "Social Cohesion",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41303",
+          "label": "Social Transformations",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41305",
+          "label": "Socio Economic Analysis",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41304",
+          "label": "Sociology",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41307",
+          "label": "Urban Development",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41306",
+          "label": "Urbanism",
+          "disabled": false,
+          "parent_id": "38751"
+        },
+        {
+          "id": "41308",
+          "label": "Youth",
+          "disabled": false,
+          "parent_id": "38751"
+        }
+      ]
+    },
+    {
+      "id": "38752",
+      "label": "Translation / Interpretation / Writing",
+      "disabled": false,
+      "children_complete": true,
+      "subareas": [
+        {
+          "id": "41327",
+          "label": "Interpretation",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40920",
+          "label": "Interpretation - Arabic to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40998",
+          "label": "Interpretation - Arabic to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41014",
+          "label": "Interpretation - Arabic to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40926",
+          "label": "Interpretation - Arabic to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40934",
+          "label": "Interpretation - Arabic to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40970",
+          "label": "Interpretation - Chinese to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41004",
+          "label": "Interpretation - Chinese to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40930",
+          "label": "Interpretation - Chinese to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40990",
+          "label": "Interpretation - Chinese to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40968",
+          "label": "Interpretation - Chinese to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40940",
+          "label": "Interpretation - English to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40978",
+          "label": "Interpretation - English to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41020",
+          "label": "Interpretation - English to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40986",
+          "label": "Interpretation - English to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41002",
+          "label": "Interpretation - English to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41018",
+          "label": "Interpretation - French to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40984",
+          "label": "Interpretation - French to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40966",
+          "label": "Interpretation - French to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40952",
+          "label": "Interpretation - French to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41022",
+          "label": "Interpretation - French to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40988",
+          "label": "Interpretation - Russian to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40924",
+          "label": "Interpretation - Russian to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41012",
+          "label": "Interpretation - Russian to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41016",
+          "label": "Interpretation - Russian to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40928",
+          "label": "Interpretation - Russian to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40996",
+          "label": "Interpretation - Spanish to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40976",
+          "label": "Interpretation - Spanish to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40950",
+          "label": "Interpretation - Spanish to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40964",
+          "label": "Interpretation - Spanish to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40922",
+          "label": "Interpretation - Spanish to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41328",
+          "label": "Linguists",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41329",
+          "label": "Minute-writers",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41330",
+          "label": "Revision – translation",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41337",
+          "label": "Translation",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40980",
+          "label": "Translation - Arabic to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41309",
+          "label": "Translation - Arabic to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41310",
+          "label": "Translation - Arabic to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41311",
+          "label": "Translation - Arabic to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41312",
+          "label": "Translation - Arabic to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41313",
+          "label": "Translation - Chinese to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41314",
+          "label": "Translation - Chinese to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41315",
+          "label": "Translation - Chinese to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40936",
+          "label": "Translation - Chinese to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41316",
+          "label": "Translation - Chinese to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41317",
+          "label": "Translation - English to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41318",
+          "label": "Translation - English to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41319",
+          "label": "Translation - English to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41320",
+          "label": "Translation - English to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41321",
+          "label": "Translation - English to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41322",
+          "label": "Translation - French to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41323",
+          "label": "Translation - French to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41324",
+          "label": "Translation - French to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41325",
+          "label": "Translation - French to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41326",
+          "label": "Translation - French to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40982",
+          "label": "Translation - Russian to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41000",
+          "label": "Translation - Russian to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41331",
+          "label": "Translation - Russian to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41332",
+          "label": "Translation - Russian to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40938",
+          "label": "Translation - Russian to Spanish",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41333",
+          "label": "Translation - Spanish to Arabic",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "40942",
+          "label": "Translation - Spanish to Chinese",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41334",
+          "label": "Translation - Spanish to English",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41335",
+          "label": "Translation - Spanish to French",
+          "disabled": false,
+          "parent_id": "38752"
+        },
+        {
+          "id": "41336",
+          "label": "Translation - Spanish to Russian",
+          "disabled": false,
+          "parent_id": "38752"
+        }
+      ]
+    }
+  ]
+}

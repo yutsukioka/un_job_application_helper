@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "organization": "UNESCO",
+  "snapshot_date": "2026-09-13",
+  "scope": "Sanitized publication template metadata only; no populated candidate values. Observed client configuration, not universal UNESCO policy.",
+  "source": {
+    "sha256": "64fc478e26e6130cf3101618fd7d11223c054356914f57db1621485d74673616",
+    "entryCount": 496,
+    "sourceEntryIndex": 410,
+    "indexConvention": "zero-based",
+    "sourceMethod": "rcmV12CandidateProfileControllerProxy.getCandidateProfileVO",
+    "responseSha256": "e732e198a09f1a05f5b36c68f4a25b4a43c3bc556d1e3e5fc15429890329bbcb"
+  },
+  "section": {
+    "id": "PublicationsBackgnd",
+    "elementTitle": "Publications",
+    "required": false,
+    "maxEntries": 0,
+    "editable": true,
+    "sourceObject": "s17",
+    "templateSourceObject": "s91",
+    "fields": [
+      {
+        "id": "Titlepublications",
+        "fieldName": "VFLD1",
+        "label": "Title of Publication",
+        "displayType": "text",
+        "type": "STRING_FIELD",
+        "inputLength": 4000,
+        "required": true,
+        "picklistId": null,
+        "parentPicklistFieldId": null,
+        "editable": true,
+        "disabled": false,
+        "sourceObject": "s96",
+        "order": 0
+      },
+      {
+        "id": "YearPublication",
+        "fieldName": "VFLD2",
+        "label": "Year of Publication",
+        "displayType": "picklist",
+        "type": "STRING_FIELD",
+        "inputLength": 4000,
+        "required": false,
+        "picklistId": "yearPublication",
+        "parentPicklistFieldId": null,
+        "editable": true,
+        "disabled": false,
+        "sourceObject": "s97",
+        "order": 1
+      },
+      {
+        "id": "description",
+        "fieldName": "VFLD3",
+        "label": "Domain",
+        "displayType": "text",
+        "type": "STRING_FIELD",
+        "inputLength": 4000,
+        "required": true,
+        "picklistId": null,
+        "parentPicklistFieldId": null,
+        "editable": true,
+        "disabled": false,
+        "sourceObject": "s98",
+        "order": 2
+      }
+    ]
+  },
+  "constraint_provenance": {
+    "sourceEntryIndices": [
+      410,
+      354,
+      44
+    ],
+    "backgroundFieldConfiguration": "Entry 354 maps template inputLength to control maxLength.",
+    "textControlRendering": "Entry 44 emits an HTML maxlength attribute from configured maxLength for text controls; duplicate source at entry 188.",
+    "interpretation": "The 4000 value is supported as an observed client text-control cap for the corresponding text fields in this snapshot. Picklist inputLength=4000 and date inputLength=999 are not narrative budgets.",
+    "countingSemantics": "No actual DOM typing, character-counter comparison or server validation was performed. The capture does not establish equivalence between any Python/code-point count and the actual portal limit.",
+    "universalLimit": false
+  },
+  "row_count_provenance": {
+    "sourceEntryIndices": [
+      410,
+      350,
+      373
+    ],
+    "interpretation": "maxEntries=0 has no positive/truthy client row cap in the captured code. It is not zero allowed rows, and does not prove an unlimited server maximum."
+  },
+  "unknowns": [
+    "Publication-year picklist choices and IDs",
+    "Publication Domain help definition",
+    "Official publication-type inclusion rules",
+    "Server maximum or validation behavior",
+    "Actual portal-counter comparisons"
+  ],
+  "editorial_mapping": {
+    "description": "Concise evidence-grounded subject of the work; not the Domain of Expertise hierarchy. This interpretation is drafting advice, not captured help text."
+  }
+}

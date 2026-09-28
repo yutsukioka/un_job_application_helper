@@ -40,6 +40,10 @@ TEST-phase responsibilities:
    - metric lineage vs `metric_ledger.md`
    - format-profile compliance (per `## LIMITS` TARGET_SYSTEM)
    - character-band fit (when applicable)
+   - on S1/S2/S3: Phase 1.4 has the canonical
+     `## Skill / Certification / Language Evidence Map` section from
+     `apex-candidate-evidence-bank/SKILL.md`, with source anchors and gaps
+     covering relevant full-vacancy items; no final proficiency ratings
 4. Submit:
    python agents/apex/agent_sync/client_v6.py test-result qa-auditor \
        --passed --output "<SUMMARY>" --port <PORT>

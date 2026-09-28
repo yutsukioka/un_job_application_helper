@@ -1,6 +1,6 @@
 ---
 name: apex-keyword-insertion-map
-description: Create a list of must‑use JD phrases and specify where to insert them across Phase 8 outputs (Admin Profile fields, IOM Responsibilities/Achievements, Qualification Answers, CV, Cover Letter). Use this skill during Phase 2.2 or when the user asks for keyword placement guidance. Do not rewrite full documents.
+description: Create a list of must‑use JD phrases and specify where to insert them across Phase 8 outputs (Admin Profile fields, IOM Responsibilities/Achievements, Qualification Answers, CV, Cover Letter, and Skill / Certification / Language entries). Use this skill during Phase 2.2 or when the user asks for keyword placement guidance. Do not rewrite full documents.
 ---
 
 # apex-keyword-insertion-map
@@ -58,6 +58,7 @@ For each phrase include:
   - Option 5 (IOM Achievements bullets): <which bullet theme>
   - Option 7 (Motivation Statement): <which paragraph / clause>
   - Option 8 (ATS DRA): <duties / responsibilities / achievements>
+  - Option 9 (Skill / Certification / Language): <supported portal label or proposed draft label; otherwise not applicable>
   - **Natural insertion suggestion:** a short sentence fragment showing how to insert the phrase naturally (not a full rewrite).
 
 ## Distribution guidance (avoid keyword stuffing)
@@ -69,6 +70,7 @@ For each phrase include:
 - Combine high-priority terms from TERM_EXTRACTOR with additional JD phrases (deliverables, stakeholders, systems/tools, compliance language).
 - Avoid near duplicates (e.g., pick either “results-based management” or “RBM framework design” unless the JD treats them as distinct).
 - Do not exceed 12 phrases.
+- For Option 9, recommend only labels representing a capability or credential actually supported by applicant evidence. Preserve exact supplied portal labels; do not force JD wording into an unavailable label. Without a portal list, mark suggested labels as drafts. A phrase's JD importance does not determine proficiency: leave High / Medium / Low assessment to `apex-generate-skills-proficiency`.
 
 ## Rules
 

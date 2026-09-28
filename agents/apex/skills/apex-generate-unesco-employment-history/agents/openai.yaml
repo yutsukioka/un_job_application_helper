@@ -1,0 +1,4 @@
+interface:
+  display_name: "APEX UNESCO Employment History Form"
+  short_description: "Prepare the UNESCO EHF and its linked expertise map"
+  default_prompt: "Use $apex-generate-unesco-employment-history to prepare my UNESCO Employment History Form and use its companion expertise skill to ground each role's responsibilities and achievements in a shared evidence map."
