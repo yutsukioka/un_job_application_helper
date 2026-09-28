@@ -80,6 +80,9 @@ class SuccessFactorsRMKAdapter(JobAdapter):
     family = "successfactors_rmk"
 
     def fetch_jobs(self) -> list[JobRecord]:
+        if self.source.id == "idb_successfactors" and self.source.extra.get("public_search_api"):
+            from jobagg.adapters.idb_api import fetch
+            return fetch(self)
         rss_url = self.source.extra.get("rss_url")
         if rss_url:
             jobs = self.parse_jobs_from_rss(self.fetch_text(str(rss_url)))

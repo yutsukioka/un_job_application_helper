@@ -342,6 +342,11 @@ class DurableCapture:
                     "searchText",
                 }:
                     record["public_pagination_request"] = public
+                elif url == "https://jobs.iadb.org/services/recruiting/v1/jobs" and isinstance(public, dict):
+                    from jobagg.adapters.idb_api import request_payload
+                    page, sort = public.get("pageNumber"), public.get("sortBy")
+                    if type(page) is int and page >= 0 and sort in ("", "date") and public == request_payload(page, sort):
+                        record["public_pagination_request"] = public
                 elif urlsplit(url).path == "/rec-job-search/external/jobs" and isinstance(public, dict):
                     from jobagg.pipelines.inventory_four_source import CSOD_FIELDS
                     if set(public).issubset(CSOD_FIELDS) and {"pageNumber", "pageSize"}.issubset(public):

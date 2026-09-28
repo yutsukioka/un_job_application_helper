@@ -45,8 +45,8 @@ def source_capability(source: OrganizationSource) -> dict:
         mode = "public_html_and_primary_documents"
         detail = "Board summaries require official agency notices/PDFs and incorporated documents."
     elif source.id == "idb_successfactors":
-        mode = "public_html_with_browser_inventory_gap"
-        gaps = ["Requires an accessible rendered full board, both current terminal sort walks, and total-sized ID union; an empty RSS or unrendered widget remains incomplete."]
+        mode = "public_json_api" if source.extra.get("public_search_api") else "public_html_with_browser_inventory_gap"
+        gaps = [] if source.extra.get("public_search_api") else ["Requires an accessible rendered full board, both current terminal sort walks, and total-sized ID union; an empty RSS or unrendered widget remains incomplete."]
     elif source.id == "osce_custom_html":
         mode = "public_html_with_browser_inventory_gap"
         if source.extra.get("browser_render", {}).get("inventory") == "osce_full_search_v1":
@@ -61,7 +61,7 @@ def source_capability(source: OrganizationSource) -> dict:
         "enabled": source.enabled,
         "transport": mode,
         "full_detail_contract": detail,
-        "enumeration_contract": ("osce_full_search_v1" if source.id == "osce_custom_html" and source.extra.get("browser_render", {}).get("inventory") == "osce_full_search_v1" else None) or {"worldbank_csod": "csod_pages_v1", "icddrb_custom_html": "icddrb_custom_html_tables_v1", "itcilo_custom_html": "itcilo_custom_html_tables_v1", "unicef_pageup": "unicef_pageup_v1", "fao_taleo": "fao_taleo_locales_v1", "unv_uvp": "unv_search_pages_v1", "unops_avature": "unops_public_pages_v1"}.get(source.id) or ("idb_fullboard_dom_v1" if source.id == "idb_successfactors" and source.extra.get("public_all_jobs_url") else {"workday": "workday_cxs_v1", "oracle_hcm": "oracle_ce_v1",
+        "enumeration_contract": ("osce_full_search_v1" if source.id == "osce_custom_html" and source.extra.get("browser_render", {}).get("inventory") == "osce_full_search_v1" else None) or {"worldbank_csod": "csod_pages_v1", "icddrb_custom_html": "icddrb_custom_html_tables_v1", "itcilo_custom_html": "itcilo_custom_html_tables_v1", "unicef_pageup": "unicef_pageup_v1", "fao_taleo": "fao_taleo_locales_v1", "unv_uvp": "unv_search_pages_v1", "unops_avature": "unops_public_pages_v1"}.get(source.id) or ("idb_public_search_api_v1" if source.id == "idb_successfactors" and source.extra.get("public_search_api") else "idb_fullboard_dom_v1" if source.id == "idb_successfactors" and source.extra.get("public_all_jobs_url") else {"workday": "workday_cxs_v1", "oracle_hcm": "oracle_ce_v1",
                                  "smartrecruiters": "smartrecruiters_postings_v1"}.get(family, "unsupported")),
         "limitations": gaps,
         "independent_whole_public_text_verification": "not_implemented",
@@ -95,7 +95,7 @@ def verify_listing(source, jobs, capture_paths) -> dict:
     if source.id in {"unicef_pageup", "fao_taleo"}:
         from jobagg.pipelines.inventory_vacancy_contracts import verify_vacancy_listing
         return verify_vacancy_listing(source, jobs, capture_paths)
-    if source.id == "idb_successfactors" and source.extra.get("public_all_jobs_url"):
+    if source.id == "idb_successfactors" and (source.extra.get("public_search_api") or source.extra.get("public_all_jobs_url")):
         from jobagg.pipelines.inventory_idb_contract import verify_idb_listing
         return verify_idb_listing(source, jobs, capture_paths)
     if family in {"oracle_hcm", "smartrecruiters"}:

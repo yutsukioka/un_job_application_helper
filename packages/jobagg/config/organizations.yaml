@@ -1065,6 +1065,7 @@ sources:
         - https://webapps.ifad.org/
         - https://www.ifad.org/
       output_slug: ifad
+      public_job_deeplinks: true
       listing_url: https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL?Page=HRS_APP_SCHJOB_FL&Action=U
       fetch_details: false
       date_locale: US
@@ -1280,6 +1281,7 @@ sources:
       public_widget_root_url: "https://performancemanager8.successfactors.com/verp/vmod_3"
       public_widget_loader_url: "https://performancemanager8.successfactors.com/verp/vmod_3/ui/widget-loader/resources/widget-loader.js"
       public_widget_company_id: "interameri"
+      public_search_api: true
       public_all_jobs_url: "https://jobs.iadb.org/go/All-Jobs/9638000/"
       output_slug: idb
       search_url: https://jobs.iadb.org/search/

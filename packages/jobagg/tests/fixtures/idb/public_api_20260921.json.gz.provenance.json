@@ -1,0 +1,8 @@
+{
+  "fixture": "public_api_20260921.json.gz",
+  "capture_date": "2026-09-21",
+  "sha256": "fc5358a82133c22b9cafc6c01d6a7af7dd9be3a85d38ba80bb7c095051a45ba3",
+  "public_content_only": true,
+  "provenance": "Selected public responses retained in the reviewed local source snapshot. Original HAR and private runtime captures are not included.",
+  "not_current_inventory": true
+}
