@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -11,13 +12,18 @@ SCRIPT = ROOT / "scripts/ci/android_kvm.sh"
 
 # Bash functions replace host operations only in the child process. The fake
 # device is inaccessible until udev has settled, reproducing the readiness race.
+# PATH exposes only the text filters these stubs/diagnostics need.
 STUBS = r'''
 trigger_count=0
 settled=no
+device_present=yes
+if [[ $KVM_SCENARIO == missing_device || $KVM_SCENARIO == delayed_device ]]; then
+  device_present=no
+fi
 test() {
   if [[ $# == 2 && $2 == /dev/kvm ]]; then
     case "$1" in
-      -c) [[ $KVM_SCENARIO != missing_device ]] ;;
+      -c) [[ $device_present == yes ]] ;;
       -r) [[ $settled == yes && $KVM_SCENARIO != read_denied ]] ;;
       -w)
         [[ $settled == yes && $KVM_SCENARIO != write_denied ]] || return 1
@@ -38,7 +44,7 @@ sudo() {
     'udevadm control --reload-rules')
       [[ $KVM_SCENARIO != reload_error ]] || return 6
       ;;
-    'udevadm trigger --name-match=kvm')
+    'udevadm trigger --subsystem-match=misc --sysname-match=kvm')
       trigger_count=$((trigger_count + 1))
       settled=no
       printf 'STUB trigger %s\n' "$trigger_count"
@@ -48,6 +54,10 @@ sudo() {
       printf 'STUB settle\n'
       [[ $KVM_SCENARIO != settle_error ]] || return 5
       settled=yes
+      # Model asynchronous runner device arrival, not node creation by settle.
+      if [[ $KVM_SCENARIO == delayed_device && $trigger_count -ge 2 ]]; then
+        device_present=yes
+      fi
       ;;
     'udevadm info --name=/dev/kvm')
       printf 'STUB device info\n'
@@ -56,6 +66,12 @@ sudo() {
     *) printf 'Unexpected privileged command: %s\n' "$*" >&2; return 98 ;;
   esac
 }
+command_not_found_handle() {
+  printf 'Unstubbed host command: %s\n' "$*" >>"$KVM_UNEXPECTED_COMMAND_FILE"
+  return 98
+}
+uname() { printf 'Linux stub\n'; }
+id() { printf 'uid=1001(runner)\n'; }
 sleep() { printf 'STUB sleep %s\n' "$*"; }
 ls() { printf 'STUB device listing\n'; }
 lsmod() { printf 'kvm 1 1\n'; }
@@ -63,17 +79,56 @@ lscpu() { printf 'Virtualization: test\n'; }
 '''
 
 
-def run_setup(tmp_path, scenario):
+def run_setup(tmp_path, scenario, script=SCRIPT):
     stubs = tmp_path / "stubs.bash"
     stubs.write_text(STUBS)
-    return subprocess.run(
-        ["bash", str(SCRIPT)],
-        env={**os.environ, "BASH_ENV": str(stubs), "KVM_SCENARIO": scenario},
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    for command in ("cat", "awk", "grep"):
+        command_path = shutil.which(command)
+        assert command_path, f"Required test filter is missing: {command}"
+        (command_dir / command).symlink_to(command_path)
+    bash = shutil.which("bash")
+    assert bash, "Bash is required to test the setup helper"
+    unexpected = tmp_path / "unexpected-commands"
+    result = subprocess.run(
+        [bash, str(script)],
+        env={
+            **os.environ,
+            "PATH": str(command_dir),
+            "LC_ALL": "C",
+            "BASH_ENV": str(stubs),
+            "KVM_SCENARIO": scenario,
+            "KVM_UNEXPECTED_COMMAND_FILE": str(unexpected),
+        },
         text=True,
         capture_output=True,
         timeout=5,
         check=False,
     )
+    assert not unexpected.exists(), unexpected.read_text() if unexpected.exists() else ""
+    # macOS Bash 3 does not implement command_not_found_handle.
+    assert "command not found" not in result.stderr, f"Unstubbed host command: {result.stderr}"
+    return result
+
+
+def test_harness_rejects_unstubbed_commands_even_if_failure_is_suppressed(tmp_path):
+    probe = tmp_path / "probe.bash"
+    marker = tmp_path / "must-not-exist"
+    probe.write_text(f"touch '{marker}' || true\n")
+    with pytest.raises(AssertionError, match="Unstubbed host command"):
+        run_setup(tmp_path, "ready_after_settle", script=probe)
+    assert not marker.exists()
+
+
+def test_recovers_when_device_appears_during_bounded_retries(tmp_path):
+    result = run_setup(tmp_path, "delayed_device")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("STUB trigger") == 2
+    assert result.stdout.count("STUB settle") == 2
+    assert result.stdout.count("STUB sleep 2") == 1
+    assert result.stderr.count("not available as a character device") == 1
+    assert "Android KVM diagnostics" not in result.stdout
 
 
 def test_waits_for_udev_before_checking_permissions(tmp_path):
@@ -114,8 +169,7 @@ def test_persistent_unavailability_is_fatal_and_diagnostic(tmp_path, scenario, d
     assert "attempt 3/3" in result.stderr
     assert diagnostic in result.stdout + result.stderr
     assert "Android KVM is readable and writable" not in result.stdout
-    if scenario == "missing_device":
-        assert "STUB trigger" not in result.stdout
+    assert result.stdout.count("STUB trigger") == 3
     if scenario == "trigger_error":
         assert "STUB settle" not in result.stdout
 

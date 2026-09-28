@@ -231,16 +231,23 @@ def _validate_android_kvm_boundary(source, setup_source):
         'MODE="0666"',
         'OPTIONS+="static_node=kvm"',
         "sudo udevadm control --reload-rules",
-        "sudo udevadm trigger --name-match=kvm",
-        "sudo udevadm settle --timeout=10",
-        "for attempt in 1 2 3; do",
+        "sudo udevadm trigger",
+        "--subsystem-match=misc",
+        "--sysname-match=kvm",
+        "sudo udevadm settle",
         "test -r /dev/kvm",
         "test -w /dev/kvm",
-        "ls -l /dev/kvm",
-        "exit 1",
     ):
         if marker not in setup_source:
             raise ValueError("Android KVM helper permission policy is incomplete.")
+    # Retry mechanics and diagnostics are covered by the helper's behavior tests.
+    # The policy boundary only requires an explicit fatal terminal outcome.
+    terminal_exit = re.search(
+        r"(?m)^[ \t]*exit[ \t]+([0-9]+)[ \t]*(?:#[^\n]*)?\s*\Z",
+        setup_source,
+    )
+    if terminal_exit is None or int(terminal_exit.group(1)) % 256 == 0:
+        raise ValueError("Android KVM helper must terminate with a nonzero status.")
     runner = _step_block(source, "Run Android fake-data security integrations")
     if "continue-on-error:" in runner:
         raise ValueError("Android integration failures must remain fatal.")
@@ -361,6 +368,16 @@ if len(_validate_android_command_boundary(valid_fixture)) != 1:
     raise SystemExit("Android single-command boundary positive self-test failed.")
 kvm_setup = Path("scripts/ci/android_kvm.sh").read_text(encoding="utf-8")
 _validate_android_kvm_boundary(valid_fixture, kvm_setup)
+implementation_variant = (
+    kvm_setup.replace(
+        "for attempt in 1 2 3; do",
+        "for ((attempt = 1; attempt <= 3; attempt++)); do",
+    )
+    .replace("settle --timeout=10", "settle --timeout=12")
+    .replace("ls -l /dev/kvm", "stat /dev/kvm")
+    .replace("exit 1", "exit 2")
+)
+_validate_android_kvm_boundary(valid_fixture, implementation_variant)
 
 invalid_fixtures = (
     valid_fixture.replace(
@@ -430,16 +447,28 @@ for marker in (
     "test -r /dev/kvm",
     "test -w /dev/kvm",
     "sudo udevadm control --reload-rules",
-    "sudo udevadm trigger --name-match=kvm",
-    "sudo udevadm settle --timeout=10",
-    "for attempt in 1 2 3; do",
-    "exit 1",
+    "sudo udevadm trigger",
+    "--subsystem-match=misc",
+    "--sysname-match=kvm",
+    "sudo udevadm settle",
+    'KERNEL=="kvm"',
+    'GROUP="kvm"',
+    'MODE="0666"',
+    'OPTIONS+="static_node=kvm"',
 ):
     try:
         _validate_android_kvm_boundary(valid_fixture, kvm_setup.replace(marker, ""))
     except (ValueError, IndexError):
         continue
     raise SystemExit("Android KVM helper negative self-test failed.")
+
+for replacement in ("exit 0", "exit 256", "", "# exit 1"):
+    fixture = re.sub(r"(?m)^exit [0-9]+\s*\Z", replacement, kvm_setup)
+    try:
+        _validate_android_kvm_boundary(valid_fixture, fixture)
+    except (ValueError, IndexError):
+        continue
+    raise SystemExit("Android KVM helper terminal-exit negative self-test failed.")
 
 valid_windows_fixture = '''
 void main() {
