@@ -127,6 +127,8 @@ def normalized_date(value, precision=None):
     chosen = precision or ("date" if is_date else "time")
     if chosen not in ("date", "time"):
         raise ValueError("date_precision must be date or time for a known deadline")
+    if is_date and chosen == "time":
+        raise ValueError("A date-only deadline cannot have time precision")
     if chosen == "date":
         if not is_date and any((dt.hour, dt.minute, dt.second, dt.microsecond)):
             raise ValueError("Refusing to discard known deadline time")

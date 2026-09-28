@@ -61,6 +61,24 @@ class TransferTests(unittest.TestCase):
                     p11.apply(SOURCE, manifest, self.out)
                 self.assertFalse(self.out.exists())
 
+    def test_certification_remains_protected_after_label_case_changes(self):
+        for label in ('I Certify', 'i certify', 'Signature', 'signature'):
+            with self.subTest(label=label):
+                source = Path(self.tmp.name) / 'revised.docx'
+                with ZipFile(SOURCE) as original, ZipFile(source, 'w') as revised:
+                    root = E.fromstring(original.read(p11.PART))
+                    row = root.findall('.//w:tr', p11.NS)[127]
+                    for text in row.findall('.//w:t', p11.NS):
+                        text.text = (text.text or '').replace('I certify', 'Declaration').replace('SIGNATURE', 'Applicant')
+                    row.find('.//w:t', p11.NS).text = label
+                    for entry in original.infolist():
+                        revised.writestr(entry, E.tostring(root) if entry.filename == p11.PART else original.read(entry.filename))
+                self.inventory = p11.inspect(source)
+                self.out = Path(self.tmp.name) / f'filled-{label}.docx'
+                with self.assertRaisesRegex(ValueError, 'certification is protected'):
+                    p11.apply(source, self.manifest(self.op(127, 'text', '2026-09-19')), self.out)
+                self.assertFalse(self.out.exists())
+
     def test_refuses_overwrite(self):
         self.out.write_bytes(b'keep this')
         with self.assertRaises(ValueError):

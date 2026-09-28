@@ -127,8 +127,8 @@ def apply(source, manifest, output):
         require(not el.xpath('ancestor::w:ins | ancestor::w:del | ancestor::w:moveFrom | ancestor::w:moveTo', namespaces=NS), 'Tracked field unsupported')
         value = op['value']; row = el.xpath('ancestor::w:tr[1]', namespaces=NS)
         if row:
-            label = ' '.join(visible(row[0]).split())
-            require('SIGNATURE' not in label and 'I certify' not in label, 'Applicant certification is protected')
+            label = ' '.join(visible(row[0]).split()).casefold()
+            require('signature' not in label and 'i certify' not in label, 'Applicant certification is protected')
         item = {'xpath': path, 'source_ref': op['source_ref'], 'kind': f['kind']}
         if f['kind'] == 'text':
             require(isinstance(value, str), 'Text value required')

@@ -141,6 +141,36 @@ class LiveVacancyScanTests(unittest.TestCase):
         updated = scanner.load_profile(self.profile_path, feedback)
         self.assertEqual(old_hash, updated["manifest"]["used_evidence_sha256"])
 
+    def test_unclosed_fence_cannot_absorb_target_job_evidence(self):
+        for fence in ('```', '~~~'):
+            with self.subTest(fence=fence):
+                self.profile_path.write_text(
+                    '## USER_JOB_HISTORY_TEXT\nAccounting experience.\n' + fence + '\n'
+                    '## JOB_DESCRIPTION_TEXT\nLanguages: German (fluent). Procurement.\n',
+                    encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'Unclosed'):
+                    scanner.load_profile(self.profile_path)
+
+    def test_closed_fence_keeps_literal_headings_and_section_boundary(self):
+        self.profile_path.write_text(
+            '## USER_JOB_HISTORY_TEXT\n```\n## Notes\nAccounting experience.\n```\n'
+            '## JOB_DESCRIPTION_TEXT\nLanguages: German (fluent). Procurement.\n', encoding='utf-8')
+        profile = scanner.load_profile(self.profile_path)
+        self.assertIn('finance_accounting', profile['families'])
+        self.assertNotIn('procurement_supply', profile['families'])
+        self.assertNotIn('german', profile['settings']['languages'])
+
+    def test_organizational_partner_evidence_is_not_household_context(self):
+        self.profile_path.write_text(
+            '## USER_JOB_HISTORY_TEXT\nPartner: World Bank; led donor partnership and grants.\n'
+            'My partner is a procurement specialist.\n'
+            '### Household context\nPartner: Expert in logistics.\n'
+            '## JOB_DESCRIPTION_TEXT\nData analysis.\n', encoding='utf-8')
+        profile = scanner.load_profile(self.profile_path)
+        self.assertIn('grants_partnerships', profile['families'])
+        self.assertNotIn('procurement_supply', profile['families'])
+        self.assertEqual(profile['manifest']['withheld_lines'], 3)
+
     def test_controlled_assertion_subsection_is_withheld(self):
         self.profile_path.write_text("## USER_JOB_HISTORY_TEXT\nAccounting experience.\n#### Additional user-submitted narratives (controlled integration)\nI am a procurement expert and speak German (fluent).\n## JOB_DESCRIPTION_TEXT\nData analysis.\n", encoding="utf-8")
         profile = scanner.load_profile(self.profile_path)

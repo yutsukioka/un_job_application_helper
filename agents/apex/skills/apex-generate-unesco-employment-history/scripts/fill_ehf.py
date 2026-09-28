@@ -37,7 +37,7 @@ def checked_text(value, path, missing, paragraphs=False):
     for item in values:
         if any(ord(c) < 32 for c in item) or any(0xD800 <= ord(c) <= 0xDFFF for c in item):
             raise ValueError(f"{path}: control characters, tabs, newlines or surrogates are unsupported; use paragraph arrays")
-        if "[confirm" in item.lower() or "[placeholder" in item.lower():
+        if re.search(r"\[(?:confirm\b|placeholder\b|user\s+to\s+insert\b|select\s+one\b)", item, re.I):
             raise ValueError(f"{path}: keep unresolved placeholders in the review, not in the form")
     return values if paragraphs else values[0]
 
@@ -175,6 +175,13 @@ def fill(template, data, output, allow_incomplete=False):
         fill_field(cell(tables[0], 1, 1), names["first_name"])
         original_jobs = tables[1:]
         extra_job_pattern = deepcopy(original_jobs[-1])
+        separators = []
+        for table in original_jobs:
+            sequence, node = [], table.getnext()
+            while node is not None and node.tag not in (q("tbl"), q("sectPr")):
+                sequence.append(deepcopy(node))
+                node = node.getnext()
+            separators.append(sequence)
         tail = list(body).index(original_jobs[0])
         # Replace only the repeatable job area; retain both section properties.
         for node in list(body)[tail:]:
@@ -191,9 +198,10 @@ def fill(template, data, output, allow_incomplete=False):
             fill_paragraphs(cell(table, 7, 0), job["responsibilities"], 0)
             fill_paragraphs(cell(table, 8, 0), job["achievements"], 1)
             body.insert(len(body)-1, table)
-            # Source-derived separation between successive blocks.
-            separator = ET.Element(q("p"))
-            body.insert(len(body)-1, separator)
+            # Retain each source block's complete native separator sequence.
+            for separator in separators[min(index, len(separators)-1)]:
+                node = separator if index < len(original_jobs) else unique_clone(separator, index+1)
+                body.insert(len(body)-1, node)
         settings = ET.fromstring(source.read("word/settings.xml"), parser)
         update = settings.find("w:updateFields", NS)
         if update is None:

@@ -90,6 +90,14 @@ class WorkbookPreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'visible, specific gap'):
             self.prepare([{'org': 'Example Org', 'id': '111', 'action': 'review', 'fit': 'Conditional'}])
 
+    def test_date_only_cannot_be_promoted_to_a_precise_midnight(self):
+        with self.assertRaisesRegex(ValueError, 'date-only'):
+            self.prepare([{'org': 'Example Org', 'id': '111', 'action': 'refresh',
+                           'date': '2026-10-05', 'date_precision': 'time'}])
+        self.assertFalse((self.root / 'run/manifest.json').exists())
+        self.assertEqual(helper.normalized_date('2026-10-05T00:00:00', 'time'),
+                         ('2026-10-05T00:00:00', 'time'))
+
     def test_deadline_precision_and_timezone(self):
         self.assertEqual(helper.normalized_date('2026-10-05T20:30:00Z'), ('2026-10-05T23:30:00', 'time'))
         self.assertEqual(helper.normalized_date('2026-10-05'), ('2026-10-05', 'date'))

@@ -85,6 +85,51 @@ class FillingTests(unittest.TestCase):
         self.assertTrue(cloned_ids.isdisjoint(existing_ids))
         self.assertEqual(report["unresolvedFields"], [])
 
+    def test_job_separator_sequences_preserve_native_paragraph_properties(self):
+        def separators(document):
+            body = document.find('w:body', ehf.NS)
+            result = []
+            for table in body.findall('w:tbl', ehf.NS)[1:]:
+                sequence, node = [], table.getnext()
+                while node is not None and node.tag not in (ehf.q('tbl'), ehf.q('sectPr')):
+                    clean = deepcopy(node)
+                    for item in clean.iter():
+                        for attr in list(item.attrib):
+                            if ET.QName(attr).localname in {'paraId', 'textId'}:
+                                del item.attrib[attr]
+                    sequence.append(ET.tostring(clean, method='c14n', exclusive=True))
+                    node = node.getnext()
+                result.append(sequence)
+            return result
+        with ZipFile(ehf.TEMPLATE) as archive:
+            original = ET.fromstring(archive.read('word/document.xml'))
+        expected = separators(original)
+        self.assertEqual([len(s) for s in expected], [1, 2, 2, 2, 1])
+        for count in (1, 5, 7):
+            with self.subTest(jobs=count):
+                out = self.root / f'separators-{count}.docx'
+                ehf.fill(ehf.TEMPLATE, applicant(count), out)
+                with ZipFile(out) as archive:
+                    actual = ET.fromstring(archive.read('word/document.xml'))
+                self.assertEqual(separators(actual),
+                                 [expected[min(i, 4)] for i in range(count)])
+                para_ids = actual.xpath('//@w14:paraId', namespaces={
+                    'w14': 'http://schemas.microsoft.com/office/word/2010/wordml'})
+                self.assertEqual(len(para_ids), len(set(para_ids)))
+
+    def test_repository_placeholders_never_reach_a_clean_or_review_form(self):
+        for placeholder in ('[Confirm title]', '[Placeholder title]',
+                            '[User to Insert Specific Metric]', '[User to Insert Metric]',
+                            '[Select one]'):
+            for review_mode in (False, True):
+                with self.subTest(placeholder=placeholder, review_mode=review_mode):
+                    data = applicant()
+                    data['jobs'][0]['achievements'] = ['Produced ' + placeholder + ' reports.']
+                    with self.assertRaisesRegex(ValueError, 'unresolved placeholders'):
+                        out = self.root / f'placeholder-{placeholder}-{review_mode}.docx'
+                        ehf.fill(ehf.TEMPLATE, data, out, allow_incomplete=review_mode)
+                    self.assertFalse(out.exists())
+
     def test_narratives_can_exceed_blank_paragraph_count(self):
         data = applicant()
         data["jobs"][0]["responsibilities"] = [f"Synthetic responsibility paragraph {i}." for i in range(20)]

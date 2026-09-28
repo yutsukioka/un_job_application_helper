@@ -104,6 +104,8 @@ def section(text, name):
             active = line.strip() == "## " + name
         elif active:
             result.append(line)
+    if fence:
+        raise ValueError(f"Unclosed code fence while reading {name}")
     return "\n".join(result).strip()
 
 
@@ -118,7 +120,7 @@ def approved_evidence(text):
                 skip_level = None
             if re.search(r"controlled integration|unconfirmed|requiring confirmation|hold.as.placeholder|candidate assertions?|user.submitted.*narratives|\b(?:spouse|husband|wife|household context|family members?)\b", heading[2], re.I):
                 skip_level = level
-        third_party = re.search(r"^\s*(?:[-*]\s*)?(?:(?:spouse|husband|wife|family member|household context)\b|partner\s*:)|\bmy (?:spouse|husband|wife|partner)\b", line, re.I)
+        third_party = re.search(r"^\s*(?:[-*]\s*)?(?:(?:spouse|husband|wife|family member|household context)\b)|\bmy (?:spouse|husband|wife|partner)\b", line, re.I)
         if skip_level or third_party or re.search(r"\[Confirm\b|\[User to Insert|Candidate Assertion|not established|not evidenced|do not claim", line, re.I):
             withheld.append(line)
         else:

@@ -1,9 +1,5 @@
-# This project uses standard Python 3.9+ libraries only.
-# No external dependencies are required to run the CAPEL scripts.
-#
-# Scripts location: skills/capel-fit/scripts/
-# usage: python scripts/normalize_text.py < input.txt
+# Runtime dependency for the Word and workbook OOXML preservation helpers.
+lxml>=5,<7
 
-# Dev dependencies (optional)
-# black
-# flake8
+# CAPEL and the other standard-library helpers require no third-party packages.
+# pytest and PyYAML are test dependencies installed by the Apex skills workflow.
