@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode, urlsplit, parse_qsl
 import xml.etree.ElementTree as ET
 
 from jobagg.adapters.base import JobAdapter, register_adapter
@@ -43,6 +43,8 @@ class PeopleSoftAdapter(JobAdapter):
         return jobs
 
     def fetch_detail_for_listing_item(self, item: dict[str, str]) -> JobRecord | None:
+        if self.source.id == "ifad_peoplesoft" and self.source.extra.get("public_job_deeplinks"):
+            return self._fetch_public_job_detail(item)
         if self.source.id == "ifad_peoplesoft" or item.get("parser") == "peoplesoft_listing":
             return self._fetch_guest_detail(item)
         detail_url = item.get("detail_url") or item.get("source_url") or item.get("apply_url")
@@ -52,6 +54,40 @@ class PeopleSoftAdapter(JobAdapter):
         self.ensure_allowed(detail_url)
         html_text = self.fetch_text(detail_url)
         return self.parse_detail_html(html_text, item=item, detail_url=detail_url)
+
+    def _fetch_public_job_detail(self, item: dict[str, str]) -> JobRecord:
+        job_id = str(item.get("job_id") or item.get("external_id") or "")
+        url = ifad_detail_url(job_id)
+        self.ensure_allowed(url)
+        response = self.context.http.get(url)
+        expected, actual = urlsplit(url), urlsplit(response.url)
+        if (response.status_code != 200 or (actual.scheme, actual.netloc, actual.path) !=
+                (expected.scheme, expected.netloc, expected.path) or
+                sorted(parse_qsl(actual.query)) != sorted(parse_qsl(expected.query))):
+            raise ValueError("IFAD public detail redirected outside its exact job route")
+        content = _detail_page_html(response.text)
+        blocks = _ValueBlocks()
+        blocks.feed(content)
+        actual_id = clean_html(blocks.values.get("HRS_SCH_WRK2_HRS_JOB_OPENING_ID"))
+        title = clean_html(blocks.values.get("HRS_SCH_WRK2_POSTING_TITLE"))
+        identity = None
+        if not actual_id:
+            # Standing programmes omit the visible job ID. Require a fresh
+            # listing to bind its unique title to the requested public ID.
+            listing_url = str(self.source.extra.get("listing_url") or self.source.base_url)
+            listing = self.fetch_text(listing_url)
+            rows = _search_rows(listing)
+            selected = [r for r in rows if _span_value(r, "HRS_JOB_OPENING_ID") == job_id]
+            matching = [r for r in rows if _span_value(r, "SCH_JOB_TITLE") == title]
+            if len(selected) != 1 or len(matching) != 1 or selected[0] != matching[0]:
+                raise ValueError("IFAD ID-less detail is not uniquely bound to the current listing")
+            item = {**item, **_listing_metadata(selected[0])}
+            identity = (job_id, title)
+        job = self.parse_detail_html(response.text, item=item, detail_url=url, guest_identity=identity)
+        job.raw["detail_fetch_method"] = "public_job_deeplink_get"
+        if identity:
+            job.raw["identity_verification"] = "exact_deeplink_and_fresh_unique_listing_title"
+        return job
 
     def _fetch_guest_detail(self, item: dict[str, str]) -> JobRecord | None:
         job_id = str(item.get("job_id") or item.get("external_id") or "")
@@ -85,7 +121,11 @@ class PeopleSoftAdapter(JobAdapter):
 
     def parse_detail_html(self, html_text: str, *, item: dict[str, str], detail_url: str,
                           guest_identity: tuple[str, str] | None = None) -> JobRecord | None:
-        content_html = _detail_page_html(html_text)
+        # IFAD full pages can carry session fields outside their public container.
+        # Other PeopleSoft installations also support direct, unwrapped HTML.
+        content_html = _detail_page_html(
+            html_text, require_public_container=self.source.id == "ifad_peoplesoft",
+        )
         blocks = _ValueBlocks()
         blocks.feed(content_html)
         values = {key: clean_html(value) for key, value in blocks.values.items()}
@@ -126,8 +166,8 @@ class PeopleSoftAdapter(JobAdapter):
             external_id=job_id,
             location=values.get("HRS_SCH_WRK_HRS_DESCRLONG") or item.get("listing_location"),
             department=values.get("IFA_HRS_SCH_WRK_HRS_DEPT_DESCR") or item.get("listing_department"),
-            posted_at=values.get("IFA_HRS_SCH_WRK_OPEN_DT") or item.get("listing_posted_at"),
-            closes_at=values.get("IFA_HRS_SCH_WRK_HRS_JO_PST_CLS_DT") or item.get("listing_closes_at"),
+            posted_at=_public_date(values.get("IFA_HRS_SCH_WRK_OPEN_DT") or item.get("listing_posted_at")),
+            closes_at=_public_date(values.get("IFA_HRS_SCH_WRK_HRS_JO_PST_CLS_DT") or item.get("listing_closes_at")),
             employment_type=values.get("HRS_SCH_WRK_HRS_REG_TEMP"),
             apply_url=detail_url,
             source_url=detail_url,
@@ -148,9 +188,9 @@ class PeopleSoftAdapter(JobAdapter):
             job_id = _span_value(row_html, "HRS_JOB_OPENING_ID")
             if not title or not job_id:
                 continue
-            # This PeopleSoft installation exposes details through a guest form
-            # action. Appending job_id to the search URL does not select a job.
-            detail_url = listing_url
+            # Observed IFAD deeplinks select the posting page with JobOpeningId.
+            detail_url = (ifad_detail_url(job_id) if self.source.id == "ifad_peoplesoft"
+                          and self.source.extra.get("public_job_deeplinks") else listing_url)
             jobs.append(
                 build_job(
                     self.source,
@@ -158,8 +198,8 @@ class PeopleSoftAdapter(JobAdapter):
                     external_id=job_id,
                     location=_span_value(row_html, "LOCATION"),
                     department=_span_value(row_html, "HRS_DEPT_DESCR"),
-                    posted_at=_span_value(row_html, "SCH_OPENED"),
-                    closes_at=_span_value(row_html, "HRS_JO_PST_CLS_DT"),
+                    posted_at=_public_date(_span_value(row_html, "SCH_OPENED")),
+                    closes_at=_public_date(_span_value(row_html, "HRS_JO_PST_CLS_DT")),
                     apply_url=detail_url,
                     source_url=detail_url,
                     raw={
@@ -262,7 +302,48 @@ class _ValueBlocks(HTMLParser):
         self.handle_data(f"&#{name};")
 
 
-def _detail_page_html(response_text: str) -> str:
+class _PageContainer(HTMLParser):
+    """Keep the public page container, excluding the surrounding session form."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.depth = 0
+        self.parts = []
+        self.full_document = False
+
+    def handle_decl(self, decl):
+        if decl.casefold().startswith("doctype"):
+            self.full_document = True
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"html", "head", "body", "form"}:
+            self.full_document = True
+        if tag == "div" and dict(attrs).get("id") == "win0divPAGECONTAINER":
+            self.depth = 1
+            return
+        if self.depth:
+            self.parts.append(self.get_starttag_text())
+            if tag == "div":
+                self.depth += 1
+
+    def handle_endtag(self, tag):
+        if self.depth:
+            if tag == "div":
+                self.depth -= 1
+            if self.depth:
+                self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self.depth:
+            self.parts.append(data)
+
+    def handle_entityref(self, name):
+        self.handle_data(f"&{name};")
+
+    def handle_charref(self, name):
+        self.handle_data(f"&#{name};")
+
+
+def _detail_page_html(response_text: str, *, require_public_container: bool = True) -> str:
     if response_text.lstrip().startswith("<?xml") or response_text.lstrip().startswith("<PAGE"):
         page = ET.fromstring(response_text)
         if page.tag != "PAGE" or page.get("id") != "HRS_APP_JBPST_FL":
@@ -272,7 +353,14 @@ def _detail_page_html(response_text: str) -> str:
         if not fields:
             raise ValueError("PeopleSoft detail response lacks its page container")
         return "\n".join(fields)
-    if "HRS_SCH_WRK2_HRS_JOB_OPENING_ID" not in response_text:
+    container = _PageContainer()
+    container.feed(response_text)
+    if container.parts and container.depth == 0:
+        response_text = "".join(container.parts)
+    elif container.depth or (require_public_container and container.full_document):
+        raise ValueError("PeopleSoft detail response lacks a complete public page container")
+    if ("HRS_SCH_WRK2_POSTING_TITLE" not in response_text
+            or "HRS_SCH_PSTDSC_DESCRLONG" not in response_text):
         raise ValueError("PeopleSoft returned a search/session/error page instead of a job detail")
     return response_text
 
@@ -319,3 +407,17 @@ def _dedupe(jobs: list[JobRecord]) -> list[JobRecord]:
         seen.add(key)
         deduped.append(job)
     return deduped
+
+
+def _public_date(value):
+    """IFAD browser locale may display unambiguous year/month/day dates."""
+    return value.replace("/", "-") if value and re.fullmatch(r"\d{4}/\d{2}/\d{2}", value) else value
+
+
+def ifad_detail_url(job_id):
+    """Literal public route/parameters observed in user HAR and verified live."""
+    if not isinstance(job_id, str) or not re.fullmatch(r"[0-9]+", job_id):
+        raise ValueError("IFAD public detail requires a numeric job ID")
+    return ("https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL?" +
+            urlencode(dict(Action="U", FOCUS="Applicant", JobOpeningId=job_id,
+                           Page="HRS_APP_JBPST_FL", PostingSeq="1", SiteId="1000", languageCd="ENG")))

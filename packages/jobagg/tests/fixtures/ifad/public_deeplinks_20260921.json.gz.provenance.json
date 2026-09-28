@@ -1,0 +1,8 @@
+{
+  "fixture": "public_deeplinks_20260921.json.gz",
+  "capture_date": "2026-09-21",
+  "sha256": "f2775518e7539a592456386c1a466653024da4ddc9fefb3ba2a3e1b716863271",
+  "public_content_only": true,
+  "provenance": "Selected public responses retained in the reviewed local source snapshot. Original HAR and private runtime captures are not included.",
+  "not_current_inventory": true
+}
