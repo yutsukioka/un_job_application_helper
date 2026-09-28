@@ -221,3 +221,17 @@ def test_bare_public_detail_fragment_remains_supported():
     job = direct_adapter(FakeHTTP([content])).fetch_detail_for_listing_item({"job_id": "38079"})
     assert job.external_id == "38079"
     assert "nested content" in job.description
+
+
+@pytest.mark.parametrize("include_job_id", [True, False])
+def test_ifad_guest_route_still_rejects_unscoped_full_documents(include_job_id):
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    content = _detail_page_html(detail("2095"))
+    if not include_job_id:
+        content = content.replace(
+            "<span class='ps_box-value' id='HRS_SCH_WRK2_HRS_JOB_OPENING_ID'>2095</span>", "",
+        )
+    full = "<html><input name='ICSID' value='synthetic-private-session'>" + content + "</html>"
+    a = adapter(FakeHTTP([listing(("2095",))], [full]))
+    with pytest.raises(ValueError, match="page container"):
+        a.fetch_detail_for_listing_item({"job_id": "2095"})

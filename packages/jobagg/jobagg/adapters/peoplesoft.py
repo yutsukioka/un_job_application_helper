@@ -121,7 +121,11 @@ class PeopleSoftAdapter(JobAdapter):
 
     def parse_detail_html(self, html_text: str, *, item: dict[str, str], detail_url: str,
                           guest_identity: tuple[str, str] | None = None) -> JobRecord | None:
-        content_html = _detail_page_html(html_text)
+        # IFAD full pages can carry session fields outside their public container.
+        # Other PeopleSoft installations also support direct, unwrapped HTML.
+        content_html = _detail_page_html(
+            html_text, require_public_container=self.source.id == "ifad_peoplesoft",
+        )
         blocks = _ValueBlocks()
         blocks.feed(content_html)
         values = {key: clean_html(value) for key, value in blocks.values.items()}
@@ -339,7 +343,7 @@ class _PageContainer(HTMLParser):
         self.handle_data(f"&#{name};")
 
 
-def _detail_page_html(response_text: str) -> str:
+def _detail_page_html(response_text: str, *, require_public_container: bool = True) -> str:
     if response_text.lstrip().startswith("<?xml") or response_text.lstrip().startswith("<PAGE"):
         page = ET.fromstring(response_text)
         if page.tag != "PAGE" or page.get("id") != "HRS_APP_JBPST_FL":
@@ -353,7 +357,7 @@ def _detail_page_html(response_text: str) -> str:
     container.feed(response_text)
     if container.parts and container.depth == 0:
         response_text = "".join(container.parts)
-    elif container.full_document or container.depth:
+    elif container.depth or (require_public_container and container.full_document):
         raise ValueError("PeopleSoft detail response lacks a complete public page container")
     if ("HRS_SCH_WRK2_POSTING_TITLE" not in response_text
             or "HRS_SCH_PSTDSC_DESCRLONG" not in response_text):
