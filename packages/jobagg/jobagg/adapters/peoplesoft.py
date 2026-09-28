@@ -304,8 +304,15 @@ class _PageContainer(HTMLParser):
         super().__init__(convert_charrefs=False)
         self.depth = 0
         self.parts = []
+        self.full_document = False
+
+    def handle_decl(self, decl):
+        if decl.casefold().startswith("doctype"):
+            self.full_document = True
 
     def handle_starttag(self, tag, attrs):
+        if tag in {"html", "head", "body", "form"}:
+            self.full_document = True
         if tag == "div" and dict(attrs).get("id") == "win0divPAGECONTAINER":
             self.depth = 1
             return
@@ -344,8 +351,10 @@ def _detail_page_html(response_text: str) -> str:
         return "\n".join(fields)
     container = _PageContainer()
     container.feed(response_text)
-    if container.parts:
+    if container.parts and container.depth == 0:
         response_text = "".join(container.parts)
+    elif container.full_document or container.depth:
+        raise ValueError("PeopleSoft detail response lacks a complete public page container")
     if ("HRS_SCH_WRK2_POSTING_TITLE" not in response_text
             or "HRS_SCH_PSTDSC_DESCRLONG" not in response_text):
         raise ValueError("PeopleSoft returned a search/session/error page instead of a job detail")

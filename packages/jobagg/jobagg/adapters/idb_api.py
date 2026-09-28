@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import json
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -59,20 +60,23 @@ def parse_page(data, page):
             or any(not isinstance(value, str) for value in r.get("jobLocationShort", []))
         ):
             raise ValueError("IDB API malformed job identity/locale")
-        url = "https://jobs.iadb.org/job/" + quote(slug, safe="-&;_") + "/" + identity + "-en_US"
+        # urlTitle is already escaped in captured public API responses. Keep
+        # valid escapes verbatim while encoding literal percent signs and text.
+        slug = re.sub(r"%(?![0-9a-fA-F]{2})", "%25", slug)
+        url = "https://jobs.iadb.org/job/" + quote(slug, safe="%&;_") + "/" + identity + "-en_US"
         rows.append(dict(external_id=identity, title=title, url=url, fields=r))
     if len({r["external_id"] for r in rows}) != len(rows):
         raise ValueError("IDB API duplicates within a page")
     return total, rows
 
 
-def reconcile(pages, *, require_total=True):
+def reconcile(pages, *, require_total=True, require_terminal=True):
     totals, rows = set(), {}
     for sort in ("", "date"):
         walk = sorted((p for p in pages if p["sort"] == sort), key=lambda p: p["page"])
         if not walk or [p["page"] for p in walk] != list(range(len(walk))):
             raise ValueError("IDB API missing sort/page")
-        if len(walk) != max(1, (walk[0]["total"] + 9) // 10):
+        if require_terminal and len(walk) != max(1, (walk[0]["total"] + 9) // 10):
             raise ValueError("IDB API unterminated walk")
         for p in walk:
             totals.add(p["total"])
@@ -87,24 +91,34 @@ def reconcile(pages, *, require_total=True):
 
 
 def fetch(adapter):
-    pages = []
+    cap = adapter.source.extra.get("max_pages", 25)
+    if type(cap) is not int or not 1 <= cap <= 50:
+        raise ValueError("IDB API page cap must be within 1–50 per sort")
+    pages, capped_sorts = [], []
     for sort in ("", "date"):
-        for page in range(50):
+        for page in range(cap):
             data = adapter.post_json(URL, request_payload(page, sort))
             total, rows = parse_page(data, page)
             pages.append(dict(page=page, sort=sort, total=total, rows=rows))
             if (page + 1) * 10 >= total:
                 break
-    rows = reconcile(pages, require_total=False)
+        else:
+            capped_sorts.append(sort)
+    rows = reconcile(pages, require_total=False, require_terminal=False)
     total = pages[0]["total"]
-    complete = len(rows) == total
+    complete = not capped_sorts and len(rows) == total
     d = adapter.run_diagnostics
     d.pages_fetched = len(pages)
     d.total_reported_by_source = total
     d.pagination_complete = complete
     d.list_error_count = 0 if complete else 1
     d.health_status = "ok" if complete else "issue"
-    d.zero_fetched_evidence = {"method": VERSION}
+    d.zero_fetched_evidence = {"method": VERSION, "max_pages_per_sort": cap}
+    if not complete:
+        d.zero_fetched_evidence["incomplete_reason"] = (
+            f"walk_capped_at_{cap}" if capped_sorts else "unique_union_below_advertised_total"
+        )
+        d.zero_fetched_evidence["capped_sorts"] = capped_sorts
     if complete and total == 0:
         d.empty_reason = "verified_total_zero"
     return [

@@ -194,3 +194,30 @@ def test_nine_observed_public_deeplink_containers_parse_all_sections():
         assert len(job.raw['detail_sections']) == row['sections']
         assert len(job.description) > 1000
         assert 'ICSID' not in str(job.raw)
+
+
+@pytest.mark.parametrize("wrapper", [
+    "<HTML><BODY>{content}</BODY></HTML>",
+    "<!DoCtYpE HTML>{content}",
+    "<FORM name='win0'>{content}</FORM>",
+    "<html><div id='renamedPAGECONTAINER'>{content}</div></html>",
+    "<html><div id='win0divPAGECONTAINER'>{content}</html>",
+])
+def test_unscoped_full_roster_document_is_rejected_without_persisting_session(wrapper):
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    content = _detail_page_html(detail("2095")).replace(
+        "<span class='ps_box-value' id='HRS_SCH_WRK2_HRS_JOB_OPENING_ID'>2095</span>", "",
+    )
+    content += "<input name='ICSID' value='synthetic-private-session'>"
+    full = wrapper.format(content=content)
+    a = direct_adapter(FakeHTTP([full, listing(("2095",))]))
+    with pytest.raises(ValueError, match="page container"):
+        a.fetch_detail_for_listing_item({"job_id": "2095"})
+
+
+def test_bare_public_detail_fragment_remains_supported():
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    content = _detail_page_html(detail("38079"))
+    job = direct_adapter(FakeHTTP([content])).fetch_detail_for_listing_item({"job_id": "38079"})
+    assert job.external_id == "38079"
+    assert "nested content" in job.description

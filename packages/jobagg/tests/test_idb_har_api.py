@@ -189,3 +189,88 @@ def test_filtered_idb_requests_are_not_recorded_as_public_pagination(tmp_path, m
     metadata = json.loads(next((tmp_path / "captures/http").glob("*.json")).read_text())
     assert "public_pagination_request" not in metadata
     assert "private search" not in json.dumps(metadata)
+
+
+@pytest.mark.parametrize("slug,expected", [
+    ("Research%2C-Policy-%28Senior%29", "Research%2C-Policy-%28Senior%29"),
+    ("Energ%C3%ADa-y-clima", "Energ%C3%ADa-y-clima"),
+    ("Energía-%2c-50%", "Energ%C3%ADa-%2c-50%25"),
+    ("Budget-&-Planning;2026", "Budget-&-Planning;2026"),
+    ("Role/a?b#c%xy", "Role%2Fa%3Fb%23c%25xy"),
+])
+def test_idb_slug_preserves_valid_escapes_and_encodes_unescaped_characters(slug, expected):
+    data = api_page()
+    data["jobSearchResult"][0]["response"]["urlTitle"] = slug
+    _, rows = parse_page(data, 0)
+    assert rows[0]["url"] == f"https://jobs.iadb.org/job/{expected}/1-en_US"
+
+
+@pytest.mark.parametrize("configured_cap,policy_cap,effective_cap", [(5, 25, 5), (5, 2, 2)])
+def test_idb_fetch_obeys_effective_page_cap_and_retains_incomplete_inventory(
+    configured_cap, policy_cap, effective_cap,
+):
+    from jobagg.adapters.base import AdapterContext
+    from jobagg.adapters.successfactors_rmk import SuccessFactorsRMKAdapter
+    from jobagg.models import OrganizationSource
+    from jobagg.pipelines.sync_source import _source_with_policy_page_cap
+    from jobagg.robots import RobotsPolicy
+
+    source = OrganizationSource("idb_successfactors", "IDB", "successfactors_rmk",
+                                "https://jobs.iadb.org", extra={
+                                    "public_search_api": True, "max_pages": configured_cap,
+                                })
+    source = _source_with_policy_page_cap(source, RobotsPolicy(max_pages_per_source=policy_cap))
+    adapter = SuccessFactorsRMKAdapter(AdapterContext(source, None))
+    calls = []
+
+    def page_response(url, payload):
+        calls.append(payload)
+        data = api_page(min(10, max(0, 91 - payload["pageNumber"] * 10)))
+        data["totalJobs"] = 91
+        for index, row in enumerate(data["jobSearchResult"]):
+            identity = payload["pageNumber"] * 10 + index + 1
+            row["response"].update(id=str(identity), unifiedStandardTitle=f"Role {identity}",
+                                   urlTitle=f"Role-{identity}")
+        return data
+
+    adapter.post_json = page_response
+    jobs = adapter.fetch_jobs()
+    assert [(call["sortBy"], call["pageNumber"]) for call in calls] == [
+        (sort, page) for sort in ("", "date") for page in range(effective_cap)
+    ]
+    assert len(jobs) == effective_cap * 10
+    diagnostics = adapter.run_diagnostics
+    assert diagnostics.pages_fetched == effective_cap * 2
+    assert diagnostics.pagination_complete is False
+    assert diagnostics.list_error_count == 1
+    assert diagnostics.health_status == "issue"
+    assert diagnostics.zero_fetched_evidence["incomplete_reason"] == f"walk_capped_at_{effective_cap}"
+
+
+def test_capped_idb_walk_cannot_be_verified_as_complete():
+    pages = [dict(sort=sort, page=0, total=11, rows=[])
+             for sort in ("", "date")]
+    with pytest.raises(ValueError, match="unterminated"):
+        reconcile(pages)
+
+
+def test_idb_terminal_page_exactly_at_cap_is_complete():
+    from jobagg.adapters.base import AdapterContext
+    from jobagg.adapters.successfactors_rmk import SuccessFactorsRMKAdapter
+    from jobagg.models import OrganizationSource
+
+    source = OrganizationSource("idb_successfactors", "IDB", "successfactors_rmk",
+                                "https://jobs.iadb.org", extra={
+                                    "public_search_api": True, "max_pages": 1,
+                                })
+    adapter = SuccessFactorsRMKAdapter(AdapterContext(source, None))
+    calls = []
+    def page_response(url, payload):
+        calls.append(payload)
+        return api_page(10)
+    adapter.post_json = page_response
+    assert len(adapter.fetch_jobs()) == 10
+    assert len(calls) == 2
+    assert adapter.run_diagnostics.pagination_complete is True
+    assert adapter.run_diagnostics.list_error_count == 0
+    assert "incomplete_reason" not in adapter.run_diagnostics.zero_fetched_evidence
