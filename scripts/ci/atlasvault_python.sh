@@ -57,6 +57,7 @@ print("Validated AtlasVault forbidden-artifact trigger coverage.")
 PY
 
 focused_tests=(
+  tests/test_android_kvm_setup.py
   packages/vaultsync/tests/test_device_identity_vectors.py
   packages/vaultsync/tests/test_pairing_vectors.py
   packages/vaultsync/tests/test_key_delivery_vectors.py
@@ -205,7 +206,7 @@ def _validate_android_command_boundary(source):
     return commands
 
 
-def _validate_android_kvm_boundary(source):
+def _validate_android_kvm_boundary(source, setup_source):
     step_name = "Enable Android KVM"
     kvm = _step_block(source, step_name)
     runner_index = source.index("uses: reactivecircus/android-emulator-runner@")
@@ -213,23 +214,43 @@ def _validate_android_kvm_boundary(source):
         raise ValueError("Android KVM must be enabled before emulator launch.")
     for marker in (
         "shell: bash",
+        "timeout-minutes: 2",
+        "run: bash scripts/ci/android_kvm.sh",
+    ):
+        if marker not in kvm:
+            raise ValueError("Android KVM setup must invoke the bounded repository helper.")
+    if kvm.split("\n        run:", 1)[1].strip() != "bash scripts/ci/android_kvm.sh":
+        raise ValueError("Android KVM setup invocation may not suppress failure.")
+    if "continue-on-error:" in kvm or re.search(r"(?m)^\s*if:", kvm):
+        raise ValueError("Android KVM setup must run and fail closed.")
+    for marker in (
         "set -euo pipefail",
-        "test -e /dev/kvm",
+        "test -c /dev/kvm",
         'KERNEL=="kvm"',
         'GROUP="kvm"',
         'MODE="0666"',
         'OPTIONS+="static_node=kvm"',
         "sudo udevadm control --reload-rules",
-        "sudo udevadm trigger --name-match=kvm",
+        "sudo udevadm trigger",
+        "--subsystem-match=misc",
+        "--sysname-match=kvm",
+        "sudo udevadm settle",
         "test -r /dev/kvm",
         "test -w /dev/kvm",
-        "ls -l /dev/kvm",
     ):
-        if marker not in kvm:
-            raise ValueError("Android KVM permission policy is incomplete.")
-    runner = source.split(
-        "uses: reactivecircus/android-emulator-runner@", 1
-    )[1].split("\n      - name:", 1)[0]
+        if marker not in setup_source:
+            raise ValueError("Android KVM helper permission policy is incomplete.")
+    # Retry mechanics and diagnostics are covered by the helper's behavior tests.
+    # The policy boundary only requires an explicit fatal terminal outcome.
+    terminal_exit = re.search(
+        r"(?m)^[ \t]*exit[ \t]+([0-9]+)[ \t]*(?:#[^\n]*)?\s*\Z",
+        setup_source,
+    )
+    if terminal_exit is None or int(terminal_exit.group(1)) % 256 == 0:
+        raise ValueError("Android KVM helper must terminate with a nonzero status.")
+    runner = _step_block(source, "Run Android fake-data security integrations")
+    if "continue-on-error:" in runner:
+        raise ValueError("Android integration failures must remain fatal.")
     if "disable-linux-hw-accel: false" not in runner:
         raise ValueError("Android hardware acceleration must be explicitly required.")
     if "disable-linux-hw-accel: auto" in runner:
@@ -324,17 +345,9 @@ valid_fixture = '''
           bash -n "$script_path"
 
       - name: Enable Android KVM
+        timeout-minutes: 2
         shell: bash
-        run: |
-          set -euo pipefail
-          test -e /dev/kvm
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
-            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
-          ls -l /dev/kvm
+        run: bash scripts/ci/android_kvm.sh
 
       - name: Run Android fake-data security integrations
         uses: reactivecircus/android-emulator-runner@example
@@ -353,7 +366,18 @@ valid_fixture = '''
 '''
 if len(_validate_android_command_boundary(valid_fixture)) != 1:
     raise SystemExit("Android single-command boundary positive self-test failed.")
-_validate_android_kvm_boundary(valid_fixture)
+kvm_setup = Path("scripts/ci/android_kvm.sh").read_text(encoding="utf-8")
+_validate_android_kvm_boundary(valid_fixture, kvm_setup)
+implementation_variant = (
+    kvm_setup.replace(
+        "for attempt in 1 2 3; do",
+        "for ((attempt = 1; attempt <= 3; attempt++)); do",
+    )
+    .replace("settle --timeout=10", "settle --timeout=12")
+    .replace("ls -l /dev/kvm", "stat /dev/kvm")
+    .replace("exit 1", "exit 2")
+)
+_validate_android_kvm_boundary(valid_fixture, implementation_variant)
 
 invalid_fixtures = (
     valid_fixture.replace(
@@ -397,18 +421,13 @@ for fixture in invalid_fixtures:
 
 invalid_kvm_fixtures = (
     valid_fixture.replace("      - name: Enable Android KVM", "      - name: Missing KVM"),
-    valid_fixture.replace(
-        "      - name: Enable Android KVM\n"
-        "        shell: bash\n"
-        "        run: |\n"
-        "          set -euo pipefail\n",
-        "      - name: Enable Android KVM\n"
-        "        shell: bash\n"
-        "        run: |\n",
-    ),
-    valid_fixture.replace("          test -e /dev/kvm\n", ""),
-    valid_fixture.replace("          test -r /dev/kvm\n", ""),
-    valid_fixture.replace("          test -w /dev/kvm\n", ""),
+    valid_fixture.replace("        timeout-minutes: 2\n", ""),
+    valid_fixture.replace("run: bash scripts/ci/android_kvm.sh", "run: true"),
+    valid_fixture.replace("run: bash scripts/ci/android_kvm.sh", "run: bash scripts/ci/android_kvm.sh || true"),
+    valid_fixture.replace("run: bash scripts/ci/android_kvm.sh", "run: bash scripts/ci/android_kvm.sh\n          || true"),
+    valid_fixture.replace("        uses: reactivecircus/android-emulator-runner@", "        continue-on-error: true\n        uses: reactivecircus/android-emulator-runner@"),
+    valid_fixture.replace("        timeout-minutes: 2", "        continue-on-error: true\n        timeout-minutes: 2"),
+    valid_fixture.replace("        timeout-minutes: 2", "        if: false\n        timeout-minutes: 2"),
     valid_fixture.replace(
         "          disable-linux-hw-accel: false",
         "          disable-linux-hw-accel: auto",
@@ -417,10 +436,39 @@ invalid_kvm_fixtures = (
 )
 for fixture in invalid_kvm_fixtures:
     try:
-        _validate_android_kvm_boundary(fixture)
+        _validate_android_kvm_boundary(fixture, kvm_setup)
     except (ValueError, IndexError):
         continue
     raise SystemExit("Android KVM boundary negative self-test failed.")
+
+for marker in (
+    "set -euo pipefail",
+    "test -c /dev/kvm",
+    "test -r /dev/kvm",
+    "test -w /dev/kvm",
+    "sudo udevadm control --reload-rules",
+    "sudo udevadm trigger",
+    "--subsystem-match=misc",
+    "--sysname-match=kvm",
+    "sudo udevadm settle",
+    'KERNEL=="kvm"',
+    'GROUP="kvm"',
+    'MODE="0666"',
+    'OPTIONS+="static_node=kvm"',
+):
+    try:
+        _validate_android_kvm_boundary(valid_fixture, kvm_setup.replace(marker, ""))
+    except (ValueError, IndexError):
+        continue
+    raise SystemExit("Android KVM helper negative self-test failed.")
+
+for replacement in ("exit 0", "exit 256", "", "# exit 1"):
+    fixture = re.sub(r"(?m)^exit [0-9]+\s*\Z", replacement, kvm_setup)
+    try:
+        _validate_android_kvm_boundary(valid_fixture, fixture)
+    except (ValueError, IndexError):
+        continue
+    raise SystemExit("Android KVM helper terminal-exit negative self-test failed.")
 
 valid_windows_fixture = '''
 void main() {
@@ -492,7 +540,7 @@ try:
 except (ValueError, IndexError) as error:
     raise SystemExit(f"Android command-boundary policy failed: {error}") from error
 try:
-    _validate_android_kvm_boundary(workflow)
+    _validate_android_kvm_boundary(workflow, kvm_setup)
 except (ValueError, IndexError) as error:
     raise SystemExit(f"Android KVM boundary policy failed: {error}") from error
 recovery_source = Path(

@@ -836,6 +836,37 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         }
     }
 
+    func testSecretCleanupObservationWaitsForDelayedCleanup() async throws {
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
+        let cleanup = Task.detached {
+            try await Task.sleep(for: .milliseconds(25))
+            await buffer.clear()
+        }
+
+        let isCleared = await waitUntilCleared(buffer)
+        try await cleanup.value
+
+        XCTAssertTrue(isCleared)
+    }
+
+    func testUnlockObservationReturnsFalseWhenDeadlineExpires() async {
+        let observed = await waitForUnlockObservation(timeout: .milliseconds(10)) {
+            false
+        }
+
+        XCTAssertFalse(observed)
+    }
+
+    func testUnlockObservationReturnsFalseWhenCancelled() async {
+        let observation = Task {
+            await waitForUnlockObservation { false }
+        }
+        observation.cancel()
+
+        let observed = await observation.value
+        XCTAssertFalse(observed)
+    }
+
     func testNonPositiveTimeoutClearsSecretWithoutInvokingDependencies() async {
         let spy = UnlockDependencySpy()
         let coordinator = makeCoordinator(spy: spy)
@@ -1230,13 +1261,9 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
     private func waitUntilCleared(
         _ buffer: AtlasVaultInMemorySecretBuffer
     ) async -> Bool {
-        for _ in 0..<1_000 {
-            if await buffer.isClearedForTesting {
-                return true
-            }
-            await Task.yield()
+        await waitForUnlockObservation {
+            await buffer.isClearedForTesting
         }
-        return await buffer.isClearedForTesting
     }
 
     private func assertDispatchThrows(
@@ -1536,6 +1563,35 @@ private actor UnlockDependencySpy {
     }
 }
 
+// These observations cross detached cleanup tasks and actor executors. A yield
+// count does not bound elapsed time or guarantee that either task gets to run.
+// Suspend between checks, retain a finite monotonic deadline, and stop when the
+// observing test is cancelled. Predicates only read actor state; none wait on a
+// gate whose release depends on the observing test.
+private func waitForUnlockObservation(
+    timeout: Duration = .seconds(5),
+    condition: @Sendable () async -> Bool
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !Task.isCancelled {
+        if await condition() {
+            return true
+        }
+        guard clock.now < deadline else {
+            return false
+        }
+        do {
+            try await clock.sleep(
+                until: min(deadline, clock.now.advanced(by: .milliseconds(1)))
+            )
+        } catch {
+            return false
+        }
+    }
+    return false
+}
+
 private actor UnlockGate {
     private let honorCancellation: Bool
     private var entered = false
@@ -1567,13 +1623,9 @@ private actor UnlockGate {
     }
 
     func waitUntilEntered() async -> Bool {
-        for _ in 0..<1_000 {
-            if entered {
-                return true
-            }
-            await Task.yield()
+        await waitForUnlockObservation {
+            await self.entered
         }
-        return entered
     }
 
     func open() {
