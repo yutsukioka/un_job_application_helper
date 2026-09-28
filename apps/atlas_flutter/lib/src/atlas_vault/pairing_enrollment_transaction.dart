@@ -332,6 +332,30 @@ extension _EpochPairingTransaction on AtlasVaultTrustedPairingCoordinator {
       );
     }
     if (transaction.stage == AtlasVaultPairingStage.acknowledgementConsumed) {
+      final identity = await _requireIdentity();
+      try {
+        final acceptance = _signedAcceptance(
+          await _requireStaged(
+            AtlasVaultPairingArtifactKind.acceptance,
+            transaction,
+          ),
+        );
+        await _runtime.completePairingEnrollment(
+          issuer: identity,
+          packet: _epochPacket(delivery),
+          deliverySha256: transaction.deliverySha256!,
+          acknowledgement: requireAtlasVaultObject(
+            ack.payload['enrollment_acknowledgement'],
+            context: 'Enrollment acknowledgement',
+          ),
+          recipient: acceptance.acceptance.invitee.descriptor,
+          beforePublish: () async {
+            _authorizeSensitiveMutation();
+          },
+        );
+      } finally {
+        identity.destroy();
+      }
       transaction = await _advance(
         transaction,
         AtlasVaultPairingStage.trustCommitted,

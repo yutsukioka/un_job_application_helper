@@ -269,6 +269,36 @@ extension AtlasVaultRuntimeEnrollment on AtlasVaultEpochVault {
     }
   });
 
+  /// Release only the acknowledged delivery; retain it during interrupted sends.
+  /// An absent cache is an idempotent retry after the atomic removal committed.
+  Future<void> completeRuntimeEnrollment({
+    required Map<String, Object?> packet,
+    required String deliverySha256,
+    required Map<String, Object?> acknowledgement,
+    required identity.AtlasVaultDeviceDescriptor recipient,
+    required Future<void> Function() beforePublish,
+  }) => _run(() async {
+    final s = await _load();
+    await _active(s);
+    await AtlasVaultEnrollmentDelivery.verifyAcknowledgement(
+      packet,
+      deliverySha256,
+      acknowledgement,
+      recipient,
+    );
+    final components = _object(s['components']);
+    final stored = components['enrollment_delivery'];
+    if (stored == null) return;
+    if (!_anchorEqual(stored, packet)) {
+      _epochFail('ATLAS_ENROLLMENT_REJECTED');
+    }
+    components.remove('enrollment_delivery');
+    s['components'] = components;
+    s['generation'] = (s['generation']! as int) + 1;
+    await beforePublish();
+    await _file.write(s);
+  });
+
   Future<void> _stageEnrollmentRuntime(
     Map<String, Object?> state,
     Uint8List bytes,

@@ -571,6 +571,36 @@ final class AtlasVaultPrivateStateRuntime
     return completer.future;
   }
 
+  Future<void> completePairingEnrollment({
+    required vault.AtlasVaultDeviceIdentity issuer,
+    required Map<String, Object?> packet,
+    required String deliverySha256,
+    required Map<String, Object?> acknowledgement,
+    required vault.AtlasVaultDeviceDescriptor recipient,
+    required Future<void> Function() beforePublish,
+  }) => withEnrollmentContext(issuer, (_) async {
+    final session = _epochSession!, generation = _generation;
+    void live() {
+      if (!isActive ||
+          generation != _generation ||
+          !identical(session, _epochSession)) {
+        throw const AtlasVaultPrivateStateException();
+      }
+    }
+
+    await session.owner.completeRuntimeEnrollment(
+      packet: packet,
+      deliverySha256: deliverySha256,
+      acknowledgement: acknowledgement,
+      recipient: recipient,
+      beforePublish: () async {
+        live();
+        await beforePublish();
+        live();
+      },
+    );
+  });
+
   /// Epoch-only ceremony metadata. This boundary cannot export any key or record.
   Future<T> withEnrollmentContext<T>(
     vault.AtlasVaultDeviceIdentity identity,

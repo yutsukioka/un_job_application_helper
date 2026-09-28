@@ -1113,7 +1113,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     service = backend or AtlasVaultBackend()
     app = FastAPI(
         title="AtlasVault Zero-Knowledge Sync API",
-        version="1.4.0",
+        version="1.5.0",
         description=(
             "Account authentication, signed public-device registry, opaque "
             "ciphertext storage, and C15 abuse and observability controls."
@@ -1598,7 +1598,13 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
         "/v1/vaults/{vault_id}/enrollments",
         response_model=EnrollmentReceipt,
         operation_id="acceptDeviceEnrollment",
-        responses=_STORAGE_WRITE_OPENAPI_RESPONSES,
+        responses={
+            **_STORAGE_WRITE_OPENAPI_RESPONSES,
+            503: {
+                "model": FixedErrorResponse,
+                "description": "Durable enrollment storage unavailable",
+            },
+        },
     )
     def accept_device_enrollment(
         vault_id: VaultPath,

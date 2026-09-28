@@ -204,7 +204,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
 
     assert contract["openapi"] == "3.1.0"
-    assert contract["info"]["version"] == "1.4.0"
+    assert contract["info"]["version"] == "1.5.0"
     assert set(contract["paths"]) == {
         "/v1/accounts/{account_id}/devices/bootstrap",
         "/v1/accounts/{account_id}/auth/challenges",
@@ -218,6 +218,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         "/v1/vaults/{vault_id}/activations",
         "/v1/vaults/{vault_id}/activations/{epoch}/delivery",
         "/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs",
+        "/v1/vaults/{vault_id}/enrollments",
     }
     properties = {
         property_name.casefold()
@@ -282,6 +283,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         ("/v1/vaults/{vault_id}/activations", "get"),
         ("/v1/vaults/{vault_id}/activations/{epoch}/delivery", "get"),
         ("/v1/vaults/{vault_id}/activations/{epoch}/delivery-proofs", "post"),
+        ("/v1/vaults/{vault_id}/enrollments", "post"),
     }
     assert {
         (path, method)
@@ -293,6 +295,18 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
             generated["paths"][path][method]["operationId"]
             == contract["paths"][path][method]["operationId"]
         )
+
+    enrollment_path = "/v1/vaults/{vault_id}/enrollments"
+    for document in (contract, generated):
+        operation = document["paths"][enrollment_path]["post"]
+        assert operation["security"] == [{"bearerAuth": []}]
+        assert {"401", "409", "413", "422", "429", "503"} <= set(operation["responses"])
+        assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/DeviceEnrollmentProof"
+        }
+    for name in ("DeviceEnrollmentProof", "EnrollmentReceipt"):
+        assert contract["components"]["schemas"][name] == generated["components"]["schemas"][name]
+        assert contract["components"]["schemas"][name]["additionalProperties"] is False
 
     assert find_raw_secret_wire_contract_violations(ROOT / "services") == []
 
