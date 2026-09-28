@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-09-10",
+  "scope": "All enabled sources in this explicitly frozen example. Review and regenerate from the actual registry before enabling the future worker. Disabled entries remain visible but are excluded from acceptance.",
+  "sources": [
+    {
+      "source_id": "wfp_workday",
+      "enabled": true,
+      "base_url": "https://wd3.myworkdaysite.com/recruiting/wfp/job_openings"
+    },
+    {
+      "source_id": "imf_workday",
+      "enabled": true,
+      "base_url": "https://imf.wd5.myworkdayjobs.com/IMF"
+    },
+    {
+      "source_id": "tbi_workday",
+      "enabled": true,
+      "base_url": "https://tbinstitute.wd3.myworkdayjobs.com/TBI"
+    },
+    {
+      "source_id": "unhcr_workday",
+      "enabled": true,
+      "base_url": "https://unhcr.wd3.myworkdayjobs.com/External"
+    },
+    {
+      "source_id": "wef_workday",
+      "enabled": true,
+      "base_url": "https://weforum.wd3.myworkdayjobs.com/Forum_Careers"
+    },
+    {
+      "source_id": "wto_workday",
+      "enabled": true,
+      "base_url": "https://wto.wd103.myworkdayjobs.com/External"
+    },
+    {
+      "source_id": "globalfund_workday",
+      "enabled": true,
+      "base_url": "https://theglobalfund.wd1.myworkdayjobs.com/External"
+    },
+    {
+      "source_id": "wipo_taleo",
+      "enabled": true,
+      "base_url": "https://wipo.taleo.net/careersection/wp_2/jobsearch.ftl"
+    },
+    {
+      "source_id": "who_taleo",
+      "enabled": true,
+      "base_url": "https://careers.who.int/careersection/ex/jobsearch.ftl"
+    },
+    {
+      "source_id": "iaea_taleo",
+      "enabled": true,
+      "base_url": "https://iaea.taleo.net/careersection/ex/jobsearch.ftl"
+    },
+    {
+      "source_id": "fao_taleo",
+      "enabled": true,
+      "base_url": "https://jobs.fao.org/careersection/fao_external/jobsearch.ftl"
+    },
+    {
+      "source_id": "adb_taleo",
+      "enabled": true,
+      "base_url": "https://adb.taleo.net/careersection/1/jobsearch.ftl"
+    },
+    {
+      "source_id": "nato_taleo",
+      "enabled": false,
+      "base_url": "https://nato.taleo.net/careersection/2/jobsearch.ftl"
+    },
+    {
+      "source_id": "unicef_pageup",
+      "enabled": true,
+      "base_url": "https://jobs.unicef.org/en-us/listing"
+    },
+    {
+      "source_id": "un_inspira",
+      "enabled": true,
+      "base_url": "https://careers.un.org/jobopening"
+    },
+    {
+      "source_id": "worldbank_csod",
+      "enabled": true,
+      "base_url": "https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup"
+    },
+    {
+      "source_id": "unv_uvp",
+      "enabled": true,
+      "base_url": "https://app.unv.org"
+    },
+    {
+      "source_id": "unops_avature",
+      "enabled": true,
+      "base_url": "https://careers.unops.org"
+    },
+    {
+      "source_id": "icao_oracle_hcm",
+      "enabled": true,
+      "base_url": "https://estm.fa.em2.oraclecloud.com"
+    },
+    {
+      "source_id": "paho_workday",
+      "enabled": true,
+      "base_url": "https://paho.wd5.myworkdayjobs.com/pahocareers"
+    },
+    {
+      "source_id": "unfpa_oracle_hcm",
+      "enabled": true,
+      "base_url": "https://estm.fa.em2.oraclecloud.com"
+    },
+    {
+      "source_id": "undp_oracle_hcm",
+      "enabled": true,
+      "base_url": "https://estm.fa.em2.oraclecloud.com"
+    },
+    {
+      "source_id": "unwomen_oracle_hcm",
+      "enabled": true,
+      "base_url": "https://estm.fa.em2.oraclecloud.com"
+    },
+    {
+      "source_id": "wmo_oracle_hcm",
+      "enabled": true,
+      "base_url": "https://estm.fa.em2.oraclecloud.com"
+    },
+    {
+      "source_id": "iom_oracle_hcm",
+      "enabled": true,
+      "base_url": "https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com"
+    },
+    {
+      "source_id": "itu_successfactors",
+      "enabled": true,
+      "base_url": "https://jobs.itu.int"
+    },
+    {
+      "source_id": "ilo_successfactors",
+      "enabled": true,
+      "base_url": "https://jobs.ilo.org"
+    },
+    {
+      "source_id": "unido_successfactors",
+      "enabled": true,
+      "base_url": "https://careers.unido.org"
+    },
+    {
+      "source_id": "unesco_successfactors",
+      "enabled": true,
+      "base_url": "https://careers.unesco.org"
+    },
+    {
+      "source_id": "icrc_successfactors",
+      "enabled": true,
+      "base_url": "https://careers.icrc.org"
+    },
+    {
+      "source_id": "au_successfactors",
+      "enabled": false,
+      "base_url": "https://jobs.au.int"
+    },
+    {
+      "source_id": "ideglobal_workable",
+      "enabled": false,
+      "base_url": "https://apply.workable.com/ide-global"
+    },
+    {
+      "source_id": "cern_smartrecruiters",
+      "enabled": false,
+      "base_url": "https://jobs.smartrecruiters.com/CERN"
+    },
+    {
+      "source_id": "cern_custom_html",
+      "enabled": true,
+      "base_url": "https://careers.cern/jobs"
+    },
+    {
+      "source_id": "osce_custom_html",
+      "enabled": true,
+      "base_url": "https://vacancies.osce.org/latest-jobs"
+    },
+    {
+      "source_id": "unaids_sharepoint",
+      "enabled": false,
+      "base_url": "https://unaids.sharepoint.com"
+    },
+    {
+      "source_id": "ctbto_successfactors_legacy",
+      "enabled": true,
+      "base_url": "https://career2.successfactors.eu/career?company=ctbtoprepa"
+    },
+    {
+      "source_id": "icc_successfactors_legacy",
+      "enabled": true,
+      "base_url": "https://career5.successfactors.eu/career?company=1657261P"
+    },
+    {
+      "source_id": "icddrb_custom_html",
+      "enabled": true,
+      "base_url": "https://career.icddrb.org"
+    },
+    {
+      "source_id": "ifad_peoplesoft",
+      "enabled": true,
+      "base_url": "https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL"
+    },
+    {
+      "source_id": "imo_api",
+      "enabled": true,
+      "base_url": "https://recruit.imo.org"
+    },
+    {
+      "source_id": "ipu_static_html",
+      "enabled": true,
+      "base_url": "https://www.ipu.org/about-ipu/work-with-us/vacancies"
+    },
+    {
+      "source_id": "itcilo_custom_html",
+      "enabled": true,
+      "base_url": "https://jobs.itcilo.org"
+    },
+    {
+      "source_id": "itlos_static_html",
+      "enabled": true,
+      "base_url": "https://www.itlos.org/en/main/the-registry/employment-opportunities"
+    },
+    {
+      "source_id": "opcw_talentsoft_candidatespace",
+      "enabled": true,
+      "base_url": "https://jobs.opcw.org/job/list-of-jobs.aspx"
+    },
+    {
+      "source_id": "unssc_drupal_custom",
+      "enabled": true,
+      "base_url": "https://www.unssc.org/about/employment-opportunities"
+    },
+    {
+      "source_id": "unu_recruitee",
+      "enabled": true,
+      "base_url": "https://careers.unu.edu"
+    },
+    {
+      "source_id": "isa_inspira_split",
+      "enabled": false,
+      "base_url": "https://careers.un.org/jobopening"
+    },
+    {
+      "source_id": "itc_inspira_split",
+      "enabled": false,
+      "base_url": "https://careers.un.org/jobopening"
+    },
+    {
+      "source_id": "untourism_custom",
+      "enabled": false,
+      "base_url": "https://www.unwto.org/work-with-us"
+    },
+    {
+      "source_id": "afdb_successfactors_legacy",
+      "enabled": true,
+      "base_url": "https://career2.successfactors.eu/career?company=africandev"
+    },
+    {
+      "source_id": "idb_successfactors",
+      "enabled": true,
+      "base_url": "https://jobs.iadb.org"
+    },
+    {
+      "source_id": "ebrd_successfactors",
+      "enabled": true,
+      "base_url": "https://jobs.ebrd.com"
+    },
+    {
+      "source_id": "aiib_successfactors_legacy",
+      "enabled": true,
+      "base_url": "https://career5.successfactors.eu/career?company=AIIB"
+    },
+    {
+      "source_id": "oecd_smartrecruiters",
+      "enabled": true,
+      "base_url": "https://jobs.smartrecruiters.com/OECD"
+    },
+    {
+      "source_id": "eu_careers_static",
+      "enabled": true,
+      "base_url": "https://eu-careers.europa.eu/en/job-opportunities/open-vacancies"
+    },
+    {
+      "source_id": "councilofeurope_talents",
+      "enabled": false,
+      "base_url": "https://www.coe.int/en/web/jobs"
+    },
+    {
+      "source_id": "interpol_jobs2web",
+      "enabled": true,
+      "base_url": "https://209400.jobs2web.com"
+    },
+    {
+      "source_id": "irena_oracle_hcm",
+      "enabled": false,
+      "base_url": "https://eexh.fa.em3.oraclecloud.com"
+    }
+  ],
+  "registry": {
+    "path": "../../../packages/jobagg/config/organizations.yaml",
+    "sha256": "dd2c5e866ee8d68c02289c8ba7351cdd522ba9b9c45ad6aa57808e0c71f2f985"
+  }
+}

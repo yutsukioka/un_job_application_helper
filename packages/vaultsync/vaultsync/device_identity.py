@@ -22,7 +22,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 
 DEVICE_DESCRIPTOR_FORMAT = "atlasvault-device-descriptor"
 SIGNED_DEVICE_DESCRIPTOR_FORMAT = "atlasvault-signed-device-descriptor"
-DEVICE_IDENTITY_SECRET_FORMAT = "atlasvault-device-identity-secret"
+# Public configuration/format label, not a credential.
+DEVICE_IDENTITY_SECRET_FORMAT = "atlasvault-device-identity-secret"  # nosec B105 # noqa: S105
 DEVICE_IDENTITY_VERSION = 1
 DEVICE_KEY_BYTES = 32
 DEVICE_SIGNATURE_BYTES = 64

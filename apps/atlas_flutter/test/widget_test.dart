@@ -351,6 +351,8 @@ void main() {
       expect(find.text('P-3'), findsWidgets);
       expect(find.text('Contract'), findsOneWidget);
       expect(find.text('Fixed term'), findsWidgets);
+      expect(find.text('External link warning'), findsOneWidget);
+      expect(find.textContaining('apply.vendor.example'), findsOneWidget);
 
       await tester.scrollUntilVisible(find.text('ATS page chrome hidden'), 300);
       await tester.pumpAndSettle();
@@ -566,8 +568,16 @@ final class _PopulatedDetailTransport implements AtlasTransport {
           'closes_at': '2026-07-05T23:59:00Z',
           'closes_at_local': '2026-07-06 08:59',
           'closes_tz': 'Asia/Tokyo',
-          'apply_url': 'https://example.org/apply',
+          'apply_url': 'https://apply.vendor.example/apply',
           'source_url': 'https://example.org/source',
+          'apply_url_trust': {
+            'origin_host': 'apply.vendor.example',
+            'matches_source_org': false,
+          },
+          'source_url_trust': {
+            'origin_host': 'example.org',
+            'matches_source_org': true,
+          },
           'deadline_info': {
             'source_text': 'Closes 5 July 2026',
             'source_local': '2026-07-05 23:59',

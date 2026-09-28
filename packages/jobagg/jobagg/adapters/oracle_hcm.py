@@ -14,8 +14,10 @@ from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsp
 
 from jobagg.adapters.base import AdapterContext, JobAdapter, register_adapter
 from jobagg.detail_quality import oracle_detail_payload_has_substantive_content
+from jobagg.html_text import render_html_text
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job, parse_datetime
+from jobagg.oracle_public import public_description_parts
 from jobagg.utils import as_bool as _as_bool
 from jobagg.utils import as_int as _as_int
 
@@ -127,10 +129,20 @@ class OracleHCMAdapter(JobAdapter):
             self.run_diagnostics.pagination_complete = len(seen_keys) >= total_count
         return jobs
 
-    def parse_jobs(self, payload: Any) -> list[JobRecord]:
+    def parse_jobs(self, payload: Any, *, public_detail_observed: bool = False) -> list[JobRecord]:
         rows = _rows(payload)
         jobs = []
         for item in rows:
+            raw = self._raw_with_source_notice(item, source_priority="oracle_hcm_ce")
+            if self.source.id == "iom_oracle_hcm" and (public_detail_observed or any(
+                    item.get(key) for key in ("ExternalDescriptionStr", "Description", "ExternalResponsibilitiesStr", "ExternalQualificationsStr"))):
+                contract = item.get("ContractType") or _flex_value(item, "Contract Type")
+                raw["_oracle_contract_resolution"] = {
+                    "record_kind": "detail", "public_contract_type": contract,
+                    "resolved": bool(contract),
+                    "source_field": "ContractType" if item.get("ContractType") else
+                    "requisitionFlexFields.Contract Type" if contract else None,
+                }
             external_id = item.get("Id") or item.get("RequisitionNumber") or item.get("RequisitionId")
             apply_url = (
                 item.get("ExternalApplyUrl")
@@ -150,12 +162,13 @@ class OracleHCMAdapter(JobAdapter):
                     or item.get("Organization")
                     or item.get("BusinessUnit")
                     or item.get("LegalEmployer"),
-                    employment_type=_contract_type(item),
-                    posted_at=item.get("PostedDate") or item.get("ExternalPostedStartDate"),
+                    employment_type=_contract_type(item, source_id=self.source.id),
+                    posted_at=item.get("ExternalPostedStartDate") or item.get("PostedDate"),
                     closes_at=item.get("ExternalPostedEndDate") or item.get("PostingEndDate"),
                     apply_url=str(apply_url),
                     description=_description(item, source_id=self.source.id),
-                    raw=self._raw_with_source_notice(item, source_priority="oracle_hcm_ce"),
+                    description_is_plain_text=True,
+                    raw=raw,
                 )
             )
         return jobs
@@ -175,11 +188,22 @@ class OracleHCMAdapter(JobAdapter):
                 timeout_seconds=self._detail_timeout_seconds(),
             )
         )
-        detail_jobs = self.parse_jobs(payload)
+        detail_jobs = self.parse_jobs(payload, public_detail_observed=True)
         if detail_jobs:
-            if not oracle_detail_payload_has_substantive_content(detail_jobs[0].raw):
+            matching_jobs = [
+                job for job in detail_jobs
+                if str(external_id) in {
+                    str(job.raw.get(key)) for key in ("Id", "RequisitionNumber", "RequisitionId")
+                    if job.raw.get(key) is not None
+                }
+            ]
+            if len(matching_jobs) != 1:
                 return None
-            return detail_jobs[0]
+            detail_job = matching_jobs[0]
+            if not oracle_detail_payload_has_substantive_content(detail_job.raw):
+                return None
+            detail_job.raw["oracle_detail_response_verified"] = True
+            return detail_job
         if _oracle_detail_not_available(payload):
             return self._closed_job_from_listing_item(
                 item,
@@ -216,11 +240,12 @@ class OracleHCMAdapter(JobAdapter):
             or item.get("Organization")
             or item.get("BusinessUnit")
             or item.get("LegalEmployer"),
-            employment_type=_contract_type(item),
-            posted_at=item.get("PostedDate") or item.get("ExternalPostedStartDate"),
+            employment_type=_contract_type(item, source_id=self.source.id),
+            posted_at=item.get("ExternalPostedStartDate") or item.get("PostedDate"),
             closes_at=item.get("ExternalPostedEndDate") or item.get("PostingEndDate"),
             apply_url=str(apply_url),
             description=_description(item, source_id=self.source.id),
+            description_is_plain_text=True,
             status="closed",
             raw=raw,
         )
@@ -529,10 +554,14 @@ def _header_value(headers: Any, name: str) -> str | None:
     return None
 
 
-def _contract_type(item: dict[str, Any]) -> Any:
+def _contract_type(item: dict[str, Any], *, source_id: str | None = None) -> Any:
+    public_contract = item.get("ContractType") or _flex_value(item, "Contract Type")
+    if public_contract or source_id == "iom_oracle_hcm":
+        # IOM's Vacancy Type and Recruiting Type describe the notice/category.
+        # They do not establish its employment contract.
+        return public_contract
     return (
-        item.get("ContractType")
-        or item.get("WorkerType")
+        item.get("WorkerType")
         or item.get("JobType")
         or _flex_value(item, "Vacancy Type")
         or _flex_value(item, "Recruiting Type")
@@ -686,11 +715,11 @@ def _description(item: dict[str, Any], *, source_id: str | None = None) -> str |
     ]
     if source_id == "iom_oracle_hcm" and not any(full_detail_parts):
         return None
-    parts = [
+    parts = public_description_parts(
         item.get("ShortDescription") or item.get("ShortDescriptionStr"),
         *full_detail_parts,
-    ]
-    return "\n\n".join(str(part) for part in parts if part)
+    )
+    return " ".join(text for part in parts if (text := render_html_text(part))) or None
 
 
 def _host_resolves(url: str) -> bool:

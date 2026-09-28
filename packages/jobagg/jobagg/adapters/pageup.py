@@ -10,11 +10,13 @@ from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsp
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.http import JobAggHTTPClient
+from jobagg.html_text import render_html_text
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job
 from jobagg.utils import as_bool as _as_bool
 from jobagg.utils import as_int as _as_int
 from jobagg.utils import clean_html
+from jobagg.vacancy_outcomes import DetailIdentityMismatch
 
 _ITEM_RE = re.compile(
     r'<div class="list-view--item">(?P<html>.*?)(?=<div class="list-view--item">|$)',
@@ -72,7 +74,8 @@ class PageUpAdapter(JobAdapter):
                     posted_at=item.get("postedDate"),
                     closes_at=item.get("closingDate"),
                     apply_url=item.get("url") or item.get("jobUrl") or item.get("applyUrl") or str(external_id),
-                    description=item.get("summary") or item.get("description"),
+                    description=render_html_text(item.get("summary") or item.get("description")),
+                    description_is_plain_text=True,
                     raw=item,
                 )
             )
@@ -131,12 +134,16 @@ class PageUpAdapter(JobAdapter):
                     title=self._clean_html(link.group("title")),
                     external_id=external_id,
                     location=self._extract_class_text(item_html, "location"),
-                    closes_at=self._extract_time_datetime(item_html) or self._extract_labeled_value(
-                        item_html, "Deadline"
+                    posted_at=self._extract_date_datetime(
+                        item_html, class_name="open-date", label="Advertised"
+                    ),
+                    closes_at=self._extract_date_datetime(
+                        item_html, class_name="close-date", label="Deadline"
                     ),
                     apply_url=detail_url,
                     source_url=detail_url,
                     description=self._extract_teaser(item_html),
+                    description_is_plain_text=True,
                     raw={"listing_html": item_html, "_pageup_detail_url": detail_url},
                 )
             )
@@ -166,7 +173,7 @@ class PageUpAdapter(JobAdapter):
             return None
         job = self.parse_detail_html(detail_html, str(detail_url))
         if expected_external_id and job.external_id != expected_external_id:
-            return None
+            raise DetailIdentityMismatch("PageUp returned job identity differs from listing")
         return job
 
     def _fetch_detail_text(self, detail_url: str) -> str:
@@ -216,7 +223,9 @@ class PageUpAdapter(JobAdapter):
     def parse_detail_html(self, detail_html: str, detail_url: str) -> JobRecord:
         scoped_html = self._job_detail_scope(detail_html)
         title = self._extract_heading(scoped_html) or self._extract_title_from_detail_url(detail_url)
-        external_id = self._extract_class_text(scoped_html, "job-externalJobNo") or self._job_id_from_url(detail_url)
+        url_external_id = self._job_id_from_url(detail_url)
+        displayed_external_id = self._extract_class_text(scoped_html, "job-externalJobNo")
+        external_id = url_external_id or displayed_external_id
         apply_url = self._extract_apply_url(scoped_html) or detail_url
         description_html = self._extract_job_details_html(scoped_html) or scoped_html
         return build_job(
@@ -226,13 +235,21 @@ class PageUpAdapter(JobAdapter):
             location=self._extract_class_text(scoped_html, "location"),
             department=self._extract_class_text(scoped_html, "categories"),
             employment_type=self._extract_labeled_value(scoped_html, "Contract type"),
-            closes_at=self._extract_time_datetime(scoped_html) or self._extract_labeled_value(
-                scoped_html, "Deadline"
+            posted_at=self._extract_date_datetime(
+                scoped_html, class_name="open-date", label="Advertised"
+            ),
+            closes_at=self._extract_date_datetime(
+                scoped_html, class_name="close-date", label="Deadline"
             ),
             apply_url=apply_url,
             source_url=detail_url,
-            description=self._clean_html(description_html),
-            raw={"detail_html": scoped_html, "_pageup_detail_url": detail_url},
+            description=render_html_text(description_html),
+            description_is_plain_text=True,
+            raw={
+                "detail_html": scoped_html,
+                "_pageup_detail_url": detail_url,
+                "pageup_external_job_no": displayed_external_id,
+            },
         )
 
     def _post_pageup_json(self, url: str) -> Any:
@@ -279,9 +296,50 @@ class PageUpAdapter(JobAdapter):
         match = pattern.search(html_text)
         return self._clean_html(match.group("value")) if match else None
 
-    def _extract_time_datetime(self, html_text: str) -> str | None:
-        match = re.search(r"<time[^>]+datetime=\"(?P<value>[^\"]+)\"", html_text, re.IGNORECASE)
-        return html.unescape(match.group("value")) if match else None
+    def _extract_date_datetime(self, html_text: str, *, class_name: str, label: str) -> str | None:
+        """Read one explicitly identified date; never infer meaning from DOM order."""
+        containers = []
+        for match in re.finditer(
+            r"<span\b(?P<attrs>[^>]*)>(?P<value>.*?)</span\s*>",
+            html_text,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            classes = re.search(
+                r"\bclass\s*=\s*([\"'])(?P<value>.*?)\1", match.group("attrs"), re.IGNORECASE
+            )
+            if classes and class_name in classes.group("value").lower().split():
+                containers.append(match.group("value"))
+        labeled = list(re.finditer(
+            rf"<(?:b|strong)\b[^>]*>\s*{re.escape(label)}\s*:\s*</(?:b|strong)>"
+            r"\s*(?P<value>.*?)(?=<br\b[^>]*>|</p\s*>|<(?:b|strong)\b[^>]*>\s*[^<]*:|$)",
+            html_text,
+            re.IGNORECASE | re.DOTALL,
+        ))
+        if len(containers) > 1 or len(labeled) > 1:
+            return None
+        if not containers and not labeled:
+            return None
+        fragments = containers + [match.group("value") for match in labeled]
+        values = []
+        opposite = "close-date" if class_name == "open-date" else "open-date"
+        for fragment in fragments:
+            for classes in re.finditer(
+                r"\bclass\s*=\s*([\"'])(?P<value>.*?)\1", fragment, re.IGNORECASE
+            ):
+                if opposite in classes.group("value").lower().split():
+                    return None
+            times = list(re.finditer(
+                r"<time\b[^>]*\bdatetime\s*=\s*([\"'])(?P<value>.*?)\1[^>]*>",
+                fragment,
+                re.IGNORECASE | re.DOTALL,
+            ))
+            if len(re.findall(r"<time\b", fragment, re.IGNORECASE)) > 1:
+                return None
+            value = html.unescape(times[0].group("value")).strip() if times else self._clean_html(fragment)
+            if not value:
+                return None
+            values.append(value)
+        return values[0] if len(set(values)) == 1 else None
 
     def _extract_labeled_value(self, html_text: str, label: str) -> str | None:
         pattern = re.compile(
@@ -329,7 +387,7 @@ class PageUpAdapter(JobAdapter):
             item_html,
             re.IGNORECASE | re.DOTALL,
         )
-        return self._clean_html(match.group("value")) if match else None
+        return render_html_text(match.group("value")) if match else None
 
     def _extract_heading(self, detail_html: str) -> str | None:
         match = re.search(r"<h2[^>]*>(?P<value>.*?)</h2>", detail_html, re.IGNORECASE | re.DOTALL)

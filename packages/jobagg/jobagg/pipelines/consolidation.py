@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -24,6 +25,8 @@ CONSOLIDATED_SLUG = "all"
 
 CONSOLIDATED_TABLES = (
     ("jobs", "job_key"),
+    ("attachment_blobs", "content_sha256"),
+    ("job_attachments", "attachment_id"),
     ("vacancy_source_features", "vacancy_id"),
     ("vacancy_classifications", "vacancy_id"),
     ("grade_mappings", "mapping_version, organization, raw_grade_code"),
@@ -197,6 +200,8 @@ def consolidate_bundle_databases(
                                 conflict_target=conflict_target,
                             )
                         table_rows[table] += copied
+                        if table == "grade_mappings":
+                            _archive_grade_mapping_conflicts(source, dest, source_path.name)
             _apply_consolidation_quality_rules(
                 dest,
                 stale_current_max_age_days=stale_current_max_age_days,
@@ -641,12 +646,30 @@ def _annotate_detail_quality_and_deadlines(
             deadline = "today"
         new_status = EXPIRED_STATUS if expired_after_grace else row_status
         source_listed_current = new_status == "open"
+        if "_jobagg_listing_verification" in raw:
+            listing_verification = raw.get("_jobagg_listing_verification")
+            source_listed_current = source_listed_current and (
+                isinstance(listing_verification, dict)
+                and listing_verification.get("observed_in_latest_listing") is True
+                and listing_verification.get("source_id") == row["source_id"]
+                and _parse_dt(listing_verification.get("observed_at")) is not None
+            )
         trusted_current = (
             source_listed_current
             and not bool(row["stale_current"])
             and deadline != "expired"
         )
-        application_ready = trusted_current and quality == DETAIL_QUALITY_COMPLETE
+        attachment_verification = raw.get("attachment_verification")
+        attachments_ready = (
+            ("attachment_verification" not in raw and "_jobagg_listing_verification" not in raw)
+            or (
+                isinstance(attachment_verification, dict)
+                and attachment_verification.get("complete") is True
+                and attachment_verification.get("discovery_complete") is True
+                and not attachment_verification.get("unresolved_attachment_ids")
+            )
+        )
+        application_ready = trusted_current and quality == DETAIL_QUALITY_COMPLETE and attachments_ready
         conn.execute(
             """
             UPDATE jobs
@@ -721,7 +744,6 @@ def _annotate_detail_quality_and_deadlines(
 
 
 def _deduplicate_open_jobs(conn: sqlite3.Connection, *, created_at: str) -> int:
-    conn.create_function("normalized_apply_url", 1, _normalized_apply_url)
     duplicate_count = 0
     duplicate_count += _deduplicate_open_groups(
         conn,
@@ -745,33 +767,9 @@ def _deduplicate_open_jobs(conn: sqlite3.Connection, *, created_at: str) -> int:
         reason="same_ats_external_id",
         created_at=created_at,
     )
-    duplicate_count += _deduplicate_open_groups(
-        conn,
-        group_sql="""
-            SELECT normalized_apply_url AS group_key
-            FROM (
-                SELECT job_key, normalized_apply_url(apply_url) AS normalized_apply_url
-                FROM jobs
-                WHERE status = 'open'
-                    AND apply_url IS NOT NULL
-                    AND TRIM(apply_url) <> ''
-            )
-            WHERE normalized_apply_url IS NOT NULL
-                AND normalized_apply_url <> ''
-            GROUP BY normalized_apply_url
-            HAVING COUNT(*) > 1
-        """,
-        rows_sql="""
-            SELECT j.*, b.detail_status
-            FROM jobs j
-            LEFT JOIN detail_backlog b ON b.job_key = j.job_key
-            WHERE j.status = 'open'
-                AND normalized_apply_url(j.apply_url) = ?
-            ORDER BY j.source_id, j.job_key
-        """,
-        reason="same_apply_url",
-        created_at=created_at,
-    )
+    # Application URLs can be shared search/login directories, and external
+    # IDs belong to individual source namespaces. Cross-source aliases need
+    # an explicit verified mapping; URL equality alone must not hide jobs.
     return duplicate_count
 
 
@@ -1051,6 +1049,46 @@ def _connect_source(path: Path) -> sqlite3.Connection:
         # attempting to create sidecars, preserving the fetched artifacts.
         immutable_uri = f"{path.resolve().as_uri()}?immutable=1"
         return sqlite3.connect(immutable_uri, uri=True)
+
+
+def _archive_grade_mapping_conflicts(
+    source: sqlite3.Connection, dest: sqlite3.Connection, source_database: str,
+) -> None:
+    """Preserve source reference definitions that share a canonical key.
+
+    Historical bundles may have different payloads under the same mapping
+    version. Keep the existing canonical selection, plus every conflicting
+    original with its bundle identity; never silently discard that provenance.
+    This table belongs only to the consolidated generation.
+    """
+    dest.execute("""CREATE TABLE IF NOT EXISTS grade_mapping_conflicts (
+        source_database TEXT NOT NULL,
+        mapping_version TEXT NOT NULL,
+        organization TEXT NOT NULL,
+        raw_grade_code TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        PRIMARY KEY (source_database, mapping_version, organization, raw_grade_code)
+    )""")
+    if not source.execute("SELECT 1 FROM sqlite_schema WHERE name='grade_mappings'").fetchone():
+        return
+    columns = [row[1] for row in dest.execute("PRAGMA table_info(grade_mappings)")]
+    source_columns = [row[1] for row in source.execute("PRAGMA table_info(grade_mappings)")]
+    if set(columns) != set(source_columns):
+        raise ValueError("Grade-mapping columns differ; source provenance cannot be preserved")
+    selected = ','.join('"' + column + '"' for column in columns)
+    for row in source.execute(f"SELECT {selected} FROM grade_mappings"):
+        payload = dict(zip(columns, row))
+        key = tuple(payload[column] for column in ("mapping_version", "organization", "raw_grade_code"))
+        canonical = dest.execute(f"SELECT {selected} FROM grade_mappings WHERE mapping_version=? AND organization=? AND raw_grade_code=?", key).fetchone()
+        if canonical is None:
+            raise ValueError("Grade mapping missing after canonical copy")
+        if tuple(row) == tuple(canonical):
+            continue
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        dest.execute("INSERT INTO grade_mapping_conflicts VALUES (?,?,?,?,?,?)", (
+            source_database, *key, encoded, hashlib.sha256(encoded.encode()).hexdigest(),
+        ))
 
 
 def _copy_table(

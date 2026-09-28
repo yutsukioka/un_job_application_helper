@@ -39,6 +39,7 @@ class OpsSourceCheck:
     empty_reason: str | None = None
     severity: str = "PASS"
     findings: list[str] = field(default_factory=list)
+    detail_unavailable: int = 0
 
     @property
     def active_jobs(self) -> int:
@@ -243,11 +244,13 @@ def _apply_latest_diagnostics(conn: sqlite3.Connection, check: OpsSourceCheck) -
     check.detail_attempted = int(row["detail_attempted"] or 0)
     check.detail_failed = int(row["detail_failed"] or 0)
     check.detail_skipped = int(row["detail_skipped"] or 0)
+    check.detail_unavailable = int(row["detail_unavailable"] or 0) if "detail_unavailable" in columns else 0
     check.missing_transition_allowed = _optional_bool(row["missing_transition_allowed"])
     check.empty_reason = row["empty_reason"]
 
 
 def _grade_check(check: OpsSourceCheck) -> None:
+    evaluated_attempts = max(0, check.detail_attempted - check.detail_unavailable)
     if check.health_status in ISSUE_HEALTH_STATUSES:
         check.findings.append(f"health_status is {check.health_status}")
     elif check.health_status in WARN_HEALTH_STATUSES:
@@ -273,8 +276,8 @@ def _grade_check(check: OpsSourceCheck) -> None:
         elif not verified_empty:
             check.findings.append("zero fetched without verified-empty diagnostics")
 
-    if check.detail_attempted:
-        failure_ratio = check.detail_failed / check.detail_attempted
+    if evaluated_attempts:
+        failure_ratio = check.detail_failed / evaluated_attempts
         if failure_ratio > 0.25:
             check.findings.append(f"detail failure ratio is {failure_ratio:.0%}")
         elif failure_ratio >= 0.05:
@@ -292,7 +295,7 @@ def _grade_check(check: OpsSourceCheck) -> None:
             check.scope_validation_status is not None
             and check.scope_validation_status not in {"passed", "not_applicable"}
         )
-        or (check.detail_attempted > 0 and check.detail_failed / check.detail_attempted > 0.25)
+        or (evaluated_attempts > 0 and check.detail_failed / evaluated_attempts > 0.25)
     )
     warn_signals = (
         check.health_status in WARN_HEALTH_STATUSES
@@ -300,7 +303,7 @@ def _grade_check(check: OpsSourceCheck) -> None:
         or any("source_run_diagnostics table is missing" in finding for finding in check.findings)
         or any("source_runs" in finding for finding in check.findings)
         or (check.fetched == 0 and check.empty_reason not in VERIFIED_EMPTY_REASONS)
-        or (check.detail_attempted > 0 and check.detail_failed / check.detail_attempted >= 0.05)
+        or (evaluated_attempts > 0 and check.detail_failed / evaluated_attempts >= 0.05)
     )
     if fail_signals:
         check.severity = "FAIL"
@@ -357,7 +360,12 @@ def _markdown_value(check: OpsSourceCheck, key: str) -> str:
     if key == "details":
         if not (check.detail_attempted or check.detail_failed or check.detail_skipped):
             return "n/a"
-        return _escape(f"{check.detail_failed}/{check.detail_attempted} failed, {check.detail_skipped} skipped")
+        evaluated_attempts = max(0, check.detail_attempted - check.detail_unavailable)
+        unavailable = (
+            f", {check.detail_unavailable} unavailable ({check.detail_attempted} attempts)"
+            if check.detail_unavailable else ""
+        )
+        return _escape(f"{check.detail_failed}/{evaluated_attempts} failed, {check.detail_skipped} skipped{unavailable}")
     if key == "missing_transition":
         if check.missing_transition_allowed is None:
             return "n/a"

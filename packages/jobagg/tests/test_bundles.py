@@ -818,7 +818,7 @@ def test_consolidate_bundle_databases_ages_stale_sources_against_wall_clock(tmp_
     assert row["consolidation_status"] == "stale_source_flagged"
 
 
-def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_aliases(tmp_path):
+def test_consolidate_bundle_databases_keeps_cross_source_rows_without_verified_alias_mapping(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
     canonical_source = OrganizationSource(
@@ -882,9 +882,9 @@ def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_alia
 
     result = consolidate_bundle_databases(output_dir=output)
 
-    assert result.current_count == 1
+    assert result.current_count == 2
     current_rows = json.loads((output / "all_jobs_current.json").read_text(encoding="utf-8"))
-    assert [row["source_id"] for row in current_rows] == ["un_inspira"]
+    assert {row["source_id"] for row in current_rows} == {"un_inspira", "mirror_inspira"}
     with sqlite3.connect(output / "all_jobs.sqlite3") as conn:
         conn.row_factory = sqlite3.Row
         duplicate = conn.execute(
@@ -893,12 +893,9 @@ def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_alia
         ).fetchone()
         alias = conn.execute("SELECT * FROM consolidated_job_aliases").fetchone()
 
-    assert duplicate["status"] == "duplicate"
-    assert duplicate["duplicate_of_job_key"] == "un_inspira:279100"
-    assert duplicate["consolidation_status"] == "duplicate_quarantined"
-    assert alias["duplicate_job_key"] == "mirror_inspira:279100"
-    assert alias["canonical_job_key"] == "un_inspira:279100"
-    assert alias["reason"] == "same_apply_url"
+    assert duplicate["status"] == "open"
+    assert duplicate["duplicate_of_job_key"] is None
+    assert alias is None
 
 
 def test_consolidate_bundle_databases_keeps_cross_source_external_id_collisions(tmp_path):

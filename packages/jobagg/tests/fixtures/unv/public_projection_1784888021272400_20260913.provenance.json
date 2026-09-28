@@ -1,0 +1,16 @@
+{
+  "source_captures": [
+    {
+      "path": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/unv_uvp/full-001/http/00005.json",
+      "metadata_sha256": "27ed1374c45ddebacf63cfb6ccaa0d817d8911488c29200209ff8b36ac20171d",
+      "body_sha256": "1f4404be05b29ad35e6c79dd0314a6bf82b040d19a80548a74c2034dea8ae66d",
+      "original_observed_at": "2026-09-13T11:19:29.942095+00:00"
+    }
+  ],
+  "projection": "Only public UI mapped source fields; nested category financial and ERP values omitted; full original bytes retained in private run captures.",
+  "category_configuration": "Not yet captured; fixture context intentionally None. Tests may set explicit hypothetical section-filter states.",
+  "translation_url": "https://uvpprdpublicstorage01.blob.core.windows.net/internationalization/en/en.json?v=5964348",
+  "translation_body_sha256": "d5aaeca924eef7e1b93d92ae1a0d5a47335ad561c87be22c6891c03e061c5e46",
+  "guest_config_url": "https://app.unv.org/api/doa/profile/me/guest",
+  "guest_config_body_sha256": "6b37ace88f7c4afcf126fe1613bcebcc01a6bf58f94a0136113aa1dce5e7c7b4"
+}

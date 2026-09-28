@@ -10,11 +10,13 @@ can be invoked from the CLI without bringing in extra packages.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 # CCOG codes look like "1.A.06.04" or just "1.A.06"; we accept either.
 _CCOG_FULL_RE = re.compile(r"\b\d\.[A-Za-z0-9]\.\d{2}\.\d{2}\b")
@@ -22,6 +24,11 @@ _CCOG_FAMILY_RE = re.compile(r"\b\d\.[A-Za-z0-9]\.\d{2}\b")
 # term-extractor lines look like "1. Programme Management ⭐⭐⭐⭐⭐"
 _TERM_LINE_RE = re.compile(r"^\s*\d+\.\s*([^⭐\n]+?)\s*(?:[⭐]+)?\s*$")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]+")
+DEFAULT_STRATEGY_SIGNAL_MAX_BYTES = 2 * 1024 * 1024
+
+
+class StrategyPathError(ValueError):
+    """Raised when a strategy-signals path violates confinement rules."""
 
 
 @dataclass(slots=True)
@@ -80,6 +87,69 @@ def load_strategy_signals(path: str | Path) -> StrategySignals:
     covered = {".".join(code.split(".")[:3]) for code in ccog_codes}
     ccog_families = [fam for fam in ccog_families if fam not in covered]
     return StrategySignals(terms=terms, ccog_codes=ccog_codes, ccog_families=ccog_families)
+
+
+def default_strategy_signals_root() -> Path:
+    configured = os.environ.get("JOB_API_SCORING_ROOT")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[3] / "strategies"
+
+
+def default_strategy_signals_max_bytes() -> int:
+    configured = os.environ.get("JOB_API_SCORING_MAX_BYTES")
+    if not configured:
+        return DEFAULT_STRATEGY_SIGNAL_MAX_BYTES
+    try:
+        value = int(configured)
+    except ValueError:
+        return DEFAULT_STRATEGY_SIGNAL_MAX_BYTES
+    return max(0, value)
+
+
+def resolve_strategy_signals_path(
+    path: str | Path,
+    *,
+    root: str | Path | None = None,
+    max_bytes: int | None = None,
+) -> Path:
+    supplied = str(path).strip()
+    if not supplied:
+        raise StrategyPathError("score_against path is required")
+    if _has_url_scheme(supplied):
+        raise StrategyPathError("score_against must be a local path, not a URL")
+
+    root_path = Path(root) if root is not None else default_strategy_signals_root()
+    try:
+        root_resolved = root_path.expanduser().resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise StrategyPathError("scoring root does not exist") from exc
+    if not root_resolved.is_dir():
+        raise StrategyPathError("scoring root is not a directory")
+
+    raw_path = Path(supplied).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else root_resolved / raw_path
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise StrategyPathError("score_against file does not exist") from exc
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise StrategyPathError("score_against path is outside scoring root") from exc
+    if not resolved.is_file():
+        raise StrategyPathError("score_against path must be a regular file")
+    size_cap = default_strategy_signals_max_bytes() if max_bytes is None else max(0, max_bytes)
+    if resolved.stat().st_size > size_cap:
+        raise StrategyPathError("score_against file exceeds configured size cap")
+    return resolved
+
+
+def _has_url_scheme(value: str) -> bool:
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        return False
+    return not (len(parsed.scheme) == 1 and len(value) >= 3 and value[1] == ":" and value[2] in {"\\", "/"})
 
 
 def score_job(job: dict[str, Any], signals: StrategySignals) -> dict[str, Any]:

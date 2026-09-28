@@ -22,6 +22,9 @@ dev = [
 [project.scripts]
 job-api = "job_api.app:main"
 
+[tool.uv.sources]
+jobagg = { path = "../../packages/jobagg", editable = true }
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["job_api*"]

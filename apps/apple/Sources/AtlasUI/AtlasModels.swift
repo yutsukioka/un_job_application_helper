@@ -1,5 +1,20 @@
 import Foundation
 
+public struct AtlasURLTrust: Hashable, Codable, Sendable {
+    public let originHost: String?
+    public let matchesSourceOrg: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case originHost = "origin_host"
+        case matchesSourceOrg = "matches_source_org"
+    }
+
+    public init(originHost: String?, matchesSourceOrg: Bool) {
+        self.originHost = originHost
+        self.matchesSourceOrg = matchesSourceOrg
+    }
+}
+
 public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
     public let jobKey: String
     public let title: String
@@ -30,6 +45,8 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
     public let postedDate: Date?
     public let applyURL: URL?
     public let sourceURL: URL?
+    public let applyURLTrust: AtlasURLTrust?
+    public let sourceURLTrust: AtlasURLTrust?
 
     public var id: String { jobKey }
 
@@ -63,6 +80,8 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
         case postedDate
         case applyURL
         case sourceURL
+        case applyURLTrust
+        case sourceURLTrust
     }
 
     public init(
@@ -94,7 +113,9 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
         status: String = "open",
         postedDate: Date? = nil,
         applyURL: URL? = nil,
-        sourceURL: URL? = nil
+        sourceURL: URL? = nil,
+        applyURLTrust: AtlasURLTrust? = nil,
+        sourceURLTrust: AtlasURLTrust? = nil
     ) {
         self.jobKey = jobKey
         self.title = title
@@ -125,6 +146,8 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
         self.postedDate = postedDate
         self.applyURL = applyURL
         self.sourceURL = sourceURL
+        self.applyURLTrust = applyURLTrust
+        self.sourceURLTrust = sourceURLTrust
     }
 
     public init(from decoder: Decoder) throws {
@@ -158,7 +181,9 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
             status: try container.decodeIfPresent(String.self, forKey: .status) ?? "open",
             postedDate: try container.decodeIfPresent(Date.self, forKey: .postedDate),
             applyURL: try container.decodeIfPresent(URL.self, forKey: .applyURL),
-            sourceURL: try container.decodeIfPresent(URL.self, forKey: .sourceURL)
+            sourceURL: try container.decodeIfPresent(URL.self, forKey: .sourceURL),
+            applyURLTrust: try container.decodeIfPresent(AtlasURLTrust.self, forKey: .applyURLTrust),
+            sourceURLTrust: try container.decodeIfPresent(AtlasURLTrust.self, forKey: .sourceURLTrust)
         )
     }
 

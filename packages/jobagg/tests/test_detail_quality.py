@@ -75,6 +75,49 @@ def test_oracle_apply_by_short_description_can_be_complete_when_substantive():
     )
 
 
+def test_pageup_listing_html_without_detail_html_is_list_only_even_when_long():
+    description = (
+        "The Health Specialist supports programme delivery, coordination, "
+        "monitoring, reporting, stakeholder engagement, and technical guidance. "
+        * 8
+    )
+    raw = {
+        "listing_html": "<div class='list-view--item'>Long teaser.</div>",
+        "_pageup_detail_url": "https://jobs.unicef.org/en-us/job/594215/example",
+    }
+
+    assert (
+        detail_quality_status(
+            title="Health Specialist",
+            description=description,
+            raw=raw,
+        )
+        == DETAIL_QUALITY_LIST_ONLY
+    )
+
+
+def test_pageup_detail_html_can_be_complete():
+    description = (
+        "Responsibilities "
+        + "Coordinate programme delivery and stakeholder engagement. " * 10
+        + "Qualifications "
+        + "Advanced degree and relevant technical experience are required. " * 10
+    )
+    raw = {
+        "detail_html": "<section id='job-details'>Full detail.</section>",
+        "_pageup_detail_url": "https://jobs.unicef.org/en-us/job/594215/example",
+    }
+
+    assert (
+        detail_quality_status(
+            title="Health Specialist",
+            description=description,
+            raw=raw,
+        )
+        == DETAIL_QUALITY_COMPLETE
+    )
+
+
 def test_db_preserves_existing_complete_description_when_new_oracle_summary_is_incomplete(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()

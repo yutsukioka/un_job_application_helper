@@ -6,14 +6,28 @@ import html
 import logging
 import re
 from datetime import UTC, datetime
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import unquote_plus, urljoin, urlsplit, urlunsplit
 
 from jobagg.models import JobRecord, OrganizationSource
 
 _LOGGER = logging.getLogger(__name__)
 
 _SPACE_RE = re.compile(r"\s+")
-_TAG_RE = re.compile(r"<[^>]+>")
+# Only actual HTML tag names are markup. Public job prose sometimes contains
+# escaped literal angle brackets (e.g. "&lt;Anchored in the 2030 Agenda ...").
+# A generic <[^>]+> regex eats that prose through the next closing HTML tag.
+_HTML_TAGS = (
+    "a abbr acronym address applet area article aside audio b base basefont bdi bdo "
+    "big blockquote body br button canvas caption center cite code col colgroup data "
+    "datalist dd del details dfn dialog dir div dl dt em embed fieldset figcaption "
+    "figure font footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr "
+    "html i iframe img input ins kbd label legend li link main map mark menu meta "
+    "meter nav noframes noscript object ol optgroup option output p param picture "
+    "pre progress q rp rt ruby s samp script search section select slot small source "
+    "span strike strong style sub summary sup svg table tbody td template textarea "
+    "tfoot th thead time title tr track tt u ul var video wbr path g use symbol"
+).split()
+_TAG_RE = re.compile(r"</?(?:" + "|".join(_HTML_TAGS) + r")(?=[\s/>])[^<>]*>", re.I)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 # Strip ``<script>``/``<style>`` blocks (including their contents) before
 # the generic tag regex; otherwise the body of the block leaks into the
@@ -41,7 +55,15 @@ _TRACKING_PARAMS = {
 def clean_text(value: object | None) -> str | None:
     if value is None:
         return None
-    text = html.unescape(str(value))
+    # Remove actual markup before decoding literal angle-bracket entities.
+    text = _SCRIPT_OR_STYLE_RE.sub(" ", str(value))
+    text = _HTML_COMMENT_RE.sub(" ", text)
+    text = _TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    # Some providers encode their complete HTML, so process recognized tags a
+    # second time. Unknown angle-bracket prose remains text and is idempotent.
+    text = _SCRIPT_OR_STYLE_RE.sub(" ", text)
+    text = _HTML_COMMENT_RE.sub(" ", text)
     text = _TAG_RE.sub(" ", text)
     text = _SPACE_RE.sub(" ", text).strip()
     return text or None
@@ -78,13 +100,13 @@ def require_text(value: object | None, fallback: str = "Untitled role") -> str:
 def canonical_url(url: str, base_url: str | None = None) -> str:
     joined = urljoin(base_url or "", url)
     parts = urlsplit(joined)
-    query = urlencode(
-        [
-            (key, value)
-            for key, value in parse_qsl(parts.query, keep_blank_values=True)
-            if key.lower() not in _TRACKING_PARAMS
-        ],
-        doseq=True,
+    # Query components can be opaque (including bare cache tokens or signed
+    # values). Remove known tracking keys without re-encoding the remaining
+    # components, changing a bare token to "token=", or reordering duplicates.
+    query = "&".join(
+        component
+        for component in parts.query.split("&")
+        if unquote_plus(component.split("=", 1)[0]).lower() not in _TRACKING_PARAMS
     )
     scheme = parts.scheme.lower() or "https"
     netloc = parts.netloc.lower()
@@ -217,6 +239,7 @@ def build_job(
     closes_at: object | None = None,
     source_url: str | None = None,
     description: object | None = None,
+    description_is_plain_text: bool = False,
     status: object | None = "open",
     raw: dict | None = None,
 ) -> JobRecord:
@@ -234,7 +257,13 @@ def build_job(
         closes_at=parse_datetime(closes_at, date_locale=date_locale),
         apply_url=canonical_url(apply_url, source.base_url),
         source_url=canonical_url(source_url or apply_url, source.base_url),
-        description=clean_text(description),
+        # A fragment renderer has already decoded entities and selected text.
+        # Parsing that result as HTML again can erase literal public prose.
+        description=(
+            (_SPACE_RE.sub(" ", str(description)).strip() or None)
+            if description_is_plain_text and description is not None
+            else clean_text(description)
+        ),
         status=(clean_text(status) or "open").lower(),
         raw=dict(raw or {}),
     )

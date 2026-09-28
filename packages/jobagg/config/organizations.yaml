@@ -6,6 +6,9 @@ sources:
     base_url: https://wd3.myworkdaysite.com/recruiting/wfp/job_openings
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://interagencystandingcommittee.org/
       output_slug: wfp
       cxs_base_url: https://wd3.myworkdaysite.com/wday/cxs/wfp/job_openings
       page_size: 20
@@ -18,6 +21,7 @@ sources:
     base_url: https://imf.wd5.myworkdayjobs.com/IMF
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: imf
       cxs_base_url: https://imf.wd5.myworkdayjobs.com/wday/cxs/imf/IMF
       page_size: 20
@@ -30,6 +34,7 @@ sources:
     base_url: https://tbinstitute.wd3.myworkdayjobs.com/TBI
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: tbi
       cxs_base_url: https://tbinstitute.wd3.myworkdayjobs.com/wday/cxs/tbinstitute/TBI
       page_size: 20
@@ -42,6 +47,7 @@ sources:
     base_url: https://unhcr.wd3.myworkdayjobs.com/External
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: unhcr
       cxs_base_url: https://unhcr.wd3.myworkdayjobs.com/wday/cxs/unhcr/External
       page_size: 20
@@ -54,6 +60,7 @@ sources:
     base_url: https://weforum.wd3.myworkdayjobs.com/Forum_Careers
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: wef
       cxs_base_url: https://weforum.wd3.myworkdayjobs.com/wday/cxs/weforum/Forum_Careers
       page_size: 20
@@ -66,6 +73,7 @@ sources:
     base_url: https://wto.wd103.myworkdayjobs.com/External
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: wto
       cxs_base_url: https://wto.wd103.myworkdayjobs.com/wday/cxs/wto/External
       page_size: 20
@@ -78,6 +86,7 @@ sources:
     base_url: https://theglobalfund.wd1.myworkdayjobs.com/External
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: globalfund
       cxs_base_url: https://theglobalfund.wd1.myworkdayjobs.com/wday/cxs/theglobalfund/External
       page_size: 20
@@ -91,12 +100,13 @@ sources:
     base_url: https://wipo.taleo.net/careersection/wp_2/jobsearch.ftl
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: wipo
       search_url: https://wipo.taleo.net/careersection/wp_2/jobsearch.ftl
       search_api_url: https://wipo.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=101430233
       detail_url_template: https://wipo.taleo.net/careersection/wp_2/jobdetail.ftl?job={job_id_url}
-      tz: GMT+02:00
-      tzname: Europe/Zurich
+      tz: GMT+00:00
+      tzname: Etc/UTC
       column_fields:
         - title
         - job_level
@@ -151,12 +161,16 @@ sources:
     base_url: https://careers.who.int/careersection/ex/jobsearch.ftl
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://cdn.who.int/
+        - https://www.who.int/
       output_slug: who
       search_url: https://careers.who.int/careersection/ex/jobsearch.ftl
       search_api_url: https://careers.who.int/careersection/rest/jobboard/searchjobs?lang=en&portal=101430233
       detail_url_template: https://careers.who.int/careersection/ex/jobdetail.ftl?job={job_id_url}
-      tz: GMT+02:00
-      tzname: Europe/Zurich
+      tz: GMT+00:00
+      tzname: Etc/UTC
       column_fields:
         - title
         - external_id
@@ -223,12 +237,13 @@ sources:
     base_url: https://iaea.taleo.net/careersection/ex/jobsearch.ftl
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: iaea
       search_url: https://iaea.taleo.net/careersection/ex/jobsearch.ftl
       search_api_url: https://iaea.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=8105100373
       detail_url_template: https://iaea.taleo.net/careersection/ex/jobdetail.ftl?job={job_id_url}
-      tz: GMT+02:00
-      tzname: Europe/Vienna
+      tz: GMT+00:00
+      tzname: Etc/UTC
       column_fields:
         - title
         - location
@@ -281,12 +296,16 @@ sources:
     base_url: https://jobs.fao.org/careersection/fao_external/jobsearch.ftl
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://www.fao.org/
       output_slug: fao
+      enumerate_job_locales: true
       search_url: https://jobs.fao.org/careersection/fao_external/jobsearch.ftl
       search_api_url: https://jobs.fao.org/careersection/rest/jobboard/searchjobs?lang=en&portal=8105120163
       detail_url_template: https://jobs.fao.org/careersection/fao_external/jobdetail.ftl?job={job_id_url}
-      tz: GMT+02:00
-      tzname: Europe/Rome
+      tz: GMT+00:00
+      tzname: Etc/UTC
       column_fields:
         - title
         - external_id
@@ -338,12 +357,15 @@ sources:
     base_url: https://adb.taleo.net/careersection/1/jobsearch.ftl
     enabled: true
     extra:
+      fetch_attachments: false
+      official_document_origins:
+        - https://estar.adb.org/
       output_slug: adb
       search_url: https://adb.taleo.net/careersection/1/jobsearch.ftl
       search_api_url: https://adb.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=8115010145
       detail_url_template: https://adb.taleo.net/careersection/1/jobdetail.ftl?job={job_id_url}
-      tz: GMT+08:00
-      tzname: Asia/Manila
+      tz: GMT+00:00
+      tzname: Etc/UTC
       column_fields:
         - title
         - department
@@ -392,6 +414,7 @@ sources:
     # legacy path is implemented and verified.
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: nato
       search_url: https://nato.taleo.net/careersection/2/jobsearch.ftl
       detail_url_template: https://nato.taleo.net/careersection/2/jobdetail.ftl?job={job_id_url}
@@ -405,6 +428,12 @@ sources:
     base_url: https://jobs.unicef.org/en-us/listing/
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://unicef.sharepoint.com/
+        - https://www.unicef.org/
+      official_document_origins:
+        - https://secure.dc7.pageuppeople.com/
       output_slug: unicef
       listing_url: https://jobs.unicef.org/en-us/listing/
       filter_url: https://jobs.unicef.org/en-us/filter/
@@ -433,6 +462,7 @@ sources:
     base_url: https://careers.un.org/jobopening
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: un
       search_url: https://careers.un.org/jobopening
       list_url: https://careers.un.org/api/public/opening/jo/list/filteredV2/en
@@ -452,14 +482,18 @@ sources:
     base_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup
     enabled: true
     extra:
+      fetch_attachments: false
+      official_document_origins:
+        - https://thedocs.worldbank.org/
       output_slug: worldbank
       official_careers_url: https://www.worldbank.org/ext/en/careers
       search_open_positions_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup
       implementation_status: ready_public_api_har_verified
       auth_model: public_anonymous_candidate_site
       requires_user_credentials: false
-      requires_bearer_token: false
-      requires_runtime_context: false
+      # Public anonymous token from context_url; no candidate login is needed.
+      requires_bearer_token: true
+      requires_runtime_context: true
       context_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup&lang=en-US
       api_url: https://us.api.csod.com/rec-job-search/external/jobs
       custom_fields_url: https://worldbankgroup.csod.com/services/x/core-customfields-service/v1/CustomFields?fieldIds=13&fieldIds=22&fieldIds=29&fieldIds=47&respectAvailablity=false&cultureId=1
@@ -471,8 +505,8 @@ sources:
       detail_url_template: https://worldbankgroup.csod.com/ux/ats/careersite/1/home/requisition/{job_id}?c=worldbankgroup
       page_size: 25
       max_pages: 10
-      fetch_details: false
-      listing_payload_is_detail_complete: true
+      fetch_details: true
+      listing_payload_is_detail_complete: false
       detail_fetch_mode: legacy_api_first
       max_detail_pages_per_run: 20
       detail_concurrency: 1
@@ -482,7 +516,6 @@ sources:
       detail_batch_pause_seconds: 120
       stop_after_transient_failures: 3
       host_cooldown_seconds: 900
-      detail_jitter_seconds: 1
       date_locale: US
       request_timeout_seconds: 60
       headers:
@@ -492,6 +525,8 @@ sources:
         Referer: https://worldbankgroup.csod.com/
         csod-accept-language: en-US
         X-Requested-With: XMLHttpRequest
+      # Documentation only; search_payload contains the actual filters.
+      listing_min_budget_seconds: 180
       organization_scope:
       - World Bank
       - IFC
@@ -540,10 +575,18 @@ sources:
     base_url: https://app.unv.org
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: unv
       api_url: https://app.unv.org/api/doa/doa/SearchDoaAsyncByAzureCognitive
       detail_api_url_template: https://app.unv.org/api/doa/doa/{job_id}
-      detail_url_template: https://app.unv.org/api/doa/doa/{job_id}
+      detail_url_template: https://app.unv.org/opportunities/{job_id}
+      public_rendering: true
+      public_guest_profile_url: https://app.unv.org/api/doa/profile/me/guest
+      public_translation_url: https://uvpprdpublicstorage01.blob.core.windows.net/internationalization/en/en.json?v=5964348
+      public_settings_url: https://app.unv.org/config.js?v=20260818.2
+      public_duty_station_url_template: https://app.unv.org/api/doa/assignment/doa/{job_id}/dutyStations
+      public_eligibility_url_template: https://app.unv.org/api/backoffice/masterTables/Category/values/{category_code}/children/ElegibilityCriteria/languages/EN
+      public_category_sections_url: https://app.unv.org/api/doa/taskExecutionManager/getRelatedActionsAndSectionsConfiguration
       page_size: 50
       max_pages: 10
       fetch_details: false
@@ -555,6 +598,9 @@ sources:
     base_url: https://careers.unops.org
     enabled: true
     extra:
+      fetch_attachments: false
+      official_document_origins:
+        - https://drive.google.com/
       output_slug: unops
       listing_url: https://careers.unops.org/careersmarketplace/SearchJobs
       page_size: 6
@@ -567,6 +613,7 @@ sources:
     base_url: https://estm.fa.em2.oraclecloud.com
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: icao
       site_number: CX_3001
       expected_site_name: ICAO
@@ -584,6 +631,9 @@ sources:
     base_url: https://paho.wd5.myworkdayjobs.com/pahocareers
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://www.paho.org/
       output_slug: paho
       cxs_base_url: https://paho.wd5.myworkdayjobs.com/wday/cxs/paho/pahocareers
       page_size: 20
@@ -596,6 +646,7 @@ sources:
     base_url: https://estm.fa.em2.oraclecloud.com
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: unfpa
       site_number: CX_2003
       expected_site_name: UNFPA
@@ -616,6 +667,9 @@ sources:
     base_url: https://estm.fa.em2.oraclecloud.com
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://www.undp.org/
       output_slug: undp
       site_number: CX_1
       expected_site_name: UNDP
@@ -648,6 +702,12 @@ sources:
     base_url: https://estm.fa.em2.oraclecloud.com
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://unsdg.un.org/
+        - https://www.un.org/
+        - https://www.uneval.org/
+        - https://www.unevaluation.org/
       output_slug: unwomen
       site_number: CX_1001
       expected_site_name: UN Women
@@ -669,6 +729,7 @@ sources:
     base_url: https://estm.fa.em2.oraclecloud.com
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: wmo
       site_number: CX_5001
       expected_site_name: WMO
@@ -686,6 +747,7 @@ sources:
     base_url: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: iom
       site_number: CX_1001
       expected_site_name: IOM
@@ -720,6 +782,9 @@ sources:
     base_url: https://jobs.itu.int
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://www.itu.int/
       output_slug: itu
       search_url: https://jobs.itu.int/go/View-all-categories/8942455/
       max_pages: 3
@@ -731,6 +796,14 @@ sources:
     base_url: https://jobs.ilo.org
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://www.ilo.org/
+      public_widget_api_url: "https://api012.successfactors.eu"
+      public_widget_root_url: "https://performancemanager5.successfactors.eu/verp/vmod_3"
+      public_widget_loader_url: "https://performancemanager5.successfactors.eu/verp/vmod_3/ui/widget-loader/resources/widget-loader.js"
+      public_widget_company_id: "ILO"
+      public_all_jobs_url: "https://jobs.ilo.org/go/All-Jobs/2842101/"
       output_slug: ilo
       search_url: https://jobs.ilo.org/search/
       all_jobs_url: https://jobs.ilo.org/go/All-Jobs/2842101/
@@ -762,6 +835,10 @@ sources:
     base_url: https://careers.unido.org
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://downloads.unido.org/
+        - https://www.unido.org/
       output_slug: unido
       search_url: https://careers.unido.org/search/?q=
       max_pages: 1
@@ -772,6 +849,13 @@ sources:
     base_url: https://careers.unesco.org
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://unesco.sharepoint.com/
+        - https://articles.unesco.org/
+        - https://en.unesco.org/
+        - https://unesdoc.unesco.org/
+        - https://www.unesco.org/
       output_slug: unesco
       search_url: https://careers.unesco.org/search/?q=
       max_pages: 5
@@ -783,9 +867,10 @@ sources:
     base_url: https://careers.icrc.org
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: icrc
       search_url: https://careers.icrc.org/go/All-Jobs/3807301/
-      max_pages: 1
+      max_pages: 2
 
   - id: au_successfactors
     name: African Union
@@ -793,6 +878,7 @@ sources:
     base_url: https://jobs.au.int
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: au
       api_url: https://jobs.au.int/services/recruiting/v1/jobs
       detail_url_template: https://jobs.au.int/job/{url_title}/{job_id}-en_US
@@ -816,6 +902,7 @@ sources:
     base_url: https://apply.workable.com/ide-global
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: ideglobal
       account: ide-global
       fetch_details: false
@@ -832,6 +919,7 @@ sources:
     base_url: https://jobs.smartrecruiters.com/CERN
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: cern
       company: CERN
       api_url: https://api.smartrecruiters.com/v1/companies/CERN/postings
@@ -845,6 +933,9 @@ sources:
     base_url: https://careers.cern/jobs/
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://cernbox.cern.ch/
       output_slug: cern
       job_link_selector_hint: careers.cern/jobs/
 
@@ -852,11 +943,29 @@ sources:
     name: OSCE
     ats_family: osce_custom_html
     adapter: static_html
-    base_url: https://vacancies.osce.org/latest-jobs
+    base_url: https://vacancies.osce.org/jobs/search/
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://jobs.osce.org/
+        - https://talent.osce.org/
       output_slug: osce
-      listing_url: https://vacancies.osce.org/latest-jobs
+      listing_url: https://vacancies.osce.org/jobs/search/
+      listing_min_budget_seconds: 180
+      browser_render:
+        transport: chromium_cdp_native_v1
+        data_route: osce_job_results_v1
+        csrf: osce_tss_token_v1
+        url_patterns:
+          - '^https://vacancies\.osce\.org/jobs/search/$'
+          - '^https://vacancies\.osce\.org/jobs/[^/?#]+-\d+$'
+        ready_selector: '.number_of_results'
+        detail_ready_selector: 'h1'
+        timeout_seconds: 300
+        inventory: osce_full_search_v1
+        # Listing identity/scope comes from DOM controls, independent of CSS.
+        load_stylesheets: false
       parser: public_links
       job_link_selector_hint: /jobs/
       exclude_link_selector_hint: /other-jobs-matching/
@@ -868,6 +977,7 @@ sources:
     base_url: https://unaids.sharepoint.com/
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: unaids
 
   - id: ctbto_successfactors_legacy
@@ -876,6 +986,7 @@ sources:
     base_url: https://career2.successfactors.eu/career?company=ctbtoprepa
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: ctbto
       company_id: ctbtoprepa
       locale: en_GB
@@ -902,6 +1013,10 @@ sources:
     base_url: https://career5.successfactors.eu/career?company=1657261P
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://asp.icc-cpi.int/
+        - https://www.icc-cpi.int/
       output_slug: icc
       company_id: "1657261P"
       locale: en_GB
@@ -911,7 +1026,8 @@ sources:
       primary_fetch_method: successfactors_xml
       empty_policy: verified_empty_required
       max_pages: 1
-      fetch_details: false
+      fetch_details: true
+      listing_payload_is_detail_complete: false
       unstable_detail_source: true
       detail_concurrency: 1
       max_detail_pages_per_run: 10
@@ -930,6 +1046,7 @@ sources:
     base_url: https://career.icddrb.org/
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: icddrb
       opportunities_url: https://career.icddrb.org/get-current-opportunities
       employee_type_ids:
@@ -943,6 +1060,10 @@ sources:
     base_url: https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://webapps.ifad.org/
+        - https://www.ifad.org/
       output_slug: ifad
       listing_url: https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL?Page=HRS_APP_SCHJOB_FL&Action=U
       fetch_details: false
@@ -954,6 +1075,7 @@ sources:
     base_url: https://recruit.imo.org
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: imo
       api_url: https://recruit.imo.org/api/CurrentJobVacancies
       detail_url_template: https://recruit.imo.org/vacancies/{job_id}
@@ -967,6 +1089,7 @@ sources:
     base_url: https://www.ipu.org/about-ipu/work-with-us/vacancies
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: ipu
       listing_url: https://r.jina.ai/http://r.jina.ai/http://https://www.ipu.org/about-ipu/work-with-us/vacancies
       parser: markdown_public_links
@@ -1000,6 +1123,7 @@ sources:
     base_url: https://jobs.itcilo.org/
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: itcilo
       listing_url: https://jobs.itcilo.org/
       parser: public_links
@@ -1016,15 +1140,32 @@ sources:
     base_url: https://www.itlos.org/en/main/the-registry/employment-opportunities/
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: itlos
       listing_url: https://www.itlos.org/en/main/the-registry/employment-opportunities/
       parser: public_links
+      empty_policy:
+        mode: verified_structural_empty
+        required_page_markers:
+          - Employment Opportunities
+          - Professional Level
+          - General Service Level
+          - How to apply
+        required_text_counts:
+          There are currently no vacancies.: 2
+        section_start_text: Professional Level
+        section_end_any_text:
+          - How to apply
+        job_link_patterns:
+          - /fileadmin/itlos/documents/registry/VA/
       job_link_hints:
-        - /fileadmin/itlos/documents/registry/
-        - /employment-opportunities/
+        - /fileadmin/itlos/documents/registry/VA/
       exclude_link_selector_hint:
         - /P.11_Personal_History_Form
         - /training/
+      exclude_external_ids:
+        - Guidelines_JPO_Eng.pdf
+        - Model_MoU_JPO_Eng.pdf
       fetch_details: false
 
   - id: opcw_talentsoft_candidatespace
@@ -1034,6 +1175,7 @@ sources:
     base_url: https://jobs.opcw.org/job/list-of-jobs.aspx
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: opcw
       listing_url: https://jobs.opcw.org/job/list-of-jobs.aspx
       parser: public_links
@@ -1048,6 +1190,7 @@ sources:
     base_url: https://www.unssc.org/about/employment-opportunities
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: unssc
       listing_url: https://www.unssc.org/about/employment-opportunities
       parser: unssc_drupal
@@ -1062,6 +1205,11 @@ sources:
     base_url: https://careers.unu.edu/
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://jpn01.safelinks.protection.outlook.com/
+        - https://unu.edu/
+        - https://i.unu.edu/
       output_slug: unu
       listing_url: https://careers.unu.edu/
       parser: public_links
@@ -1074,6 +1222,7 @@ sources:
     base_url: https://careers.un.org/jobopening
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: isa
       coverage_note: Covered by un_inspira until a reliable ISA-only Inspira filter is confirmed.
 
@@ -1083,6 +1232,7 @@ sources:
     base_url: https://careers.un.org/jobopening
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: itc
       coverage_note: Covered by un_inspira until a reliable ITC-only Inspira filter is confirmed.
 
@@ -1092,6 +1242,7 @@ sources:
     base_url: https://www.unwto.org/work-with-us
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: untourism
       coverage_note: Disabled until an accessible source page or HAR with vacancy content is available.
 
@@ -1102,6 +1253,7 @@ sources:
     base_url: https://career2.successfactors.eu/career?company=africandev
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: afdb
       company_id: africandev
       locale: en_GB
@@ -1112,8 +1264,8 @@ sources:
       primary_fetch_method: successfactors_xml
       empty_policy: verified_empty_required
       max_pages: 2
-      fetch_details: false
-      listing_payload_is_detail_complete: true
+      fetch_details: true
+      listing_payload_is_detail_complete: false
       allow_empty_source: false
       coverage_note: AfDB careers point to current vacancies and the public SuccessFactors company identifier is africandev. Accept empty results only when the feed provides verified zero-job evidence because AfDB can have no open staff vacancies at a given check.
 
@@ -1123,6 +1275,12 @@ sources:
     base_url: https://jobs.iadb.org
     enabled: true
     extra:
+      fetch_attachments: false
+      public_widget_api_url: "https://api8.successfactors.com"
+      public_widget_root_url: "https://performancemanager8.successfactors.com/verp/vmod_3"
+      public_widget_loader_url: "https://performancemanager8.successfactors.com/verp/vmod_3/ui/widget-loader/resources/widget-loader.js"
+      public_widget_company_id: "interameri"
+      public_all_jobs_url: "https://jobs.iadb.org/go/All-Jobs/9638000/"
       output_slug: idb
       search_url: https://jobs.iadb.org/search/
       all_jobs_url: https://jobs.iadb.org/go/All-Jobs/9638000/
@@ -1152,6 +1310,7 @@ sources:
     base_url: https://jobs.ebrd.com
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: ebrd
       search_url: https://jobs.ebrd.com/search/?q=&sortColumn=referencedate&sortDirection=desc
       view_all_jobs_url: https://jobs.ebrd.com/viewalljobs/
@@ -1171,6 +1330,9 @@ sources:
     base_url: https://career5.successfactors.eu/career?company=AIIB
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://www.oecd-ilibrary.org/
       output_slug: aiib
       company_id: AIIB
       locale: en_GB
@@ -1195,6 +1357,7 @@ sources:
     base_url: https://jobs.smartrecruiters.com/OECD
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: oecd
       company: OECD
       api_url: https://api.smartrecruiters.com/v1/companies/OECD/postings
@@ -1215,6 +1378,15 @@ sources:
     base_url: https://eu-careers.europa.eu/en/job-opportunities/open-vacancies
     enabled: true
     extra:
+      fetch_attachments: false
+      reviewed_document_origins:
+        - https://commission.europa.eu/
+        - https://ec.europa.eu/
+        - https://euaa.europa.eu/
+        - https://europass.europa.eu/
+        - https://www.amla.europa.eu/
+        - https://www.coe.int/
+        - https://www.eiopa.europa.eu/
       output_slug: eu_careers
       listing_url: https://eu-careers.europa.eu/en/job-opportunities/open-vacancies/cast
       parent_listing_url: https://eu-careers.europa.eu/en/job-opportunities/open-vacancies
@@ -1227,9 +1399,63 @@ sources:
       epso_account_url: https://europa.eu/epso/application/passport/login.cfm
       eu_agencies_network_url: https://agencies-network.europa.eu/index_en
       fetch_details: true
-      max_pages: 3
+      max_pages: 20
       allow_empty_source: true
       coverage_note: EU Careers publishes selected temporary vacancies and senior-management posts; applications may route through the Single Candidate Portal, EPSO Account, or individual institution/agency systems.
+
+
+      official_vacancy_urls:
+        - "https://jobs.echa.europa.eu/psp/pshrrcr/EMPLOYEE/HRMS/c/HRS_HRAM.HRS_APP_SCHJOB.GBL?FOCUS=Applicant"
+        - "https://www.eurofound.europa.eu/en/pages/vacancies"
+        - "https://www.enisa.europa.eu/recruitment/vacancies/senior-cybersecurity-expert"
+        - "https://www.europol.europa.eu/work-with-us/careers/open-vacancies/vacancy/1080"
+        - "https://www.europol.europa.eu/work-with-us/careers/open-vacancies/vacancy/1079"
+        - "https://f4e-jobs.gestmax.eu/_f4e_jobs/public_files/0298-hr-budget-workforce-planning-officer-ad6-externalvn.pdf"
+        - "https://curia.europa.eu/site/jcms/p1_1000085999/en/social-worker-in-the-working-conditions-unit"
+        - "https://aa293.referrals.selectminds.com/clean-aviation/jobs/caju-09-2026-project-officer-179"
+        - "https://www.europol.europa.eu/work-with-us/careers/open-vacancies/vacancy/1081"
+        - "https://www.cor.europa.eu/en/about/work-us/jobs/assistant-records-and-information-management"
+        - "https://eurojust.tal.net/vx/lang-en-GB/mobile-0/appcentre-1/brand-4/xf-c3c2cdbdccf8/candidate/so/pm/1/pl/3/opp/30-Legal-Officer-26-EJ-05/en-GB"
+        - "https://careers.easa.europa.eu/job/International-Cooperation-Project-Manager-&-Safety-Reporting-Officer/1428291533/"
+        - "https://www.europol.europa.eu/work-with-us/careers/open-vacancies/vacancy/1082"
+        - "https://eiopa.gestmax.eu/70/1/expert-on-institutional-relations-external?backlink=search"
+        - "http://data.europa.eu/eli/C/2026/4370/oj"
+        # Observed official redirect, evidence/eu/public_redirect_https_observation.json.
+        - "https://eur-lex.europa.eu/eli/C/2026/4370/oj"
+        - "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:C_202604370"
+        - "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=OJ:C_202604370"
+        - "https://amla.gestmax.eu/905/1/senior-supervisory-officer"
+        - "https://careers.easa.europa.eu/job/Cabin-Safety-Expert/1431046133/"
+        - "https://careers.euaa.europa.eu/"
+        - "https://curia.europa.eu/site/jcms/p1_1000083879/fr/specialiste-finances/marches/controle-interne"
+        - "https://curia.europa.eu/site/jcms/p1_1000084651/en/cybersecurity-expert"
+        - "https://ec.europa.eu/eusurvey/runner/CINEA_2026_CA_FGIV_16"
+        - "https://eiopa.gestmax.eu/71/1/expert-on-consumer-protection?backlink=search"
+        - "https://erecruitment.eulisa.europa.eu/en/our-jobs/head-of-budget-and-finance-unit-226"
+        - "https://erecruitment.eulisa.europa.eu/en/our-jobs/head-of-legal-unit-228"
+        - "https://euosha.gestmax.eu/837/1/procurement-officer-ast3"
+        - "https://microsite.frontex.europa.eu/en/recruitments/RCT-2026-00020"
+        - "https://microsite.frontex.europa.eu/en/recruitments/RCT-2026-00048"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1040"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1101"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1102"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1103"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1104"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1111"
+        - "https://vacancies.eda.europa.eu/vacanciesnotice/1112"
+        - "https://www.consilium.europa.eu/en/general-secretariat/careers/vacancies/cons022026calegal-service/"
+        - "https://www.consilium.europa.eu/en/general-secretariat/careers/vacancies/cons52026ta-astorg3as3/"
+        - "https://www.consilium.europa.eu/media/o4kldcgo/vacancy-notice-cons-01-26-ca-lawyer-linguist.pdf"
+        - "https://www.etf.europa.eu/en/about/working-with-us/vacancies/digital-specialist"
+        - "https://www.euaa.europa.eu/careers/vacancies"
+        - "https://www.euda.europa.eu/calls/2026/ast202602_en"
+        - "https://www.euda.europa.eu/calls/2026/ca202604_en"
+        - "https://www.euipo.europa.eu/en/about-us/the-office/who-we-are/employer-of-choice/vacancies"
+        - "https://www.europol.europa.eu/work-with-us/careers/open-vacancies/vacancy/1083"
+        - "https://www.sesarju.eu/careers"
+
+      official_notice_url_overrides:
+        "http://data.europa.eu/eli/C/2026/4370/oj": "https://eur-lex.europa.eu/eli/C/2026/4370/oj"
 
   - id: councilofeurope_talents
     name: Council of Europe
@@ -1238,6 +1464,7 @@ sources:
     base_url: https://www.coe.int/en/web/jobs
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: coe
       listing_url: https://www.coe.int/en/web/jobs
       career_portal_url: https://talents.coe.int
@@ -1252,6 +1479,7 @@ sources:
     base_url: https://209400.jobs2web.com
     enabled: true
     extra:
+      fetch_attachments: false
       output_slug: interpol
       official_vacancies_url: https://www.interpol.int/en/What-you-can-do/Careers/Vacancies
       recruitment_platform_url: https://209400.jobs2web.com/
@@ -1267,6 +1495,7 @@ sources:
     base_url: https://eexh.fa.em3.oraclecloud.com
     enabled: false
     extra:
+      fetch_attachments: false
       output_slug: irena
       site_number: CX_1
       expected_site_name: IRENA

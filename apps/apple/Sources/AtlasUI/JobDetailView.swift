@@ -56,7 +56,9 @@ public struct JobDetailView: View {
                     rawRecordDisclosure
                     detailSection("Source and History") {
                         VStack(alignment: .leading, spacing: 8) {
-                            if let sourceURL = detail?.sourceURL ?? job.sourceURL {
+                            if let sourceURL = AtlasExternalURLPolicy.safeURL(
+                                detail?.sourceURL ?? job.sourceURL
+                            ) {
                                 Link(destination: sourceURL) {
                                     Label("Open source vacancy", systemImage: "arrow.up.right.square")
                                 }
@@ -285,7 +287,8 @@ public struct JobDetailView: View {
 
     private var applyButton: some View {
         Group {
-            if let applyURL = detail?.applyURL ?? job.applyURL, !isClosedOrExpired {
+            if let applyURL = AtlasExternalURLPolicy.safeURL(detail?.applyURL ?? job.applyURL),
+               !isClosedOrExpired {
                 Link(destination: applyURL) {
                     Label("Apply", systemImage: "paperplane")
                 }
@@ -306,7 +309,9 @@ public struct JobDetailView: View {
 
     private var sourceButton: some View {
         Group {
-            if let sourceURL = detail?.sourceURL ?? job.sourceURL {
+            if let sourceURL = AtlasExternalURLPolicy.safeURL(
+                detail?.sourceURL ?? job.sourceURL
+            ) {
                 Link(destination: sourceURL) {
                     Label("Source", systemImage: "arrow.up.right.square")
                 }
@@ -354,8 +359,33 @@ public struct JobDetailView: View {
                     .font(.caption)
                     .foregroundStyle(AtlasTheme.warning)
             }
+            if let linkTrustWarningText {
+                Label(linkTrustWarningText, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(AtlasTheme.warning)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var linkTrustWarningText: String? {
+        let hosts = linkTrustWarningHosts
+        guard !hosts.isEmpty else { return nil }
+        return "External link host differs from source organization: \(hosts.joined(separator: ", "))"
+    }
+
+    private var linkTrustWarningHosts: [String] {
+        let trusts = [
+            detail?.applyURLTrust ?? job.applyURLTrust,
+            detail?.sourceURLTrust ?? job.sourceURLTrust,
+        ]
+        return Set(
+            trusts.compactMap { trust -> String? in
+                guard let trust, !trust.matchesSourceOrg else { return nil }
+                return trust.originHost ?? "unknown host"
+            }
+        )
+        .sorted()
     }
 
     @MainActor

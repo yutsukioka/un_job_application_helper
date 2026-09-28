@@ -7,11 +7,16 @@ import html
 import json
 import re
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 from jobagg.adapters.base import JobAdapter, register_adapter
+from jobagg.adapters.ebrd_public import apply_public_fields as _apply_ebrd_public_fields
+from jobagg.adapters.idb_public import apply_public_fields as _apply_idb_public_fields
+from jobagg.adapters.ilo_metadata import apply_public_metadata as _apply_ilo_public_metadata
+from jobagg.adapters.itu_public import apply_public_fields as _apply_itu_public_fields
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job
 from jobagg.utils import as_int as _as_int
@@ -37,7 +42,7 @@ _TABLE_ROW_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _TILE_RE = re.compile(
-    r'<li[^>]+class="[^"]*\bjob-tile\b[^"]*"[^>]*>(?P<html>.*?)(?=<li[^>]+class="[^"]*\bjob-tile\b|</ul>)',
+    r'<li[^>]+class="[^"]*\bjob-tile\b[^"]*"[^>]*>(?P<html>.*?)(?=<li[^>]+class="[^"]*\bjob-tile\b|</ul>|$)',
     re.IGNORECASE | re.DOTALL,
 )
 _DESCRIPTION_START_RE = re.compile(
@@ -77,7 +82,23 @@ class SuccessFactorsRMKAdapter(JobAdapter):
     def fetch_jobs(self) -> list[JobRecord]:
         rss_url = self.source.extra.get("rss_url")
         if rss_url:
-            return self.parse_jobs_from_rss(self.fetch_text(str(rss_url)))
+            jobs = self.parse_jobs_from_rss(self.fetch_text(str(rss_url)))
+            if self.source.extra.get("public_widget_root_url"):
+                # These sources' public boards have migrated to an observed
+                # xweb widget; the legacy feed alone cannot certify its scope.
+                self.run_diagnostics.pagination_complete = False
+                self.run_diagnostics.list_error_count = 1
+                self.run_diagnostics.health_status = "issue"
+                self.run_diagnostics.empty_reason = "rss_scope_unverified_public_widget"
+                self.run_diagnostics.zero_fetched_evidence = {
+                    "legacy_rss_evidence": self.run_diagnostics.zero_fetched_evidence,
+                    "public_widget_scope_verified": False,
+                    "public_all_jobs_url": self.source.extra.get("public_all_jobs_url"),
+                }
+            if self.source.id == "idb_successfactors" and self.source.extra.get("public_all_jobs_url"):
+                from jobagg.adapters.idb_inventory import fetch_fullboard
+                return fetch_fullboard(self, jobs)
+            return jobs
         api_url = self.source.extra.get("api_url")
         if api_url:
             return self._fetch_api_jobs(str(api_url))
@@ -123,27 +144,57 @@ class SuccessFactorsRMKAdapter(JobAdapter):
         seen_keys: set[str] = set()
         seen_urls: set[str] = set()
         current_url: str | None = url
+        totals: set[int] = set()
+        tile_contract: tuple[str, str, int, int] | None = None
+        tile_offset = 0
         for _ in range(max_pages):
             if not current_url or current_url in seen_urls:
                 break
             seen_urls.add(current_url)
             html_text = self.fetch_text(current_url)
+            reported_total = _html_listing_total(html_text)
+            if reported_total is not None:
+                totals.add(reported_total)
+            if tile_contract is None:
+                tile_contract = _tile_search_contract(html_text)
+                if tile_contract:
+                    totals.add(tile_contract[3])
             page_jobs = self.parse_jobs_from_html(html_text)
             if not page_jobs:
                 break
+            new_count = 0
             for job in page_jobs:
                 key = job.identity_key()
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 jobs.append(job)
-            current_url = _next_page_url(html_text, current_url)
+                new_count += 1
+            if new_count == 0:
+                break
+            if tile_contract:
+                endpoint, query, page_size, total = tile_contract
+                tile_offset += page_size
+                # Follow the exact request shape used by j2w.SearchResults,
+                # including category pages whose searchQuery is empty.
+                current_url = (urljoin(url, "/" + endpoint.lstrip("/") + "/" + query + "&startrow=" + str(tile_offset))
+                               if tile_offset < total else None)
+            else:
+                current_url = _next_page_url(html_text, current_url)
+        self.run_diagnostics.pages_fetched = len(seen_urls)
+        self.run_diagnostics.total_reported_by_source = next(iter(totals)) if len(totals) == 1 else None
+        self.run_diagnostics.pagination_complete = (
+            len(totals) == 1 and len(jobs) == next(iter(totals)) and current_url is None
+        )
         return jobs
 
     def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
         if item.get("parser") == "aiib_current_jobs_js":
             return self._fetch_aiib_detail_for_listing_item(item)
         detail_url = _raw_detail_url(item)
+        if (not detail_url and self.source.id in {"icc_successfactors_legacy", "afdb_successfactors_legacy"}
+                and str(item.get("reqid") or "").isdigit()):
+            detail_url = self._successfactors_detail_url(str(item["reqid"]))
         if not detail_url:
             external_id = item.get("id") or item.get("jobReqId") or item.get("jobreqid")
             url_title = item.get("urlTitle") or item.get("unifiedUrlTitle")
@@ -153,26 +204,38 @@ class SuccessFactorsRMKAdapter(JobAdapter):
         detail_url = str(detail_url)
         self.ensure_allowed(detail_url)
         html_text = self.fetch_text(detail_url)
+        if self.source.id in {"icc_successfactors_legacy", "afdb_successfactors_legacy"}:
+            from jobagg.adapters.legacy_public import render_public_notice
+            return render_public_notice(
+                self.source, html_text, page_url=detail_url,
+                external_id=_job_id_from_url(detail_url), expected_title=_raw_title(item) or str(item.get("jobtitle") or ""),
+            )
         for job in self.parse_jobs_from_html(html_text):
             if job.description and _is_meaningful_description(job.description):
-                return job
+                return self._apply_public_detail_fields(job, html_text)
         description = _detail_description(html_text)
         if not description:
             return None
-        return build_job(
+        job = build_job(
             self.source,
             title=_detail_title(html_text) or _raw_title(item),
             external_id=_job_id_from_url(detail_url),
             location=_detail_location(html_text) or _raw_location(item),
             department=_raw_department(item),
             employment_type=_raw_employment_type(item),
-            posted_at=_raw_posted_at(item) or _detail_posted_at(html_text),
-            closes_at=_raw_closes_at(item) or _detail_closes_at(html_text) or _application_deadline(html_text),
+            posted_at=_detail_posted_at(html_text) or _raw_posted_at(item),
+            closes_at=_detail_closes_at(html_text) or _application_deadline(html_text) or _raw_closes_at(item),
             apply_url=detail_url,
             source_url=detail_url,
             description=description,
-            raw={**item, "detail_url": detail_url, "parser": "successfactors_detail"},
+            raw={**item, "detail_url": detail_url, "detail_html": html_text, "parser": "successfactors_detail"},
         )
+        return self._apply_public_detail_fields(job, html_text)
+
+    def _apply_public_detail_fields(self, job: JobRecord, html_text: str) -> JobRecord:
+        if self.source.id == "ilo_successfactors":
+            return _apply_ilo_public_metadata(_apply_ilo_public_deadline(job, html_text, detail=True), html_text, detail=True)
+        return _apply_ebrd_public_fields(_apply_idb_public_fields(_apply_itu_public_fields(job, html_text), html_text), html_text)
 
     def _fetch_aiib_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
         detail_url = item.get("detail_url") or item.get("source_url") or item.get("apply_url")
@@ -185,9 +248,10 @@ class SuccessFactorsRMKAdapter(JobAdapter):
         if not description:
             return None
         fields = _aiib_detail_fields(html_text)
+        deadline = _aiib_public_deadline(html_text, fields)
         apply_url = _aiib_apply_url(html_text) or item.get("apply_url") or detail_url
         successfactors_id = _job_id_from_url(str(apply_url)) if apply_url else None
-        return build_job(
+        job = build_job(
             self.source,
             title=_raw_title(item) or _detail_title(html_text) or fields.get("Position"),
             external_id=item.get("external_id") or item.get("number") or _job_id_from_url(detail_url),
@@ -195,7 +259,8 @@ class SuccessFactorsRMKAdapter(JobAdapter):
             department=fields.get("Department/Division") or _raw_department(item),
             employment_type=fields.get("Job Type **") or fields.get("Job Type") or _raw_employment_type(item),
             posted_at=fields.get("Posting Date") or _raw_posted_at(item),
-            closes_at=fields.get("Closing Date *") or fields.get("Closing Date") or _raw_closes_at(item),
+            closes_at=(deadline["closes_at"] if deadline else
+                       fields.get("Closing Date *") or fields.get("Closing Date") or _raw_closes_at(item)),
             apply_url=str(apply_url),
             source_url=detail_url,
             description=description,
@@ -204,9 +269,17 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                 "detail_url": detail_url,
                 "successfactors_job_id": successfactors_id,
                 "detail_fields": fields,
+                "detail_html": html_text,
                 "parser": "aiib_official_detail",
+                **({"_aiib_deadline_resolution": deadline} if deadline else {}),
             },
         )
+        if not deadline:
+            job.raw.pop("_aiib_deadline_resolution", None)
+        if deadline:
+            job.closes_at_local = deadline["closes_at_local"]
+            job.closes_tz = deadline["closes_tz"]
+        return job
 
     def parse_jobs_from_api(self, payload: Any) -> list[JobRecord]:
         rows = payload.get("jobSearchResult", []) if isinstance(payload, dict) else payload
@@ -262,8 +335,8 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     external_id=_job_id_from_url(link),
                     location=_location_from_title(title),
                     department=_labeled_value(description, "Department"),
-                    employment_type=_labeled_value(description, "Grade"),
-                    posted_at=_labeled_value(description, "Publication date") or item.findtext("pubDate"),
+                    employment_type=_labeled_value(description, "Contract type" if self.source.id == "ilo_successfactors" else "Grade"),
+                    posted_at=None if self.source.id == "ilo_successfactors" else _labeled_value(description, "Publication date") or item.findtext("pubDate"),
                     closes_at=_application_deadline(description),
                     apply_url=link,
                     source_url=link,
@@ -284,6 +357,8 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                 "items": empty_placeholders[:3],
             }
             self.run_diagnostics.pagination_complete = True
+        if self.source.id == "ilo_successfactors":
+            jobs = [_apply_ilo_public_metadata(_apply_ilo_public_deadline(job, str(job.raw.get("description") or ""), detail=False), str(job.raw.get("description") or ""), detail=False) for job in jobs]
         return jobs
 
     def parse_jobs_from_html(self, html_text: str) -> list[JobRecord]:
@@ -503,14 +578,27 @@ def _raw_closes_at(item: dict[str, Any]) -> str | None:
 
 
 def _detail_title(html_text: str) -> str | None:
-    title = _first_html_match(
+    # The candidate-visible title is authoritative and may itself contain
+    # hyphens or pipes (for example, "IDB Invest - ..."). Site-title suffix
+    # trimming belongs only to the document/meta fallback below.
+    public_title = _first_html_match(
         html_text,
         (
-            r"<meta\b(?=[^>]*property=[\"']og:title[\"'])(?=[^>]*content=[\"'](?P<value>[^\"']+)[\"'])",
-            r"<h1\b[^>]*>(?P<value>.*?)</h1>",
-            r"<title\b[^>]*>(?P<value>.*?)</title>",
+            r"<(?P<title_tag>span|h1|h2|div)\b(?=[^>]*itemprop=[\"']title[\"'])[^>]*>(?P<value>.*?)</(?P=title_tag)>",
         ),
     )
+    if public_title:
+        return public_title
+    public_fallback = _first_html_match(
+        html_text,
+        (
+            r"<meta\b(?=[^>]*property=[\"']og:title[\"'])(?=[^>]*content=(?P<meta_quote>[\"'])(?P<value>.*?)(?P=meta_quote))",
+            r"<h1\b[^>]*>(?P<value>.*?)</h1>",
+        ),
+    )
+    if public_fallback:
+        return public_fallback
+    title = _first_html_match(html_text, (r"<title\b[^>]*>(?P<value>.*?)</title>",))
     if not title:
         return None
     return re.split(r"\s+[|-]\s+", title, maxsplit=1)[0].strip()
@@ -539,7 +627,12 @@ def _detail_description(html_text: str) -> str | None:
     candidates = _description_candidates(html_text, _DESCRIPTION_START_RE)
     meaningful = [candidate for candidate in candidates if _is_meaningful_description(candidate)]
     if meaningful:
-        return max(meaningful, key=len)
+        # Multiple public description spans are sequential sections (ILO uses
+        # separate eligibility, duties, and recruitment-process spans). Keep
+        # short companion sections too; a longest-span shortcut loses content.
+        unique = list(dict.fromkeys(candidates))
+        return "\n\n".join(candidate for candidate in unique
+                            if not any(candidate != other and candidate in other for other in unique))
 
     fallback_candidates = _description_candidates(html_text, _DISPLAY_START_RE)
     meaningful = [candidate for candidate in fallback_candidates if _is_meaningful_description(candidate)]
@@ -643,6 +736,43 @@ def _aiib_preceding_heading(prefix: str) -> str | None:
     return _clean_html(match.group("value")) if match else None
 
 
+def _aiib_public_deadline(html_text: str, fields: dict[str, str]) -> dict[str, str] | None:
+    """Bind the visible closing-date card to AIIB's explicit public clock rule."""
+    visible = " ".join((_clean_html(html_text) or "").split())
+    notes = re.findall(r"All opportunities close at[^\n]*?on the dates listed\.", visible, re.I)
+    mentioned = len(re.findall(r"All opportunities close at", visible, re.I))
+    if not mentioned:
+        return None
+    pattern = re.compile(
+        r"All opportunities close at (?P<clock>(?P<hour>\d{1,2}):(?P<minute>\d{2}) "
+        r"(?P<period>[ap])\.?m\.?) \((?P<zone>GMT(?P<sign>[+-])(?P<offset>\d{1,2}))\) "
+        r"on the dates listed\.", re.I,
+    )
+    matches = [pattern.fullmatch(" ".join(note.split())) for note in notes]
+    if len(matches) != mentioned or any(match is None for match in matches):
+        raise ValueError("AIIB public closing-clock rule is ambiguous or unsupported")
+    rules = {tuple(match.group(name) for name in ("clock", "zone")) for match in matches if match}
+    if len(rules) != 1:
+        raise ValueError("Conflicting AIIB public closing clocks/timezones")
+    dates = {fields[k] for k in ("Closing Date *", "Closing Date") if fields.get(k)}
+    if len(dates) != 1:
+        raise ValueError("AIIB public closing date is missing or conflicting")
+    public_date = dates.pop()
+    day = datetime.strptime(public_date, "%b %d, %Y")
+    match = matches[0]
+    hour, minute, offset = (int(match.group(k)) for k in ("hour", "minute", "offset"))
+    if not 1 <= hour <= 12 or not 0 <= minute < 60 or offset > 14:
+        raise ValueError("Invalid AIIB public closing clock/timezone")
+    hour = hour % 12 + (12 if match.group("period").lower() == "p" else 0)
+    zone = timezone(timedelta(hours=offset * (1 if match.group("sign") == "+" else -1)))
+    local = day.replace(hour=hour, minute=minute, tzinfo=zone)
+    return {"closes_at": local.astimezone(UTC).isoformat(),
+            "closes_at_local": f"{public_date} {match.group('clock')}",
+            "closes_tz": match.group("zone"),
+            "public_closing_date": public_date, "public_clock_rule": " ".join(notes[0].split()),
+            "precision": "minute; explicit public GMT offset"}
+
+
 def _aiib_detail_fields(html_text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     pattern = re.compile(
@@ -656,6 +786,8 @@ def _aiib_detail_fields(html_text: str) -> dict[str, str]:
         label = _clean_html(match.group("label"))
         value = _clean_html(match.group("value"))
         if label and value:
+            if label.startswith("Closing Date") and label in fields and fields[label] != value:
+                raise ValueError("Conflicting AIIB closing-date cards")
             fields[label] = value
     return fields
 
@@ -840,6 +972,22 @@ def _xml_flatten(element: ET.Element) -> dict[str, str]:
         if key and text:
             fields.setdefault(key, _clean_html(text) or text)
     return fields
+
+
+def _xml_description_html(element: ET.Element) -> str | None:
+    """Keep original public description markup alongside flattened XML fields."""
+    for wanted in ("description", "jobdescription"):
+        for child in element.iter():
+            if child is element or _xml_key(child.tag) != wanted:
+                continue
+            # CDATA is child.text. Serialized children preserve genuine nested
+            # XML/HTML tags, attributes and tails instead of losing their hrefs.
+            body = (child.text or "") + "".join(
+                ET.tostring(node, encoding="unicode") for node in child
+            )
+            if body.strip():
+                return body
+    return None
 
 
 def _xml_total_count(root: ET.Element) -> int | None:
@@ -1030,7 +1178,11 @@ class SuccessFactorsLegacyAdapter(SuccessFactorsRMKAdapter):
                     apply_url=source_url,
                     source_url=source_url,
                     description=_first_field(fields, ("description", "jobdescription")),
-                    raw={**fields, "parser": "successfactors_xml"},
+                    raw={
+                        **fields,
+                        "parser": "successfactors_xml",
+                        "detail_html": _xml_description_html(item),
+                    },
                 )
             )
         return jobs
@@ -1097,6 +1249,67 @@ def _labeled_value(html_text: str | None, label: str) -> str | None:
     return _clean_html(match.group("value")) if match else None
 
 
+def _ilo_public_deadline(html_text: str) -> dict[str, Any]:
+    """Keep the published calendar date without inventing a UTC cutoff.
+
+    Midnight on a deadline date does not establish beginning versus end of
+    that day. A named clock zone is retained, but UTC remains unknown unless
+    the publisher supplies an unambiguous numeric time and a named zone.
+    """
+    text = _clean_html(html_text) or ""
+    pattern = (r"(?P<label>Application deadline|Fecha de cierre|Date de cl[oô]\s*ture)"
+               r"\s*(?:\((?P<clock>[^)]+)\))?\s*:\s*"
+               r"(?P<date>\d{1,2}\s+(?:de\s+)?[^\W\d_]+\s+\d{4})")
+    matches = {tuple(m.group(k) or "" for k in ("label", "clock", "date"))
+               for m in re.finditer(pattern, text, re.I)}
+    unresolved = {"utc_resolved": False, "closes_at": None, "closes_at_local": None,
+                  "closes_tz": None, "precision": "unparsed_public_deadline",
+                  "unknown_utc_reason": "No unambiguous public deadline label/date"}
+    if not matches:
+        return unresolved
+    if len(matches) != 1:
+        raise ValueError("ILO public deadline labels disagree")
+    label, clock, public_date = matches.pop()
+    months = {name: number for number, group in enumerate((
+        "january janvier enero", "february février febrero", "march mars marzo",
+        "april avril abril", "may mai mayo", "june juin junio", "july juillet julio",
+        "august août agosto", "september septembre septiembre", "october octobre octubre",
+        "november novembre noviembre", "december décembre diciembre"), 1) for name in group.split()}
+    parts = public_date.lower().replace(" de ", " ").split()
+    if len(parts) != 3 or parts[1] not in months:
+        return {**unresolved, "public_label": label, "public_date": public_date, "public_clock_label": clock}
+    calendar_date = datetime(int(parts[2]), months[parts[1]], int(parts[0]))
+    named_zones = {"bangkok": "Asia/Bangkok", "abidjan": "Africa/Abidjan", "geneva": "Europe/Zurich", "genève": "Europe/Zurich"}
+    zones = {zone for name, zone in named_zones.items() if re.search(r"\b"+name+r"\b", clock, re.I)}
+    zone = next(iter(zones)) if len(zones) == 1 else None
+    resolution = {**unresolved, "public_label": label, "public_date": public_date,
+                  "public_clock_label": clock, "closes_at_local": calendar_date.date().isoformat(),
+                  "closes_tz": zone, "precision": "public_calendar_date",
+                  "unknown_utc_reason": "Cutoff time and/or timezone not explicitly published"}
+    if re.search(r"\bmidnight\b|\bminuit\b", clock, re.I):
+        resolution.update(precision="public_calendar_date_with_midnight_label",
+                          unknown_utc_reason="Midnight day boundary not explicit" if zone else "Midnight day boundary and local timezone not explicit")
+        return resolution
+    numeric = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", clock)
+    if numeric and zone:
+        local = calendar_date.replace(hour=int(numeric[1]), minute=int(numeric[2]), tzinfo=ZoneInfo(zone))
+        resolution.update(utc_resolved=True, closes_at=local.astimezone(UTC).isoformat(),
+                          closes_at_local=local.replace(tzinfo=None).isoformat(), precision="explicit_local_clock",
+                          unknown_utc_reason=None)
+    return resolution
+
+
+def _apply_ilo_public_deadline(job: JobRecord, html_text: str, *, detail: bool) -> JobRecord:
+    resolution = {**_ilo_public_deadline(html_text), "record_kind": "detail" if detail else "listing"}
+    job.closes_at = datetime.fromisoformat(resolution["closes_at"]) if resolution["closes_at"] else None
+    job.closes_at_local = resolution["closes_at_local"]
+    job.closes_tz = resolution["closes_tz"]
+    job.raw["_ilo_deadline_resolution"] = resolution
+    if detail:
+        job.raw["detail_html"] = html_text
+    return job
+
+
 def _application_deadline(html_text: str | None) -> str | None:
     if not html_text:
         return None
@@ -1106,6 +1319,26 @@ def _application_deadline(html_text: str | None) -> str | None:
         re.IGNORECASE | re.DOTALL,
     )
     return match.group("value") if match else None
+
+
+def _html_listing_total(html_text: str) -> int | None:
+    text = _clean_html(html_text) or ""
+    match = re.search(r"(?:Showing|Results)\s+[\d,]+\s*(?:to|[-–—])\s*[\d,]+\s+of\s+([\d,]+)", text, re.I)
+    return int(match.group(1).replace(",", "")) if match else None
+
+
+def _tile_search_contract(html_text: str) -> tuple[str, str, int, int] | None:
+    block = re.search(r"j2w\.SearchResults\.init\(\s*\{(.*?)\}\s*\)", html_text, re.S)
+    if not block:
+        return None
+    text = block.group(1)
+    endpoint = re.search(r"apiEndpoint\s*:\s*[\"']([^\"']+)[\"']", text)
+    query = re.search(r"searchQuery\s*:\s*[\"']([^\"']*)[\"']", text)
+    size = re.search(r"jobRecordsPerPage\s*:\s*(?:parseInt\(\s*)?[\"']?(\d+)", text)
+    total = re.search(r"jobRecordsFound\s*:\s*(?:parseInt\(\s*)?[\"']?(\d+)", text)
+    if not all((endpoint, query, size, total)) or int(size.group(1)) <= 0:
+        return None
+    return html.unescape(endpoint.group(1)), html.unescape(query.group(1)), int(size.group(1)), int(total.group(1))
 
 
 def _next_page_url(html_text: str, current_url: str) -> str | None:

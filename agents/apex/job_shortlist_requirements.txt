@@ -1,0 +1,2 @@
+# Only Excel serialization needs a third-party package. Matching uses the standard library.
+openpyxl>=3.1.5,<4

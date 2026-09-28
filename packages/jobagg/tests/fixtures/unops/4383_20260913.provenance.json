@@ -1,0 +1,11 @@
+{
+  "original_capture": {
+    "path": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/unops_avature/full-001/http/00084.json",
+    "sha256": "17b67e2f7846461e20bd7d7d9d2672cccab74c5ac75ac608dff7af1ef2059f00",
+    "body_sha256": "13a20d9dfd9b2765f60acaf5be4caf67e89c5e28c322e253c271306b716ed0b4",
+    "url": "https://careers.unops.org/careersmarketplace/JobDetail/Support-Services-Manager/4383",
+    "original_started_at": "2026-09-13T11:20:37.592811+00:00",
+    "original_finished_at": "2026-09-13T11:20:41.307359+00:00"
+  },
+  "fixture_sha256": "13a20d9dfd9b2765f60acaf5be4caf67e89c5e28c322e253c271306b716ed0b4"
+}

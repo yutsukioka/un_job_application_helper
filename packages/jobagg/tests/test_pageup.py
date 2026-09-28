@@ -109,6 +109,36 @@ def test_pageup_parses_unicef_detail_html():
     assert job.apply_url.startswith("https://secure.dc7.pageuppeople.com/apply/671/")
 
 
+def test_pageup_detail_uses_url_job_id_when_displayed_job_no_differs():
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org/en-us/listing/",
+    )
+    adapter = PageUpAdapter(AdapterContext(source=source, http=JobAggHTTPClient()))
+
+    job = adapter.parse_detail_html(
+        """
+        <h2>Information Management Officer, NO-1</h2>
+        <p>
+          <b>Job no:</b> <span class="job-externalJobNo">JPR0003145</span><br>
+          <b>Location:</b> <span class="location">Venezuela</span><br>
+        </p>
+        <div id="job-details">
+          <p>Responsibilities include information management, coordination,
+          data analysis, reporting, stakeholder engagement, and support to
+          humanitarian cluster operations.</p>
+        </div>
+        """,
+        "https://jobs.unicef.org/en-us/job/594228/information-management-officer-no1",
+    )
+
+    assert job.external_id == "594228"
+    assert job.raw["pageup_external_job_no"] == "JPR0003145"
+    assert "information management" in job.description
+
+
 def test_pageup_parses_full_unicef_template_detail_without_page_heading():
     source = OrganizationSource(
         id="unicef_pageup",

@@ -1,0 +1,11 @@
+{
+  "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/evidence/emsa_public_fields/public-page-001/http/00002.json",
+  "capture_sha256": "56373098d47216414d9f069002ab526624c7bb8408b2d6be05c4c110635af68c",
+  "original_body_sha256": "383ad66bcafc66236fc317dece98c1783e28e68b4f3c2f5a433b015e1bebff29",
+  "original_started_at": "2026-09-13T17:02:53.372335+00:00",
+  "original_finished_at": "2026-09-13T17:03:02.815037+00:00",
+  "fixture_sha256": "5f60e0bb047cdf2436f146528d86c3b00ab70d4e74f10eaa2c0c7626d0ccffb5",
+  "fixture_scope": "Exact original document1 markup plus exact observed primary-PDF anchors in all24 source languages outside document1; source navigation/asset/bootstrap markup excluded.",
+  "nfkc_nonwhitespace_characters": 19551,
+  "nfkc_nonwhitespace_sha256": "f0021c4d3ef1e7167d3239cb513f75e5b79e15cf8f2e16452c8702896b868f16"
+}

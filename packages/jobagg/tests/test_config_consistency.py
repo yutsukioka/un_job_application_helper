@@ -76,6 +76,12 @@ def test_detail_fetch_schedule_defaults_for_degraded_sources():
         assert policy["stop_after_transient_failures"] == 2
         assert policy["host_cooldown_seconds"] == 1800
 
+    assert (
+        sources["icc_successfactors_legacy"].extra["listing_payload_is_detail_complete"]
+        is False
+    )
+    assert sources["icc_successfactors_legacy"].extra["fetch_details"] is True
+
 
 def _url_hosts(value):
     if isinstance(value, dict):

@@ -1,0 +1,13 @@
+{
+  "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/evidence/worldbank_public_fields/remaining-public-pages-003/http/00009.json",
+  "capture_sha256": "2e15669a328ed9f2d9408d278af27d6e6a01b7514727092354cd0cf7b9dbd2c1",
+  "body_sha256": "bcdf37ea3d757633a9b607f14c645e9bedacebb2a73edeea2b698852f9896e97",
+  "url": "https://worldbankgroup.csod.com/ux/ats/careersite/1/home/requisition/38187?c=worldbankgroup",
+  "external_id": "38187",
+  "original_started_at": "2026-09-13T16:29:33.432807+00:00",
+  "original_finished_at": "2026-09-13T16:29:40.706065+00:00",
+  "fixture_sha256": "46b81ee1fb5e4219bbc486df1d0f39149055e96d543311adc6f586a010074c64",
+  "section_layout": "young_professionals_requirements_only",
+  "duties_section_present": false,
+  "description_sha256": "3bf6455cc5399f469f2246c14cd79d04d38cf95ea35c6a8daa536ffc33b97639"
+}

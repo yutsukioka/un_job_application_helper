@@ -154,8 +154,11 @@ def test_workday_parses_wfp_detail_payload():
     assert jobs[0].external_id == "JR122560"
     assert jobs[0].title == "Human Resources Officer - Performance Management (P4)"
     assert jobs[0].employment_type == "Full time"
-    assert jobs[0].posted_at.isoformat() == "2026-04-28T00:00:00+00:00"
-    assert jobs[0].closes_at.isoformat() == "2026-05-18T00:00:00+00:00"
+    assert jobs[0].posted_at is None
+    assert jobs[0].raw["_workday_public_date_precision"]["posting"]["calendar_date"] == "2026-04-28"
+    assert jobs[0].closes_at is None
+    assert jobs[0].raw["jobPostingInfo"]["endDate"] == "2026-05-18"
+    assert jobs[0].raw["_workday_deadline_resolution"]["kind"] == "missing_public_label"
     assert jobs[0].description == "Lead performance management work."
 
 

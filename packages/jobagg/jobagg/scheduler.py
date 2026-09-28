@@ -15,6 +15,7 @@ import webbrowser
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from jobagg.classification import classify_database
 from jobagg.classification.audit import audit_classification, audit_to_markdown
@@ -45,6 +46,7 @@ from jobagg.pipelines.bundles import (
     write_source_bundle,
     write_summary,
 )
+from jobagg.pipelines.bundle_verify import verify_bundle_path
 from jobagg.pipelines.consolidation import (
     consolidate_bundle_databases,
     write_organization_summary,
@@ -77,6 +79,13 @@ def _non_negative_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"invalid integer value: {value}") from exc
     if parsed < 0:
         raise argparse.ArgumentTypeError("value must be 0 or greater")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = _non_negative_int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than 0")
     return parsed
 
 
@@ -312,6 +321,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional CSV path for per-organization current/history counts.",
     )
     consolidate.set_defaults(handler=handle_consolidate_bundles)
+
+    bundle = subcommands.add_parser("bundle", help="Inspect and validate local bundle artifacts.")
+    bundle_subcommands = bundle.add_subparsers(dest="bundle_command", required=True)
+    bundle_verify = bundle_subcommands.add_parser(
+        "verify",
+        help="Validate a bundle SQLite database or directory before import.",
+    )
+    bundle_verify.add_argument("path", help="Path to a *_jobs.sqlite3 database or bundle directory.")
+    bundle_verify.add_argument(
+        "--max-bytes",
+        type=_positive_int,
+        default=None,
+        help="Maximum total bundle bytes allowed before any file is opened.",
+    )
+    bundle_verify.set_defaults(handler=handle_bundle_verify)
 
     export = subcommands.add_parser("export", help="Export persisted jobs.")
     export.add_argument("--format", choices=["json", "csv"], default="json", help="Export format.")
@@ -806,6 +830,19 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def handle_bundle_verify(args: argparse.Namespace) -> int:
+    result = verify_bundle_path(args.path, max_bytes=args.max_bytes)
+    if result.ok:
+        print(
+            f"OK: verified {len(result.checked_files)} file(s), {result.total_bytes} bytes",
+            file=sys.stdout,
+        )
+        return 0
+    for error in result.errors:
+        print(f"ERROR: {error}", file=sys.stderr)
+    return 1
+
+
 def _write_source_bundle_for_sync_bundles(
     args: argparse.Namespace,
     source: OrganizationSource,
@@ -903,6 +940,12 @@ def _apply_browser_cookie_assist(
             )
             webbrowser.open(cookie_url)
         cookie_header = _read_browser_cookie_header(args, source)
+        if not _cookie_header_matches_target(cookie_header, cookie_url):
+            LOGGER.warning(
+                "%s declared cookie domain does not match target host; not attaching cookie header",
+                source.id,
+            )
+            continue
         source.extra = {
             **source.extra,
             "cookie_header": cookie_header,
@@ -965,6 +1008,31 @@ def _normalize_cookie_header(value: str) -> str:
     if "=" not in text:
         raise RuntimeError("Cookie header does not look like name=value cookies")
     return text
+
+
+def _cookie_header_matches_target(cookie_header: str, cookie_url: str) -> bool:
+    target_host = (urlsplit(cookie_url).hostname or "").casefold()
+    if not target_host:
+        return False
+    return all(
+        _cookie_domain_matches(target_host, domain)
+        for domain in _declared_cookie_domains(cookie_header)
+    )
+
+
+def _declared_cookie_domains(cookie_header: str) -> list[str]:
+    domains: list[str] = []
+    for part in cookie_header.split(";"):
+        name, separator, value = part.strip().partition("=")
+        if separator and name.casefold() == "domain":
+            domains.append(value.strip().lstrip(".").casefold())
+    return domains
+
+
+def _cookie_domain_matches(target_host: str, declared_domain: str) -> bool:
+    if not declared_domain:
+        return False
+    return target_host == declared_domain or target_host.endswith(f".{declared_domain}")
 
 
 def _truthy(value: object) -> bool:
@@ -1162,6 +1230,7 @@ def _source_health_dry_run_row(source: OrganizationSource, *, output_dir: Path) 
         "detail_succeeded": latest.get("detail_succeeded", 0),
         "detail_failed": latest.get("detail_failed", 0),
         "detail_skipped": latest.get("detail_skipped", 0),
+        "detail_unavailable": latest.get("detail_unavailable", 0),
         "detail_backlog_counts": sidecar["detail_backlog_counts"],
         "circuit_breakers": sidecar["circuit_breakers"],
         "cooldown_until": sidecar["cooldown_until"],
@@ -1178,11 +1247,7 @@ def _latest_source_diagnostics(output_dir: Path, slug: str, source_id: str) -> d
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
-                SELECT sr.fetched, sr.missing, sr.closed, sr.errors_json,
-                       d.run_classification, d.publishability_classification,
-                       d.health_status, d.pagination_complete, d.empty_reason,
-                       d.missing_transition_allowed, d.detail_attempted,
-                       d.detail_succeeded, d.detail_failed, d.detail_skipped
+                SELECT sr.fetched, sr.missing, sr.closed, sr.errors_json, d.*
                 FROM source_runs sr
                 LEFT JOIN source_run_diagnostics d ON d.source_run_id = sr.id
                 WHERE sr.source_id = ?
@@ -1211,6 +1276,7 @@ def _latest_source_diagnostics(output_dir: Path, slug: str, source_id: str) -> d
         "detail_succeeded": int(row["detail_succeeded"] or 0),
         "detail_failed": int(row["detail_failed"] or 0),
         "detail_skipped": int(row["detail_skipped"] or 0),
+        "detail_unavailable": int(row["detail_unavailable"] or 0) if "detail_unavailable" in row.keys() else 0,
         "last_error_summary": _last_error_summary(errors, None),
     }
 
@@ -1358,6 +1424,7 @@ def _write_sync_bundles_health_report(
                 "detail_succeeded": diagnostics.detail_succeeded if diagnostics else 0,
                 "detail_failed": diagnostics.detail_failed if diagnostics else 0,
                 "detail_skipped": diagnostics.detail_skipped if diagnostics else 0,
+                "detail_unavailable": diagnostics.detail_unavailable if diagnostics else 0,
                 "detail_pending": sidecar["detail_backlog_counts"].get("pending", 0),
                 "detail_backlog_counts": sidecar["detail_backlog_counts"],
                 "pagination_complete": diagnostics.pagination_complete if diagnostics else None,
@@ -1569,6 +1636,7 @@ def _merge_consolidated_status_into_health_rows(source_rows: list[dict], db_path
                 "detail_succeeded": 0,
                 "detail_failed": 0,
                 "detail_skipped": 0,
+                "detail_unavailable": 0,
                 "detail_pending": 0,
                 "detail_backlog_counts": {},
                 "pagination_complete": _sqlite_bool(status.get("pagination_complete")),
@@ -1897,11 +1965,15 @@ def handle_search(args: argparse.Namespace) -> int:
     score_path = getattr(args, "score_against", None)
     min_score = getattr(args, "min_score", None)
     if score_path or min_score is not None:
-        from jobagg.scoring import load_strategy_signals, score_jobs
+        from jobagg.scoring import StrategyPathError, load_strategy_signals, resolve_strategy_signals_path, score_jobs
 
         if not score_path:
             raise SystemExit("--min-score requires --score-against")
-        signals = load_strategy_signals(score_path)
+        try:
+            signals_path = resolve_strategy_signals_path(score_path)
+        except StrategyPathError as exc:
+            raise SystemExit(str(exc)) from exc
+        signals = load_strategy_signals(signals_path)
         scored = score_jobs(response.results, signals)
         if min_score is not None:
             scored = [job for job in scored if job["score"] >= min_score]

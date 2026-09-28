@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from jobagg.adapters.base import JobAdapter, register_adapter
+from jobagg.adapters.paho_public import apply_public_fields as apply_paho_public_fields
+from jobagg.adapters.workday_deadlines import PUBLIC_DEADLINE_SOURCES, apply_public_deadline
+from jobagg.adapters.workday_precision import apply_public_date_precision
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job
 from jobagg.utils import as_bool as _as_bool
@@ -45,6 +48,8 @@ class WorkdayAdapter(JobAdapter):
         offset = 0
         pages = 0
         expected_total: int | None = None
+        observed_totals: set[int] = set()
+        structural_terminal = False
         # When ``expected_total`` shrinks between pages by more than one page
         # the listing is being mutated under us; older pages we already
         # consumed may be duplicates re-shifted into the next window.
@@ -67,8 +72,18 @@ class WorkdayAdapter(JobAdapter):
             if pages == 0 and isinstance(payload, dict) and "total" in payload:
                 self.run_diagnostics.total_reported_by_source = page_total
             rows = _jobs_from_payload(payload)
+            # CXS can omit the global count on offset pages by returning
+            # total=0 alongside nonempty jobPostings (observed WFP/WEF).
+            # Such a zero cannot describe the nonempty population. Keep
+            # the first-page count and every later positive count; genuine
+            # positive-count drift still makes reconciliation incomplete.
+            count_omitted = pages > 0 and page_total == 0 and bool(rows)
+            if isinstance(payload, dict) and "total" in payload and not count_omitted:
+                observed_totals.add(page_total)
+                expected_total = max(observed_totals)
             if not rows:
                 pages += 1
+                structural_terminal = True
                 break
             new_in_page = 0
             for item in rows:
@@ -102,9 +117,14 @@ class WorkdayAdapter(JobAdapter):
             if expected_total is not None and offset >= expected_total:
                 break
             if expected_total is None and len(rows) < page_size:
+                structural_terminal = True
                 break
         self.run_diagnostics.pages_fetched = pages
-        self.run_diagnostics.pagination_complete = True
+        self.run_diagnostics.pagination_complete = (
+            len(observed_totals) == 1 and len(jobs) == expected_total
+            if expected_total is not None
+            else structural_terminal and bool(jobs)
+        )
         if not jobs and self.run_diagnostics.total_reported_by_source == 0:
             self.run_diagnostics.health_status = "ok_empty"
             self.run_diagnostics.empty_reason = "verified_total_zero"
@@ -154,7 +174,7 @@ class WorkdayAdapter(JobAdapter):
         info = payload.get("jobPostingInfo") or payload
         external_id = info.get("jobReqId") or info.get("jobPostingId") or info.get("id")
         apply_url = info.get("externalUrl") or self._public_job_url(str(info.get("jobPostingId") or external_id))
-        return build_job(
+        job = build_job(
             self.source,
             title=info.get("title"),
             external_id=external_id,
@@ -162,13 +182,14 @@ class WorkdayAdapter(JobAdapter):
             department=info.get("jobFamily") or info.get("department"),
             employment_type=info.get("timeType"),
             posted_at=info.get("startDate") or info.get("postedOn"),
-            closes_at=info.get("endDate"),
+            closes_at=None if self.source.id in PUBLIC_DEADLINE_SOURCES else info.get("endDate"),
             apply_url=str(apply_url),
             source_url=str(apply_url),
             description=info.get("jobDescription") or info.get("description"),
             status="open" if info.get("posted", True) else "closed",
             raw=payload,
         )
+        return apply_paho_public_fields(apply_public_date_precision(apply_public_deadline(job, info), info), info)
 
     def _jobs_url(self) -> str:
         if self.source.extra.get("jobs_url"):

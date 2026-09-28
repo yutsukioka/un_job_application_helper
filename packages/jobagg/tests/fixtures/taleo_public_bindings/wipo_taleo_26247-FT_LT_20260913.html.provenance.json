@@ -1,0 +1,8 @@
+{
+  "capture_metadata_path": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/evidence/taleo_bound_timezones/wipo_taleo/http/00002.json",
+  "capture_metadata_sha256": "fde26bb971c4d8019f8667f26c8966e941f0f2a2d482dba043915b46fd9e5e74",
+  "body_sha256": "61d2bc40a7e8873dcfb323eb39309f442f82608aab87e71db9b5062145b1f326",
+  "original_url": "https://wipo.taleo.net/careersection/wp_2/jobdetail.ftl?job=26247-FT_LT&tz=GMT%2B02%3A00&tzname=Europe%2FZurich",
+  "original_started_at": "2026-09-13T13:39:07.720855+00:00",
+  "original_finished_at": "2026-09-13T13:39:16.461528+00:00"
+}

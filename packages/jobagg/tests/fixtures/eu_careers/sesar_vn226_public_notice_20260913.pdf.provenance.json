@@ -1,0 +1,13 @@
+{
+  "url": "https://www.sesarju.eu/sites/default/files/documents/jobs/VN226%20-%20Budget%20Officer%20(AD6)%20-%20external%20-%20final%20publication%20-%20ares.pdf",
+  "content_sha256": "a62ac8cb3fd7fe7d4f04a633df93c91fd1b3bc52b35b1211b9f431fb76d164de",
+  "original_fetched_at": "2026-09-13T13:18:55.413942+00:00",
+  "retrieval_validation": {
+    "run_id": "complete_fetch_20260913",
+    "validated_at": "2026-09-13T13:18:55.413942+00:00",
+    "method": "GET_200",
+    "request_metadata": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/evidence/attachments/http/1789305532714196000-74e7f0311d95.json",
+    "content_sha256": "a62ac8cb3fd7fe7d4f04a633df93c91fd1b3bc52b35b1211b9f431fb76d164de"
+  },
+  "page_count": 7
+}

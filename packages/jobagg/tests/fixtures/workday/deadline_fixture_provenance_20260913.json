@@ -1,0 +1,85 @@
+{
+  "scope": "Unmodified public Workday JSON responses captured on September13; no browser cookies or request headers included.",
+  "fixtures": [
+    {
+      "source_id": "wfp_workday",
+      "external_id": "JR121484",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wfp_workday_JR121484_20260913.json",
+      "fixture_sha256": "7905e0583386b1c64f85efdbe2238f229d09c45b0ab1bab7d79d71f7af07c3ae",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wfp_workday/full-001/http/00007.json",
+      "capture_sha256": "25995ec781b4399aa557ad0fa61d95ea4830d63bad253d23753138bdff352837",
+      "original_observed_at": "2026-09-13T11:26:51.099573+00:00",
+      "body_sha256": "7905e0583386b1c64f85efdbe2238f229d09c45b0ab1bab7d79d71f7af07c3ae"
+    },
+    {
+      "source_id": "wfp_workday",
+      "external_id": "JR126646",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wfp_workday_JR126646_20260913.json",
+      "fixture_sha256": "97aa2091d535fe9e3ca2f754c074f0431eaa52f2705a416703e758eb52465bc6",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wfp_workday/full-001/http/00031.json",
+      "capture_sha256": "7e19021668ab51a706919419c456247a21040a0b96bc8d0c01598eaab95e98e9",
+      "original_observed_at": "2026-09-13T11:28:09.494732+00:00",
+      "body_sha256": "97aa2091d535fe9e3ca2f754c074f0431eaa52f2705a416703e758eb52465bc6"
+    },
+    {
+      "source_id": "wfp_workday",
+      "external_id": "JR126619",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wfp_workday_JR126619_20260913.json",
+      "fixture_sha256": "6279401f46581b4afe9ae045b852a8745151cf9db3759b105a0dd649aea3aead",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wfp_workday/full-001/http/00042.json",
+      "capture_sha256": "3a859f74dbe0b460cfb534887729ce7a284c6b13124e4860fa0370b921c71db3",
+      "original_observed_at": "2026-09-13T11:28:45.049342+00:00",
+      "body_sha256": "6279401f46581b4afe9ae045b852a8745151cf9db3759b105a0dd649aea3aead"
+    },
+    {
+      "source_id": "wfp_workday",
+      "external_id": "JR126262",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wfp_workday_JR126262_20260913.json",
+      "fixture_sha256": "c42e1a16ef403f26820f17ee0c950d439bc17d88da67826712ba5f5f46e01e81",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wfp_workday/full-001/http/00100.json",
+      "capture_sha256": "0e63251cc0f5d0df4a22bfa42dc8557f11added8d20e5dbc13b079b61bd54f27",
+      "original_observed_at": "2026-09-13T11:31:59.287140+00:00",
+      "body_sha256": "c42e1a16ef403f26820f17ee0c950d439bc17d88da67826712ba5f5f46e01e81"
+    },
+    {
+      "source_id": "wfp_workday",
+      "external_id": "JR123148",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wfp_workday_JR123148_20260913.json",
+      "fixture_sha256": "35339c96da0733fe12dfb98ad7e2eabf79a900f1fdd27e3960d9c112535fabc3",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wfp_workday/full-001/http/00108.json",
+      "capture_sha256": "4a380d055f4409630fb49f58515bc526e034c90f2a35eed434bb239f4f7d9e27",
+      "original_observed_at": "2026-09-13T11:32:25.331850+00:00",
+      "body_sha256": "35339c96da0733fe12dfb98ad7e2eabf79a900f1fdd27e3960d9c112535fabc3"
+    },
+    {
+      "source_id": "wfp_workday",
+      "external_id": "JR109486",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wfp_workday_JR109486_20260913.json",
+      "fixture_sha256": "586f0e50761271bd20c6b01c17d33dc28aecdfc6ac89e6be30cdc64e7db02f4c",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wfp_workday/full-001/http/00111.json",
+      "capture_sha256": "dd3f1f98ab95d2c5f13263c591c30c0b53d4aaf52062b6b43072db47966f217c",
+      "original_observed_at": "2026-09-13T11:32:35.232162+00:00",
+      "body_sha256": "586f0e50761271bd20c6b01c17d33dc28aecdfc6ac89e6be30cdc64e7db02f4c"
+    },
+    {
+      "source_id": "unhcr_workday",
+      "external_id": "JR2668710",
+      "fixture": "packages/jobagg/tests/fixtures/workday/unhcr_workday_JR2668710_20260913.json",
+      "fixture_sha256": "307b86e53449925a452f8dc8b2842d857f7bc8f4accddd15fa70391c42e40faf",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/unhcr_workday/full-001/http/00002.json",
+      "capture_sha256": "cd5f19578933c6647f8bfdac2e90dfdc164dae7d2c9f0085742d95eab7c417fc",
+      "original_observed_at": "2026-09-13T11:14:40.763881+00:00",
+      "body_sha256": "307b86e53449925a452f8dc8b2842d857f7bc8f4accddd15fa70391c42e40faf"
+    },
+    {
+      "source_id": "wto_workday",
+      "external_id": "JR103985",
+      "fixture": "packages/jobagg/tests/fixtures/workday/wto_workday_JR103985_20260913.json",
+      "fixture_sha256": "eb9eb7038938497f840a1aaf47fdf056c1f8f94bd2cd49af9361b254129d8070",
+      "capture": "/Users/yutsukioka2/git/un_job_application_helper/private/jobagg/complete_fetch_20260913/sources/wto_workday/full-001/http/00002.json",
+      "capture_sha256": "96f3d2a62bf9a75a1f96efed96ace16d6d53f21e39068340dc9cd40f2fa758bf",
+      "original_observed_at": "2026-09-13T11:31:57.194473+00:00",
+      "body_sha256": "eb9eb7038938497f840a1aaf47fdf056c1f8f94bd2cd49af9361b254129d8070"
+    }
+  ]
+}

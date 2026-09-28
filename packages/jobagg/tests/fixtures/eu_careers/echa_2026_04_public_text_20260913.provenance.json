@@ -1,0 +1,15 @@
+{
+  "source": "Official ECHA eight-page public Scientific Officer PDF, reference ECHA/TA/2026/04",
+  "public_entrypoint": "https://jobs.echa.europa.eu/psp/pshrrcr/EMPLOYEE/HRMS/c/HRS_HRAM.HRS_APP_SCHJOB.GBL?FOCUS=Applicant",
+  "content_sha256": "848f959fcb00cecb01447f60d4fce2a6f03c22dafb1edd1dfdf157df1713822f",
+  "text_sha256": "2325cd8a6afcd55cf35917945a8d31c35aaa1f3d44bd332e6a094df711e25b3f",
+  "page_count": 8,
+  "capture_proposal_sha256": "f10fc4aad3d5f7808278afa9ca54a64ea41dfb7d14e17654831b8d3e3bc16f36",
+  "source_times": {
+    "sha256": "beb1f1bd6210cfdc5d564bb93f3e17300197cc361fb715612323bc4f11b0fd9e",
+    "body_sha256": "3f05b44ce5eeeaceee2c73db9f2dc2d6ca1ff7728204fef6190947c8be2036c0",
+    "url": "https://jobs.echa.europa.eu/psc/pshrrcr/EMPLOYEE/HRMS/c/HRS_HRAM.HRS_APP_SCHJOB.GBL",
+    "original_started_at": "2026-09-13T14:31:12.329804+00:00",
+    "original_finished_at": "2026-09-13T14:31:21.562738+00:00"
+  }
+}

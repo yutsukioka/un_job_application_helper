@@ -599,6 +599,8 @@ PRIVATE_ROUTE_CONTRACT = {
 }
 
 PUBLIC_ROUTE_CONTRACT = {
+    ("GET", "/api/listing-inventory"),
+    ("GET", "/api/job-attachment"),
     ("GET", "/api/health"),
     ("POST", "/api/search"),
     ("GET", "/api/job-detail"),
@@ -1131,3 +1133,34 @@ def test_private_access_environment_does_not_use_process_environment_snapshot() 
 
     assert config.private_access.mode.value == "token"
     assert os.environ.get("ATLAS_PRIVATE_API_TOKEN") != VALID_TOKEN
+
+
+def test_publication_gate_preserves_private_admission(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    marker = settings.db_path.parent / ".jobagg-publication-state.json"
+    marker.write_text('{"state":"publishing","generation_id":"merge-test"}')
+    remote = _client(tmp_path, peer="192.0.2.44")
+    local = _client(tmp_path)
+
+    # Private authority is checked before database publication availability.
+    assert remote.post("/api/saved-searches/example/run").status_code == 403
+    assert local.post("/api/saved-searches/example/run").status_code == 503
+    # Unrelated private state remains usable during job publication.
+    assert local.get("/api/tracker").status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/api/listing-inventory", "/api/job-attachment"])
+def test_new_public_job_routes_obey_publication_gate(tmp_path: Path, path: str) -> None:
+    settings = _settings(tmp_path)
+    marker = settings.db_path.parent / ".jobagg-publication-state.json"
+    marker.write_text('{"state":"publishing","generation_id":"merge-test"}')
+    response = _client(tmp_path, peer="192.0.2.44").get(path)
+    assert response.status_code == 503
+    assert response.json()["publication_status"] == "updating"
+
+
+def test_all_public_routes_have_publication_gate_coverage():
+    from job_api.publication_gate import database_read
+    for _, path in PUBLIC_ROUTE_CONTRACT:
+        assert database_read({"path": path})
+        assert database_read({"path": "/mounted" + path, "root_path": "/mounted"})

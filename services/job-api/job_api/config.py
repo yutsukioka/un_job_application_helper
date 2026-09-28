@@ -17,6 +17,7 @@ class ApiSettings:
     db_path: Path
     saved_searches_path: Path
     tracker_path: Path
+    worker_db_path: Path | None = None
 
 
 def load_settings() -> ApiSettings:
@@ -32,4 +33,5 @@ def load_settings() -> ApiSettings:
         tracker_path=Path(
             os.environ.get("JOB_API_TRACKER", private_jobagg / "application_tracker.json")
         ),
+        worker_db_path=Path(os.environ["JOB_API_WORKER_DB"]) if os.environ.get("JOB_API_WORKER_DB") else None,
     )

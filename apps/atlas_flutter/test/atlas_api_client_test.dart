@@ -91,6 +91,14 @@ void main() {
             'status': 'open',
             'apply_url': 'https://example.org/apply',
             'source_url': 'https://example.org/source',
+            'apply_url_trust': {
+              'origin_host': 'example.org',
+              'matches_source_org': false,
+            },
+            'source_url_trust': {
+              'origin_host': 'careers.example.org',
+              'matches_source_org': true,
+            },
             'needs_review': true,
             'score': 86,
             'score_reasons': ['Term in title: cash based assistance'],
@@ -132,6 +140,34 @@ void main() {
       expect(job.matchSummary, contains('Grade P-3 matched'));
       expect(job.applyURL?.toString(), 'https://example.org/apply');
       expect(job.sourceURL?.toString(), 'https://example.org/source');
+      expect(job.applyURLTrust?.originHost, 'example.org');
+      expect(job.applyURLTrust?.matchesSourceOrg, isFalse);
+      expect(job.sourceURLTrust?.originHost, 'careers.example.org');
+      expect(job.sourceURLTrust?.matchesSourceOrg, isTrue);
+    });
+
+    test('decodes detail URL trust annotations', () {
+      final detail = AtlasJobDetail.fromJson({
+        'job_key': 'unicef_pageup:593420',
+        'title': 'Emergency Specialist, P-3',
+        'status': 'open',
+        'apply_url': 'https://apply.vendor.example/jobs/593420',
+        'source_url': 'https://careers.unicef.org/jobs/593420',
+        'apply_url_trust': {
+          'origin_host': 'apply.vendor.example',
+          'matches_source_org': false,
+        },
+        'source_url_trust': {
+          'origin_host': 'careers.unicef.org',
+          'matches_source_org': true,
+        },
+        'display_sections': <Object?>[],
+      });
+
+      expect(detail.applyURLTrust?.originHost, 'apply.vendor.example');
+      expect(detail.applyURLTrust?.matchesSourceOrg, isFalse);
+      expect(detail.sourceURLTrust?.originHost, 'careers.unicef.org');
+      expect(detail.sourceURLTrust?.matchesSourceOrg, isTrue);
     });
   });
 

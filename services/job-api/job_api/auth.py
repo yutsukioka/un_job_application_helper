@@ -10,8 +10,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-TOKEN_ENVIRONMENT = "ATLAS_PRIVATE_API_TOKEN"
-TOKEN_FILE_ENVIRONMENT = "ATLAS_PRIVATE_API_TOKEN_FILE"
+# Public configuration/format label, not a credential.
+TOKEN_ENVIRONMENT = "ATLAS_PRIVATE_API_TOKEN"  # nosec B105 # noqa: S105
+# Public configuration/format label, not a credential.
+TOKEN_FILE_ENVIRONMENT = "ATLAS_PRIVATE_API_TOKEN_FILE"  # nosec B105 # noqa: S105
 MINIMUM_TOKEN_BYTES = 32
 MAXIMUM_TOKEN_FILE_BYTES = 4096
 
