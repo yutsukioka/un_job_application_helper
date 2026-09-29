@@ -74,21 +74,20 @@ or enable another deployment's retention policy.
 
 ### Worker implementation binding
 
-The worker fingerprint excludes only the package-relative maintenance modules
-`storage_retention.py` and `storage_cold_archive.py`, which the dispatcher runs
-independently. Fetching modules, adapters, policy code and newly added Python
-modules remain bound, including nested files with those same basenames.
+The worker binds every Python file in the `jobagg` package, including storage
+maintenance modules, plus the registry and robots policy. Any change during a
+fetch tick refuses acceptance; a changed fingerprint at the next startup refuses
+the existing workspace. This protects against accidental and unreviewed changes.
 
-Installing this revision changes `remediation_worker.py` itself. Existing worker
-workspaces therefore require a separately reviewed binding migration before
-fetching can resume. Pause dispatch, acquire the shared owner lock, verify a
-complete publication boundary and compare the exact old/new implementation and
-configuration manifests. Preserve the original marker and validation evidence,
-update only its reviewed implementation hash, then verify a read-only worker
-preview before resuming. Preserve databases, captures, attempts, quotas, task
-holds and concurrency history; no database copy is required. Unrelated code or
-configuration drift must still be rejected. Do not automatically accept a new
-fingerprint or clear the workspace marker.
+A legitimate deployment needs a reviewed update to the workspace marker. At a
+clean publication boundary, pause dispatch and acquire the shared owner lock.
+Compare the exact old and new file manifests, verify the registry and robots
+policy, preserve the original marker, and update its implementation hash only
+for the reviewed code. Confirm a read-only worker preview before resuming. Keep
+the database, captures, attempts, task holds, quotas and concurrency history.
+This marker update is an explicit deployment step; the worker must never adopt a
+new hash automatically just because code changed. Without that step, even an
+intentional maintenance change correctly pauses fetching.
 
 ### Capacity limits
 

@@ -187,15 +187,7 @@ def implementation_hash():
     root = Path(__file__).resolve().parent
     return hashlib.sha256(
         dump(
-            {
-                str(path.relative_to(root)): sha(path)
-                for path in sorted(root.rglob("*.py"))
-                # The dispatcher runs these maintenance tools independently after
-                # publication. They do not participate in fetching or acceptance.
-                # Use exact relative paths so new/nested worker code stays bound.
-                if path.relative_to(root).as_posix()
-                not in {"storage_retention.py", "storage_cold_archive.py"}
-            }
+            {str(path.relative_to(root)): sha(path) for path in sorted(root.rglob("*.py"))}
         ).encode()
     ).hexdigest()
 
