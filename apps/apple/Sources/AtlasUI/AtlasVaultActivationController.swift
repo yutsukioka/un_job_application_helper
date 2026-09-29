@@ -279,7 +279,7 @@ public extension AtlasVaultActivationEnvironment {
                         }
                         return try AtlasVaultActivationScope(vaultID: vaultID,
                             loadEncryptedStore: { session in
-                                if FileManager.default.fileExists(atPath: legacyURL.path) {
+                                if try perVaultServices.pathLocator.localStoreExists(vaultID: vaultID) {
                                     guard let binding = try loader(vaultID) else { throw AtlasVaultRuntimeBindingError.unavailable }
                                     let epoch = try binding.open(directory: directory, session: session)
                                     let legacy = try perVaultServices.localStoreIO.read(from: legacyURL)
@@ -295,11 +295,9 @@ public extension AtlasVaultActivationEnvironment {
                                 return try epoch.commitRuntimeMutations(mutations, signingKey: binding.signingKey())
                             }, liveState: read)
                     }
-                    let epochDirectory = try perVaultServices.pathLocator.localStoreURL(vaultID: vaultID)
-                        .deletingLastPathComponent().appendingPathComponent("epoch", isDirectory: true)
                     let requirePreEnrollment: @Sendable () throws -> Void = {
                         guard try loader(vaultID) == nil,
-                              !FileManager.default.fileExists(atPath: epochDirectory.path) else {
+                              !(try perVaultServices.pathLocator.epochDirectoryExists(vaultID: vaultID)) else {
                             throw AtlasVaultRuntimeBindingError.unavailable
                         }
                     }
