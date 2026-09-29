@@ -674,38 +674,41 @@ void main() {
       },
     );
 
-    test('Windows assembly uses encrypted runtime without a plaintext cache', () {
-      final source = File(
-        'lib/features/app_shell/atlas_app.dart',
-      ).readAsStringSync();
-      final windowsStart = source.indexOf('if (Platform.isWindows) {');
-      final fallbackStart = source.indexOf(
-        'if (!Platform.isAndroid)',
-        windowsStart < 0 ? 0 : windowsStart,
-      );
+    test(
+      'Windows assembly uses encrypted runtime without a plaintext cache',
+      () {
+        final source = File(
+          'lib/features/app_shell/atlas_app.dart',
+        ).readAsStringSync();
+        final windowsStart = source.indexOf('if (Platform.isWindows) {');
+        final fallbackStart = source.indexOf(
+          'if (!Platform.isAndroid)',
+          windowsStart < 0 ? 0 : windowsStart,
+        );
 
-      expect(windowsStart, isNonNegative);
-      expect(fallbackStart, greaterThan(windowsStart));
-      final windowsAssembly = source.substring(windowsStart, fallbackStart);
-      expect(
-        windowsAssembly,
-        contains('localCacheStoreFactory: _noPersistentPlaintextCache'),
-      );
-      expect(windowsAssembly, contains('requireEncryptedPrivateState: true'));
-      expect(windowsAssembly, contains('privateStatePersistence: runtime'));
-      expect(
-        source,
-        contains(
-          'privateStateProtectionActive: () => _privateStateProtectionActive',
-        ),
-      );
-      expect(source, contains('retainedLegacyPrivateStateAdmission: () =>'));
-      expect(source, contains('file: cacheLocation.legacyFile'));
-      expect(
-        windowsAssembly,
-        isNot(contains('AtlasAndroidSelectedVaultStore')),
-      );
-    });
+        expect(windowsStart, isNonNegative);
+        expect(fallbackStart, greaterThan(windowsStart));
+        final windowsAssembly = source.substring(windowsStart, fallbackStart);
+        expect(
+          windowsAssembly,
+          contains('localCacheStoreFactory: _noPersistentPlaintextCache'),
+        );
+        expect(windowsAssembly, contains('requireEncryptedPrivateState: true'));
+        expect(windowsAssembly, contains('privateStatePersistence: runtime'));
+        expect(
+          source,
+          contains(
+            'privateStateProtectionActive: () => _privateStateProtectionActive',
+          ),
+        );
+        expect(source, contains('retainedLegacyPrivateStateAdmission: () =>'));
+        expect(source, contains('file: cacheLocation.legacyFile'));
+        expect(
+          windowsAssembly,
+          isNot(contains('AtlasAndroidSelectedVaultStore')),
+        );
+      },
+    );
   });
 }
 
