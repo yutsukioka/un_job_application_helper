@@ -234,15 +234,20 @@ def test_flutter_production_injects_protected_owner_factory(
         DART + "features/app_shell/atlas_app.dart",
         "Future<sync.AtlasVaultRuntimeSession> _openProductionEpochSession",
     )
+    _ordered(opener, "_productionEpochBinding(keyStore)", ".open(vaultID)")
+    binding = _function(
+        DART + "features/app_shell/atlas_app.dart",
+        "Future<sync.AtlasVaultRuntimeBinding> _productionEpochBinding",
+    )
     _ordered(
-        opener,
+        binding,
         "getApplicationSupportDirectory()",
         "sync.AtlasVaultRuntimeBinding(",
         "loadKey: keyStore.loadVaultKey",
         "createKey: keyStore.createVaultKey",
-        "return binding.open(vaultID)",
     )
     _no_calls(opener, "initialize", "provision", "createCommitment")
+    _no_calls(binding, "initialize", "provision", "createCommitment")
 
 
 def test_dart_binding_reopens_authenticated_context_without_enrollment() -> None:
@@ -567,6 +572,15 @@ def test_swift_record_projection_and_outbox_share_fenced_publication() -> None:
     )
     _ordered(
         binding,
+        "authenticatedBindingData(",
+        "client.add(.init(service: Self.storageKeyService,",
+    )
+    binding_data = _function(
+        SWIFT + "AtlasVaultRuntimeBinding.swift",
+        "private func authenticatedBindingData",
+    )
+    _ordered(
+        binding_data,
         "epoch.active(s)",
         "let history = try epoch.history(s).load()",
         "if try EpochCatchUp.records(history).isEmpty",
@@ -574,7 +588,6 @@ def test_swift_record_projection_and_outbox_share_fenced_publication() -> None:
         "AtlasVaultAuthenticatedStateView.registryRoot(authenticatedHistoryRegistry)",
         '== epoch.rows(history["views"]).last?["registry_root"]',
         'value["history_registry"] = authenticatedHistoryRegistry',
-        "client.add(.init(service: Self.storageKeyService,",
     )
     _ordered(
         _function(path, "public func runtimePublication"),
