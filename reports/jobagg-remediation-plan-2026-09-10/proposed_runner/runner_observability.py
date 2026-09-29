@@ -235,6 +235,13 @@ def update_health(directory, value):
             if value.get("finished_at"):
                 health["last_attempt_finished_at"] = value["finished_at"]
             health["last_reasons"] = result.get("reasons", [])[:5]
+            retention = result.get("storage_retention")
+            if isinstance(retention, dict):
+                health["last_retention_status"] = retention.get("status")
+                health["last_retention_reason"] = retention.get("reason")
+                health["last_retention_event_at"] = value.get("finished_at")
+                if retention.get("status") == "complete":
+                    health["last_retention_complete_at"] = value.get("finished_at")
         if (
             result.get("worker_exit_code") == 0
             and completed_at

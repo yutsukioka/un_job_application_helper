@@ -59,6 +59,16 @@ def snapshot_helper(config):
     return load_file_module(path, "jobagg_dispatcher_publication_snapshot")
 
 
+def retention_helper(config):
+    package = config["worker_cwd"] / "jobagg"
+    path = package / "storage_retention.py"
+    require(
+        path.is_file() and path.resolve().is_relative_to(package.resolve()),
+        "Reviewed storage retention helper missing or outside selected package",
+    )
+    return load_file_module(path, "jobagg_dispatcher_storage_retention")
+
+
 def concurrency_helper(config):
     package = config["worker_cwd"] / "jobagg"
     path = package / "remediation_concurrency.py"
@@ -581,6 +591,33 @@ def load_config(path, *, record_storage_health=False):
         or bool(publication) and config["sealed_publication_snapshots"],
         "Publication projection requires sealed snapshots and a publisher",
     )
+    retention = config.get("storage_retention", {})
+    require(
+        isinstance(retention, dict)
+        and set(retention) <= {"enabled", "max_seconds", "max_groups", "keep_completed"},
+        "Invalid storage_retention configuration",
+    )
+    retention = {
+        "enabled": retention.get("enabled", False),
+        "max_seconds": retention.get("max_seconds", 20),
+        "max_groups": retention.get("max_groups", 2),
+        "keep_completed": retention.get("keep_completed", 2),
+    }
+    require(type(retention["enabled"]) is bool, "Invalid storage_retention.enabled")
+    require(
+        type(retention["max_seconds"]) in (int, float)
+        and 0 < retention["max_seconds"] <= 20,
+        "Invalid storage_retention.max_seconds",
+    )
+    require(
+        type(retention["max_groups"]) is int and 1 <= retention["max_groups"] <= 2,
+        "Invalid storage_retention.max_groups",
+    )
+    require(
+        type(retention["keep_completed"]) is int and retention["keep_completed"] >= 2,
+        "Invalid storage_retention.keep_completed",
+    )
+    config["storage_retention"] = retention
     guard = config.get("storage_guard")
     if guard:
         require(isinstance(guard, dict), "Invalid storage_guard")
@@ -941,6 +978,42 @@ def tick(config, expected, recover_publication=False):
                 ),
             }
         OBSERVABILITY.record_failure(config, condition, result)
+        retention = config.get("storage_retention", {})
+        if retention.get("enabled"):
+            # Run only after the worker/publisher is terminal. The shared owner
+            # stays held until this bounded maintenance attempt finishes.
+            try:
+                if config.get("maintenance_file") and config["maintenance_file"].exists():
+                    result["storage_retention"] = {
+                        "status": "skipped", "reason": "maintenance_paused",
+                    }
+                elif unresolved_publications(config["state_dir"] / "runs"):
+                    result["storage_retention"] = {
+                        "status": "skipped", "reason": "unresolved_publication",
+                    }
+                else:
+                    deadline = time.monotonic() + retention["max_seconds"]
+                    summary = retention_helper(config).prune_completed(
+                        config["state_dir"].parent,
+                        keep_completed=retention["keep_completed"],
+                        max_groups=retention["max_groups"],
+                        execute=True,
+                        owner_fd=descriptor,
+                        shared_lock=config["shared_lock_path"],
+                        deadline_at=deadline,
+                    )
+                    result["storage_retention"] = {
+                        "status": "deferred" if summary["deadline_deferred"] else "complete",
+                        "summary": summary,
+                    }
+            except TimeoutError as exc:
+                result["storage_retention"] = {
+                    "status": "deferred", "reason": str(exc),
+                }
+            except Exception as exc:
+                result["storage_retention"] = {
+                    "status": "error", "reason": type(exc).__name__ + ": " + str(exc),
+                }
         return result
     finally:
         os.close(descriptor)
@@ -1884,6 +1957,7 @@ def main(argv=None):
                 "sealed_publication_snapshots": config["sealed_publication_snapshots"],
                 "publication_snapshot_mode": config["publication_snapshot_mode"],
                 "concurrency_policy": config.get("concurrency"),
+                "storage_retention": config["storage_retention"],
                 "writes_performed": False,
             }
             print(json.dumps(result, indent=2))

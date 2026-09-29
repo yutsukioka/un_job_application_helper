@@ -170,6 +170,7 @@ def candidates(state_dir, output_dir, *, retain_days=7, now=None, max_files=100)
     if not isinstance(retain_days, int) or retain_days < 1:
         raise ValueError("retain_days_must_be_positive")
     from jobagg.pipelines.publication_exports import _fingerprint
+    from jobagg import storage_cold_archive, storage_retention
 
     state_dir, output_dir = Path(state_dir).absolute(), Path(output_dir).absolute()
     if state_dir.resolve() != state_dir or output_dir.resolve() != output_dir:
@@ -192,11 +193,15 @@ def candidates(state_dir, output_dir, *, retain_days=7, now=None, max_files=100)
         completed = datetime.fromisoformat(result["completed_at"].replace("Z", "+00:00"))
         if completed.tzinfo is None or completed.timestamp() > cutoff:
             continue
+        # The dispatcher may have retired these duplicate copies already.
+        # Validate its complete receipt before skipping this generation.
+        if storage_retention.verified_retired_generation(root):
+            continue
         plan_path = _direct(root / "plan.json")
         if (
             result.get("generation_id") != root.name
             or result.get("plan_path") != str(plan_path)
-            or hashlib.sha256(plan_path.read_bytes()).hexdigest() != result.get("plan_sha256")
+            or not storage_cold_archive.plan_available(root, result.get("plan_sha256"))
         ):
             raise ValueError("retention_generation_binding_changed")
         journal_path = root / "export-checkpoints.json"

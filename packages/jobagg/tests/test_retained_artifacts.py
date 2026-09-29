@@ -1,5 +1,6 @@
 """Retention preserves exact rollback bytes and cannot touch active generations."""
 
+import fcntl
 import gzip
 import hashlib
 import json
@@ -8,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from jobagg import retained_artifacts as retention
+from jobagg import storage_cold_archive, storage_retention
+from test_storage_retention import make_populated_root, write_json
 from jobagg.pipelines import publication_exports as exports
 import test_publication_exports as fixtures
 
@@ -181,3 +184,86 @@ def test_interruption_before_unlink_keeps_original_and_is_resumable(export_case,
     retention.archive(path, expected)
     with retention.open_artifact(path) as stream:
         assert stream.read() == original
+
+
+def _compatible_publication_store(tmp_path):
+    """Complete generation evidence consumable by both retention scanners."""
+    root, _, generations = make_populated_root(tmp_path)
+    for generation in generations:
+        result_path = generation / "result.json"
+        result = json.loads(result_path.read_text())
+        write_json(result_path, {**result, "plan_path": str(generation / "plan.json")})
+        receipts_path = generation / "exports.json"
+        receipts = json.loads(receipts_path.read_text())
+        journal = json.loads((generation / "export-checkpoints.json").read_text())
+        for target, receipt in receipts.items():
+            receipt["prepared"] = journal["entries"][target]["prepared"]
+        write_json(receipts_path, receipts)
+    return root, generations
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_existing_scanner_accepts_verified_dispatcher_retirement(tmp_path, execute):
+    root, generations = _compatible_publication_store(tmp_path)
+    lock = root / "remediation" / "manual-fetch-owner.lock"
+    with lock.open("a+") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        result = storage_retention.prune_completed(
+            root, max_groups=2, execute=True,
+            owner_fd=owner.fileno(), shared_lock=lock,
+        )
+    assert result["removed_groups"] == 2
+    assert not (generations[0] / "exports-v2" / "all_jobs_current.json").exists()
+    args = (root / "deterministic-live-publication", root / "output", lock)
+    scanned = retention.retain(*args, retain_days=7, execute=execute)
+    assert len(scanned["candidates"]) == 2
+    assert all(generations[1].name in item["path"] for item in scanned["candidates"])
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_existing_scanner_accepts_verified_cold_plan(tmp_path, execute):
+    root, generations = _compatible_publication_store(tmp_path)
+    lock = root / "remediation" / "manual-fetch-owner.lock"
+    state = root / "deterministic-live-publication"
+    archived = storage_cold_archive.archive_completed(
+        state, root / "output", lock,
+        dispatcher_state_dir=root / "deterministic-dispatcher-proposal",
+        execute=True,
+    )
+    assert len(archived["archived"]) == 1
+    assert not (generations[0] / "plan.json").exists()
+    scanned = retention.retain(state, root / "output", lock, retain_days=7, execute=execute)
+    assert len(scanned["candidates"]) == 4
+
+
+def test_existing_scanner_rejects_changed_retirement_receipt(tmp_path):
+    root, generations = _compatible_publication_store(tmp_path)
+    lock = root / "remediation" / "manual-fetch-owner.lock"
+    with lock.open("a+") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        storage_retention.prune_completed(
+            root, max_groups=2, execute=True,
+            owner_fd=owner.fileno(), shared_lock=lock,
+        )
+    receipt = generations[0] / storage_retention.RECEIPT
+    value = json.loads(receipt.read_text())
+    value["files"][0]["sha256"] = "0" * 64
+    write_json(receipt, value)
+    with pytest.raises(ValueError, match="Storage retention receipt differs"):
+        retention.candidates(root / "deterministic-live-publication", root / "output")
+
+
+def test_existing_scanner_rejects_corrupt_cold_plan(tmp_path):
+    root, generations = _compatible_publication_store(tmp_path)
+    state = root / "deterministic-live-publication"
+    lock = root / "remediation" / "manual-fetch-owner.lock"
+    storage_cold_archive.archive_completed(
+        state, root / "output", lock,
+        dispatcher_state_dir=root / "deterministic-dispatcher-proposal",
+        execute=True,
+    )
+    manifest = json.loads((generations[0] / storage_cold_archive.MANIFEST).read_text())
+    plan_object = Path(manifest["objects"]["plan.json"]["object_path"])
+    plan_object.write_bytes(b"corrupt compressed object")
+    with pytest.raises(ValueError, match="Compressed object differs"):
+        retention.candidates(state, root / "output")
