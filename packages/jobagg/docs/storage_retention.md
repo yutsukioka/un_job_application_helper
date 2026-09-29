@@ -72,6 +72,24 @@ Change deployment configuration only at a clean publication boundary; its hash
 is bound into publication recovery. Committing this code does not install cron
 or enable another deployment's retention policy.
 
+### Worker implementation binding
+
+The worker fingerprint excludes only the package-relative maintenance modules
+`storage_retention.py` and `storage_cold_archive.py`, which the dispatcher runs
+independently. Fetching modules, adapters, policy code and newly added Python
+modules remain bound, including nested files with those same basenames.
+
+Installing this revision changes `remediation_worker.py` itself. Existing worker
+workspaces therefore require a separately reviewed binding migration before
+fetching can resume. Pause dispatch, acquire the shared owner lock, verify a
+complete publication boundary and compare the exact old/new implementation and
+configuration manifests. Preserve the original marker and validation evidence,
+update only its reviewed implementation hash, then verify a read-only worker
+preview before resuming. Preserve databases, captures, attempts, quotas, task
+holds and concurrency history; no database copy is required. Unrelated code or
+configuration drift must still be rejected. Do not automatically accept a new
+fingerprint or clear the workspace marker.
+
 ### Capacity limits
 
 New unique fetches, details, attachments, logs and publication evidence continue
@@ -147,6 +165,7 @@ deadline handling. From the repository root:
 PYTHONPATH=packages/jobagg python -m pytest \
   packages/jobagg/tests/test_storage_retention.py \
   packages/jobagg/tests/test_storage_cold_archive.py \
+  packages/jobagg/tests/test_worker_implementation_binding.py \
   reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests
 ```
 
