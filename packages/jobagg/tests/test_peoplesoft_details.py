@@ -132,3 +132,106 @@ def test_real_ifad_office_associate_retains_all_seven_sections():
     assert "Managing time, resources and information" in job.description
     assert job.description.endswith("legal status to live and work in the country of recruitment.")
     assert len(job.description) > 13000
+
+
+def direct_adapter(http):
+    a = adapter(http)
+    a.source.extra['public_job_deeplinks'] = True
+    return a
+
+
+def test_direct_public_route_uses_job_opening_id_and_posting_page():
+    from urllib.parse import urlsplit, parse_qs
+    a = direct_adapter(FakeHTTP([detail('38079')]))
+    job = a.fetch_detail_for_listing_item({'job_id':'38079'})
+    query = parse_qs(urlsplit(job.apply_url).query)
+    assert query['JobOpeningId'] == ['38079']
+    assert query['Page'] == ['HRS_APP_JBPST_FL']
+    assert job.raw['detail_fetch_method'] == 'public_job_deeplink_get'
+    assert job.raw['identity_verification'] == 'explicit_detail_job_id'
+
+
+def test_direct_roster_requires_fresh_unique_listing_identity():
+    response = detail('2095').replace("<span class='ps_box-value' id='HRS_SCH_WRK2_HRS_JOB_OPENING_ID'>2095</span>", '')
+    job = direct_adapter(FakeHTTP([response,listing(('2095',))])).fetch_detail_for_listing_item({'job_id':'2095'})
+    assert job.raw['identity_verification'] == 'exact_deeplink_and_fresh_unique_listing_title'
+    with pytest.raises(ValueError, match='uniquely bound'):
+        direct_adapter(FakeHTTP([response,listing(('2096',))])).fetch_detail_for_listing_item({'job_id':'2095'})
+
+
+def test_direct_route_rejects_wrong_response_id_and_search_redirect():
+    from jobagg.adapters.peoplesoft import ifad_detail_url
+    with pytest.raises(ValueError, match='identity mismatch'):
+        direct_adapter(FakeHTTP([detail('999')])).fetch_detail_for_listing_item({'job_id':'38079'})
+    class Redirected:
+        def get(self,url):
+            return HttpResponse('https://job.ifad.org/search',200,{},detail('38079'))
+    with pytest.raises(ValueError, match='redirected'):
+        direct_adapter(Redirected()).fetch_detail_for_listing_item({'job_id':'38079'})
+    with pytest.raises(ValueError):
+        ifad_detail_url('38079&SiteId=2000')
+
+
+def test_full_document_excludes_session_form_from_saved_public_html():
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    body = _detail_page_html(detail('38079'))
+    full = "<html><input name='ICSID' value='private-session'><div id='win0divPAGECONTAINER'>" + body + '</div></html>'
+    job = direct_adapter(FakeHTTP([full])).fetch_detail_for_listing_item({'job_id':'38079'})
+    assert 'private-session' not in str(job.raw)
+    assert 'nested content' in job.description
+
+
+def test_nine_observed_public_deeplink_containers_parse_all_sections():
+    import gzip
+    import json
+    data = json.loads(gzip.decompress((Path(__file__).parent/'fixtures/ifad/public_deeplinks_20260921.json.gz').read_bytes()))
+    assert len(data) == 9
+    for row in data:
+        fresh = listing((row['id'],)).replace('Role '+row['id'],row['title'])
+        full = "<html><div id='win0divPAGECONTAINER'>" + row['public_container'] + '</div></html>'
+        job = direct_adapter(FakeHTTP([full,fresh])).fetch_detail_for_listing_item({'job_id':row['id']})
+        assert job.title == row['title']
+        assert len(job.raw['detail_sections']) == row['sections']
+        assert len(job.description) > 1000
+        assert 'ICSID' not in str(job.raw)
+
+
+@pytest.mark.parametrize("wrapper", [
+    "<HTML><BODY>{content}</BODY></HTML>",
+    "<!DoCtYpE HTML>{content}",
+    "<FORM name='win0'>{content}</FORM>",
+    "<html><div id='renamedPAGECONTAINER'>{content}</div></html>",
+    "<html><div id='win0divPAGECONTAINER'>{content}</html>",
+])
+def test_unscoped_full_roster_document_is_rejected_without_persisting_session(wrapper):
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    content = _detail_page_html(detail("2095")).replace(
+        "<span class='ps_box-value' id='HRS_SCH_WRK2_HRS_JOB_OPENING_ID'>2095</span>", "",
+    )
+    content += "<input name='ICSID' value='synthetic-private-session'>"
+    full = wrapper.format(content=content)
+    a = direct_adapter(FakeHTTP([full, listing(("2095",))]))
+    with pytest.raises(ValueError, match="page container"):
+        a.fetch_detail_for_listing_item({"job_id": "2095"})
+
+
+def test_bare_public_detail_fragment_remains_supported():
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    content = _detail_page_html(detail("38079"))
+    job = direct_adapter(FakeHTTP([content])).fetch_detail_for_listing_item({"job_id": "38079"})
+    assert job.external_id == "38079"
+    assert "nested content" in job.description
+
+
+@pytest.mark.parametrize("include_job_id", [True, False])
+def test_ifad_guest_route_still_rejects_unscoped_full_documents(include_job_id):
+    from jobagg.adapters.peoplesoft import _detail_page_html
+    content = _detail_page_html(detail("2095"))
+    if not include_job_id:
+        content = content.replace(
+            "<span class='ps_box-value' id='HRS_SCH_WRK2_HRS_JOB_OPENING_ID'>2095</span>", "",
+        )
+    full = "<html><input name='ICSID' value='synthetic-private-session'>" + content + "</html>"
+    a = adapter(FakeHTTP([listing(("2095",))], [full]))
+    with pytest.raises(ValueError, match="page container"):
+        a.fetch_detail_for_listing_item({"job_id": "2095"})

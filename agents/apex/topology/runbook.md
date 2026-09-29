@@ -20,7 +20,7 @@ both `[]`, **stop here** and use the existing single-agent linear
 pipeline. The remainder of this runbook is for ensemble mode.
 
 Ensemble v2 document generation supports Phase 8 Options 1-4 and Option 7.
-Options 5, 6, and 8 remain v1 single-agent fallback paths unless explicitly
+Options 5, 6, 8, 9, and 10 remain v1 single-agent fallback paths unless explicitly
 enabled in a later v2 expansion.
 
 ## 1. Prep stage
@@ -72,6 +72,17 @@ The four prep artifacts are now read-only for all subsequent rounds:
 The metric ledger in particular is **frozen** (see Tier E1).
 
 ## 2. Strategy fold
+
+S1/S2/S3 use the existing `apex-candidate-evidence-bank` invocation for both
+Phase 1.3 core-requirement evidence and **Phase 1.4 — Skill / Certification /
+Language Evidence Map**. Each report preserves the exact heading
+`## Skill / Certification / Language Evidence Map` and follows the
+[evidence-bank contract](../skills/apex-candidate-evidence-bank/SKILL.md).
+For this section, each writer reads full-vacancy requirements and raw applicant
+skill, credential, and language evidence, including relevant items outside
+the top 5-7 core requirements. Preserve source anchors, demonstrated capability,
+missing details, and supplied portal-label provenance. No new prep artifact,
+server, duplicate extraction, or final proficiency assessment is introduced.
 
 ### 2a. Server Topology and Ports
 
@@ -162,6 +173,9 @@ All three must be shut down before C1 launches.
   - all three `_discussion/advisor_notes_S*.md` files
 - Merges per the per-section default leads
   ([../templates/per_section_default_leads.md](../templates/per_section_default_leads.md))
+- Preserve Phase 1.4 and its source anchors, distinct relevant items, and gaps
+  from all three drafts. Deduplicate by evidence, retain unresolved differences
+  for Phase 7.5, and do not merge or vote on final proficiency ratings.
 - Writes:
   - `phase1_7_strategy_report.md` (canonical, flat path)
   - `_discussion/round2_consensus.md`
@@ -172,7 +186,12 @@ All three must be shut down before C1 launches.
 
 Run `apex-user-feedback-revision` on the canonical
 `phase1_7_strategy_report.md`. Surface gaps, mitigation strategies, and
-the "Metrics & Specifics Needed" list to the user.
+the "Metrics & Specifics Needed" list to the user. Include Phase 1.4 gaps
+needed for Option 9, such as independent tool use, language writing ability,
+credential validity, or portal-label confirmation. Apply the existing Candidate
+Assertion Ledger and integration policy to replies. Supported Option 9 entries
+may proceed on selection while affected items remain in review; the evidence
+map adds no new global approval gate.
 
 Record the Phase 7.5 invocation in `_discussion/run_manifest.json`:
 `python agents/apex/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-user-feedback-revision --server Phase7.5 --artifact private/inputs/user_feedback_updates.md`

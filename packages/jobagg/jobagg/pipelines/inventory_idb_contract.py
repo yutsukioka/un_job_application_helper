@@ -10,6 +10,9 @@ from jobagg.adapters.idb_inventory import board_url, parse_board
 
 
 def verify_idb_listing(source, jobs, capture_paths):
+    if source.extra.get("public_search_api"):
+        from jobagg.adapters.idb_api import verify
+        return verify(source, jobs, capture_paths)
     result = {
         "complete": False,
         "method": "idb_fullboard_dom_v1",

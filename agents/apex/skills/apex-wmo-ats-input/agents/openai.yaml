@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ WMO ATS Input"
+  short_description: "Inspect WMO forms and enter approved draft content"
+  default_prompt: "Use $apex-wmo-ats-input with Codex Browser to inspect my WMO vacancy and application pages, extract the three job-input sections, and map the live fields to my requested Phase 8 outputs while keeping application_context.md unchanged and leaving submission to me."

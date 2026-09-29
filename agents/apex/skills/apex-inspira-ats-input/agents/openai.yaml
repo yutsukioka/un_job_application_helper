@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Inspira ATS Input"
+  short_description: "Copy recent Inspira data, fill fields and save drafts"
+  default_prompt: "Use $apex-inspira-ats-input with Codex Browser, not Computer Use, to start my application from the most recent prior application or update my selected draft, use the approved application artifacts, preserve unselected fields and save without submitting."

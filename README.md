@@ -36,6 +36,25 @@ manifest: agents/apex/topology/server_manifest.yaml
 launcher: agents/apex/scripts/launch_v2_servers.sh
 ```
 
+Phase 8 includes [Option 9: Skill / Certification / Language and Proficiency](agents/apex/skills/apex-generate-skills-proficiency/SKILL.md),
+which prepares evidence-based High / Medium / Low entries for World Bank-style
+applications. Phase 1.4 prepares the supporting Skill / Certification / Language
+Evidence Map, and Phase 7.5 surfaces item-specific gaps before final proficiency
+assessment. See the [ApexStrategist usage guide](agents/apex/README.md#phase-8-option-9-skills-and-proficiency).
+
+[Option 10: UNOPS application fit](agents/apex/skills/apex-unops-application-fit/SKILL.md)
+prepares Position Areas, exact catalog skills and a shared fit plan for selected
+UNOPS documents. See [local setup and usage](agents/apex/README.md#unops-application-fit).
+For authorized online entry or revision, use
+[apex-unops-ats-input](agents/apex/skills/apex-unops-ats-input/SKILL.md) through
+Codex Browser; it verifies draft saves and leaves submission to the user.
+
+
+The [UNESCO skills](agents/apex/README.md#unesco-profile-and-employment-history-form)
+prepare a native Employment History Form, select Domain of Expertise entries
+from the complete captured taxonomy, and curate publications. They accept raw
+applicant evidence directly and include a reversible Codex installer.
+
 ## Job Aggregator
 
 ```bash

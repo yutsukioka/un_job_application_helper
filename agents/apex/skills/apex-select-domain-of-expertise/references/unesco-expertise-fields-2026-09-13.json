@@ -1,0 +1,80 @@
+{
+  "snapshot_date": "2026-09-13",
+  "source": {
+    "sha256": "64fc478e26e6130cf3101618fd7d11223c054356914f57db1621485d74673616",
+    "bytes": 28178383,
+    "entryCount": 496,
+    "sourceEntryIndex": 410,
+    "indexConvention": "zero-based",
+    "sourceMethod": "rcmV12CandidateProfileControllerProxy.getCandidateProfileVO",
+    "responseSha256": "e732e198a09f1a05f5b36c68f4a25b4a43c3bc556d1e3e5fc15429890329bbcb",
+    "reviewedAtUTC": "2026-09-13T10:45:01.889205+00:00"
+  },
+  "scope": "Expertise template configuration only; no applicant values. Snapshot-specific, not universal portal policy.",
+  "section": {
+    "id": "Expertise",
+    "elementTitle": "Domain of Expertise",
+    "required": false,
+    "maxEntries": 0,
+    "editable": true,
+    "sourceObject": "s16",
+    "templateSourceObject": "s69",
+    "fields": [
+      {
+        "id": "AreaExpertise1",
+        "fieldName": "VFLD1",
+        "label": "Area of Expertise",
+        "displayType": "picklist",
+        "type": "STRING_FIELD",
+        "inputLength": 4000,
+        "required": true,
+        "picklistId": "AreaExpertise",
+        "parentPicklistFieldId": null,
+        "editable": true,
+        "disabled": false,
+        "sourceObject": "s74",
+        "order": 0,
+        "childPicklistFieldIds": [
+          "AreaExpertise2"
+        ]
+      },
+      {
+        "id": "AreaExpertise2",
+        "fieldName": "VFLD2",
+        "label": "Sub area of expertise",
+        "displayType": "picklist",
+        "type": "STRING_FIELD",
+        "inputLength": 4000,
+        "required": true,
+        "picklistId": "SubArea",
+        "parentPicklistFieldId": "AreaExpertise",
+        "editable": true,
+        "disabled": false,
+        "sourceObject": "s75",
+        "order": 1,
+        "childPicklistFieldIds": []
+      },
+      {
+        "id": "YearsOfExperience1",
+        "fieldName": "VFLD3",
+        "label": "Years of Experience",
+        "displayType": "picklist",
+        "type": "STRING_FIELD",
+        "inputLength": 4000,
+        "required": true,
+        "picklistId": "YearsOfExperience",
+        "parentPicklistFieldId": null,
+        "editable": true,
+        "disabled": false,
+        "sourceObject": "s76",
+        "order": 2,
+        "childPicklistFieldIds": []
+      }
+    ]
+  },
+  "notes": [
+    "Section required=false; three fields required within a row.",
+    "maxEntries=0 does not establish a positive cap or an unlimited promise.",
+    "All three controls are picklists; inputLength=4000 is not a narrative character budget."
+  ]
+}

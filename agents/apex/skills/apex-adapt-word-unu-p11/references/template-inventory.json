@@ -1,0 +1,9 @@
+{
+  "source_sha256": "9d99f843302d1fa93a8ad435acb02fde41bc8ab628fe2dc5f49b1607875624fb",
+  "table_rows": 128,
+  "field_counts": {
+    "text": 222,
+    "dropdown": 45,
+    "checkbox": 122
+  }
+}

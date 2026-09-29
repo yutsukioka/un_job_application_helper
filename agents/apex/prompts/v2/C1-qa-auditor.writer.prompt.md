@@ -53,6 +53,15 @@ Consensus discipline (do NOT pick winners on style):
 - Merged section must pass lint, char, placeholder, and metric-lineage
   checks against `metric_ledger.md`.
 - No new claims may be introduced beyond what is in the three drafts.
+- Preserve Phase 1.4 with the exact heading
+  `## Skill / Certification / Language Evidence Map` in the canonical report.
+  Follow `agents/apex/skills/apex-candidate-evidence-bank/SKILL.md` for its
+  structure. Merge duplicate items by their cited evidence; retain distinct
+  relevant skills, credentials, languages, source anchors, and unresolved
+  details from all drafts, including items outside the top core requirements.
+  Never average or vote on proficiency: this map contains factual capability
+  evidence only. Carry unresolved factual differences into the map and
+  disagreement log for Phase 7.5; final ratings remain Option 9's responsibility.
 - Never alter `metric_ledger.md` from this server.
 
 Round plan on C1:

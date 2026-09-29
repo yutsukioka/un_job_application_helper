@@ -1,0 +1,6 @@
+interface:
+  display_name: "Apex: UNOPS application fit"
+  short_description: "Map UNOPS areas and skills to evidenced job history"
+  default_prompt: "Use $apex-unops-application-fit to prepare Option 10 for my UNOPS vacancy from supplied evidence."
+policy:
+  allow_implicit_invocation: true

@@ -1,6 +1,6 @@
 ---
 name: capel-fit
-description: Normalize and fit text to a strict character limit and target band using deterministic scripts. Use this utility skill for per-entry CAPEL length control in Admin Profiles and qualification answers.
+description: Validate exact text or normalize and fit legacy fields to numeric character limits. Use for CAPEL control in application fields; preserve native text and bibliographic metadata with the exact validation path.
 ---
 
 # capel-fit
@@ -49,6 +49,10 @@ user explicitly requests normalization only.
 
 This skill includes a `scripts/` directory with:
 
+* `validate_text.py`: validates the exact UTF-8 input without rewriting,
+  trimming, punctuation changes, newline conversion or placeholder expansion.
+  Reports code-point and UTF-16 counts; the selected unit controls the check.
+
 * `normalize_text.py`: converts fancy punctuation to ASCII,
   collapses whitespace and strips leading/trailing spaces.
 * `charcount.py`: counts characters (with spaces) after optional
@@ -59,6 +63,30 @@ This skill includes a `scripts/` directory with:
   (adding placeholders) until the text fits.
 
 ## Usage
+
+### Native text and bibliographic metadata
+
+For publication titles, Unicode/native field text, or any instruction to
+preserve the exact string, use `validate_text.py` directly. Skip normalization
+and automatic fitting. Revise editable narrative deliberately if needed, then
+validate again. An over-limit title or identifier must be reported for a
+permitted representation; do not truncate it or strengthen contribution verbs.
+Keep review counts out of the delivered field value.
+
+```bash
+python3 agents/apex/skills/capel-fit/scripts/validate_text.py \
+  --file field.txt --char-limit 4000 --unit utf16 --json
+```
+
+The default band is 0–CHAR_LIMIT; a maximum creates no minimum writing target.
+Use `--target-low`/`--target-high` only for an actual requested band. Exit 0
+means inside the band, 1 means outside, and 2 means invalid input/limits.
+`--unit codepoints` is the default; choose `utf16` explicitly for an HTML
+maxlength check. Report that counting convention without claiming untested
+server equivalence. Both count whitespace and trailing newlines as supplied;
+prepare the exact final field value rather than counting a decorated report.
+
+### Legacy normalized fields
 
 Invoke this skill when a text block must be fitted to strict
 character limits, such as Admin Profile entries or qualification
@@ -81,9 +109,13 @@ python3 skills/capel-fit/scripts/fit_entry.py \
 
 ## Rules
 
-1. If numeric limits exist, use the deterministic scripts in this order:
-   `normalize_text.py`, `charcount.py`, then `fit_entry.py`.
+1. If numeric limits exist, select the appropriate path. Native/exact text
+   uses `validate_text.py` directly. Legacy fields requiring normalized ASCII
+   use `normalize_text.py`, `charcount.py`, then `fit_entry.py`. Existing legacy
+   CLI defaults are unchanged.
 2. Do not add substantive content; only apply safe normalization,
-   conservative compression, or placeholder-based expansion.
+   conservative compression, or placeholder-based expansion where permitted.
+   Automatic fitting can change claims or remove qualifications: inspect every
+   transformation before accepting it, and never use it on bibliographic data.
 3. If `CHAR_LIMIT` is missing or `UNLIMITED`, skip fitting unless the
    user explicitly asks for normalization-only output.

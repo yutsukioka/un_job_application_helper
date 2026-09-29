@@ -9,6 +9,7 @@ PER-SECTION DEFAULT LEADS
 
 | Section                                                | Default lead                                    | Other agents' role                                                        |
 |--------------------------------------------------------|-------------------------------------------------|---------------------------------------------------------------------------|
+| Phase 1.4 — Skill / Certification / Language Evidence Map | technical-lead                                | screening-lead: evidence/gaps; ats-format-lead: supplied portal labels; preserve all sourced items |
 | Admin Profile — duties/responsibilities body           | screening-lead                                  | ats-format-lead: keyword swaps; technical-lead: register flags            |
 | Admin Profile — Direct Reports / Reason for Leaving    | screening-lead                                  | factual, low-disagreement                                                 |
 | CV — Summary / UVP line                                | ats-format-lead                                 | others propose alternative phrasings                                      |

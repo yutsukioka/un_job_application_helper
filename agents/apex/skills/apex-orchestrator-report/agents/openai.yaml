@@ -1,7 +1,5 @@
 interface:
   display_name: "Apex ▸ Strategy Report & Menu"
-  short_description: "Produce the full Exceptional Application Strategy Report (Phases 1-7) and present the Phase 8 document menu."
+  short_description: "Prepare strategy, capability evidence, and the Phase 8 menu."
   default_prompt: |
-    Use this skill to generate the Phases 1-7 strategy report and present the Phase 8 menu.
-    Follow AGENTS.md, apex-guardrails, and apex-orchestrator-report/SKILL.md.
-    Treat apex-orchestrator-report/SKILL.md as the canonical behavior and output contract.
+    Use $apex-orchestrator-report to generate the Phases 1-7 strategy report, including Phase 1.4 evidence preparation, and present the Phase 8 menu.

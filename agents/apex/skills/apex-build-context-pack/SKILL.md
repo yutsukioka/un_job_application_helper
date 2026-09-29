@@ -45,6 +45,43 @@ files. Do not fabricate or silently infer missing facts.
 Optional (recommended for improved ATS/keyword work):
 - `JD_KEYWORD_BANK` (20–40 phrases from `apex-jd-keyword-bank`)
 
+Optional for IOM ATS inputs: the vacancy-specific extraction and page map from
+[apex-iom-ats-input](../apex-iom-ats-input/SKILL.md), including
+`PORTAL_FIELD_SCHEMA`. Preserve exact screening choices, help text and
+certifications separately from applicant answers. Preserve unknown field limits
+as unknown, not unlimited. A request to compare an extraction does not authorize
+overwriting this context pack, especially while another run is consuming it.
+
+Optional for Phase 8 Option 9 (`apex-generate-skills-proficiency`):
+- `USER_CERTIFICATIONS_TEXT` and `USER_LANGUAGES_TEXT`, if supplied separately
+  from job history.
+- `PORTAL_SKILL_ENTRIES`: actual selectable labels/types with their portal
+  provenance; do not treat a personal `SKILLS_TAXONOMY` as a portal list.
+- `PORTAL_PROFICIENCY_GUIDANCE`: exact choices and item-specific definitions.
+- `PORTAL_ENTRY_MODE`: `CONTROLLED_LIST`, `FREE_TEXT` or `UNKNOWN`.
+
+Preserve these optional sections under their exact headings when supplied
+or already present. Do not invent proficiency levels, credential status or
+language abilities while building the raw context pack.
+
+Optional for the named UNESCO skills:
+- `EMPLOYMENT_HISTORY_FORM_REFERENCE`: actual file/link and version/provenance.
+- `PORTAL_FIELD_SCHEMA`: exact labels, control types, required flags and
+  per-field limits with their units/source. Do not treat dropdown `inputLength`
+  as a narrative budget.
+- `PORTAL_DOMAIN_OPTIONS` and `PORTAL_DOMAIN_SELECTION_RULES`: supplied portal
+  evidence; the domain skill already bundles the verified UNESCO snapshot.
+- `EXPERIENCE_AS_OF_DATE`: cutoff for evidenced current-role intervals.
+- `USER_PUBLICATIONS_TEXT` and `PORTAL_PUBLICATION_GUIDANCE`: raw publication
+  records and actual field instructions; preserve authorship/status distinctions.
+
+Keep these optional sections verbatim when supplied or already present; do
+not manufacture them from a selected profile row. In LIMITS, retain
+`TARGET_SYSTEM: OTHER` plus `TARGET_ORGANIZATION: UNESCO` when applicable.
+Preserve unknown supplied sections rather than erasing them on refresh.
+These named skills can consume raw inputs directly: the strategy pipeline's
+eleven-section preflight is not an invocation gate for them.
+
 ## Output behavior
 
 1. Ensure an `private/inputs/` directory exists; create it if necessary.
@@ -119,6 +156,9 @@ Optional (recommended for improved ATS/keyword work):
 4. If an existing context pack already contains additional limit keys
    (for example field-specific overrides), preserve and merge them rather
    than deleting unknown keys.
+   Preserve existing optional Option 9 and UNESCO sections as well; include supplied
+   ones between `SKILLS_TAXONOMY` and `LIMITS` without rewriting their raw
+   contents or making them required for other phases.
 5. After writing the file, run the **Pre-flight Validation** below and
    output only a concise pre-flight checklist table plus any critical
    blockers.
@@ -145,6 +185,7 @@ Required sections status table:
 
 Optional section check (do not block workflow):
 - `JD_KEYWORD_BANK`: populated / missing
+- Option 9 sections listed above: populated / missing, when relevant.
 
 If any required section is missing, list it and recommend the user supply the data before proceeding. Do not allow the orchestrator to run with missing critical sections (`USER_JOB_HISTORY_TEXT`, `JOB_DESCRIPTION_TEXT`).
 

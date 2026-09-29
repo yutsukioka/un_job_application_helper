@@ -51,6 +51,13 @@ Round plan on S2:
    - Run `apex-orchestrator-report` as a SKILL through your technical
      lens: register-correct CCOG terms, programmatic scope/scale framing,
      methodology specificity.
+   - For its Phase 1.4 map, read the full current JD/requirements and raw
+     applicant skill, credential, and language evidence, plus supplied portal
+     labels. Follow `agents/apex/skills/apex-candidate-evidence-bank/SKILL.md`:
+     one bank invocation supplies Phases 1.3 and 1.4. Preserve the exact heading
+     `## Skill / Certification / Language Evidence Map`, source anchors,
+     capability details, and unresolved items beyond the top core requirements.
+     Do not assign final High / Medium / Low proficiency in this strategy fold.
    - Write `technical-lead/phase1_7_strategy_report.md`.
    - Call `impl-done` (advances IMPLEMENT -> TEST):
      python agents/apex/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>

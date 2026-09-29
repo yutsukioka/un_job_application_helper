@@ -1,6 +1,11 @@
 ---
 name: apex-candidate-evidence-bank
-description: Build a structured evidence bank mapping the candidate’s job history to the JD core requirements and identify gaps with mitigation strategies. Also produce a consolidated “Metrics & Specifics Needed” list and an “Employment Record Fields Checklist” per role (Direct Reports, scope, stakeholders, etc.). Use this skill for Phase 1.3 when constructing the strategy report.
+description: >-
+  Map applicant evidence to JD requirements and identify gaps in Phase 1.3.
+  Prepare the Phase 1.4 Skill / Certification / Language Evidence Map for
+  Option 9, recording demonstrated capability, language use and credential
+  status without assigning final proficiency. Use during strategy-report
+  preparation or when explicitly asked for the evidence map.
 ---
 
 # apex-candidate-evidence-bank
@@ -18,6 +23,12 @@ Additionally, it produces an “employment record readiness” checklist to supp
 - supervisory scope / direct reports,
 - programme/project scope (budgets, partners, geography),
 - and “reason for leaving” per role (kept short and diplomatic).
+
+The same source review also produces **Phase 1.4: Skill / Certification /
+Language Evidence Map**, preparing the evidence that
+[Option 9](../apex-generate-skills-proficiency/SKILL.md) needs. This is
+analysis, not a Phase 8 entry list: final labels and proficiency choices
+remain Option 9's responsibility.
 
 ## Shared definitions
 
@@ -38,10 +49,25 @@ Optional:
 - `TERM_EXTRACTOR`: to flag high‑starred terms.
 - `JD_KEYWORD_BANK`: an expanded 20–40 phrase keyword bank.
 - `USER_ADMIN_PROFILE_TEXT`: user's current administrative profile.
+- `JOB_QUALIFICATION_QUESTIONS`: additional explicit screening criteria.
+- `USER_CERTIFICATIONS_TEXT` and `USER_LANGUAGES_TEXT`, if supplied separately
+  from job history.
+- `PORTAL_SKILL_ENTRIES`, `PORTAL_ENTRY_MODE` and
+  `PORTAL_PROFICIENCY_GUIDANCE`: actual choices, provenance and item-specific
+  instructions, if available. A personal `SKILLS_TAXONOMY` is not a verified
+  portal list without that provenance.
+- Approved feedback updates and an earlier map for the **same vacancy**,
+  for targeted refreshes and consistent item IDs.
+
+Missing optional inputs do not prevent the map. Treat each missing or
+conflicting detail as an issue for the affected item, not the whole report.
 
 ## Output format
 
-Return exactly these sections:
+Return the following four sections. For an explicit Phase 1.4-only request,
+return only the fourth section. During a full strategy run, build all four
+in one source review; the orchestrator places the fourth under Phase 1.4
+without invoking the evidence bank a second time.
 
 1. `## Evidence Bank by Requirement`
    - For each core requirement, output:
@@ -67,7 +93,7 @@ Return exactly these sections:
    - Supervision (direct reports)
    - Compliance/Framework references (if the JD expects them)
   This helps ensure all missing specifics are captured in one place.
-## Employment Record Fields Checklist (Per Role)
+3. `## Employment Record Fields Checklist (Per Role)`
 
 For each role identified in `USER_JOB_HISTORY_TEXT`, output:
 
@@ -78,6 +104,80 @@ For each role identified in `USER_JOB_HISTORY_TEXT`, output:
 - Location/duty station: <known or [Confirm]>
 - Contract type (if relevant): <known or [Confirm]>
 - Reason for leaving: <short standard phrase OR "Select one: option1 / option2 / option3">
+
+### 4. Skill / Certification / Language Evidence Map (Phase 1.4)
+
+Use the exact output heading `## Skill / Certification / Language Evidence Map`.
+Identify the vacancy and source inputs used. In the full strategy report,
+preserve this heading inside Phase 1.4 (heading depth may change).
+
+Scan the full JD, requirements and supplied screening questions for distinct
+relevant skills, certifications and languages, including items outside the
+top 5–7 summary. Preserve required/preferred status and linked conditions
+such as alternatives or “at least three areas.” A capability mentioned only
+in organizational background is not automatically an applicant requirement.
+Include relevant items with missing evidence so that Phase 7.5 can surface
+them; omit unrelated skills and redundant synonyms.
+If only partial vacancy text is supplied, state that coverage is limited to
+those inputs; do not claim that the full vacancy has been checked.
+
+Use compact records or a table with evidence details. Each item must include:
+
+- **ID:** `SCL-01`, `SCL-02`, etc.; retain IDs for unchanged items when
+  refreshing the same vacancy's map.
+- **Item / Type:** concise capability, credential or language name;
+  `Skill`, `Certification` or `Language`.
+- **JD requirement / Priority:** source section or question and the
+  relevant wording; required, preferred or relevant duty. Keep compound
+  conditions attached to each affected item.
+- **Evidence / Source:** actual personal contribution, role/organization,
+  known timeframe and source locator. Preserve distinct roles and the
+  scope of each contribution; do not combine metrics or infer active
+  practice from a role's full duration.
+- **Demonstrated capability / Status:** use the type-specific details below.
+- **Evidence status:** apply `SUPPORTED`, `UNSUPPORTED_BUT_PLAUSIBLE`,
+  `CONFLICTING` or `AMBIGUOUS` to substantive claims under `AGENTS.md`.
+  Distinguish supported facts from unknown dimensions in the same record.
+  A required item with no applicant evidence is a missing-evidence gap,
+  not evidence of Low proficiency.
+- **Portal match:** exact supplied label/type, a scope-matched equivalent
+  with explanation, or `Unverified draft label` / `No accurate supplied
+  match`. Preserve the conceptual item even when no portal equivalent is
+  known. Do not invent selectable entries or force keyword matches.
+- **Gap / Missing proof:** specific missing fact or field interpretation,
+  with a targeted `[Confirm ...]` tag; write `None` when no material gap
+  remains. Do not ask the user to reconfirm already supported details.
+
+Type-specific evidence:
+
+| Type | Details to record when evidenced |
+|---|---|
+| Skill | Personal performance versus oversight; independence and guidance needed; task complexity; repeated use or recency; concrete outputs/results. Distinguish direct from transferable experience and general from Bank-specific procedures. |
+| Certification | Exact credential and issuer; earned versus studied toward; award date; known validity, expiry or renewal. Separate holding a credential from applying the discipline. Preserve any undefined compulsory certification-rating field as a field-interpretation gap. |
+| Language | Speaking, listening, reading and writing activities relevant to the job; independence/support; professional use and timeframe; supplied test results or self-reported levels, identified as such. Keep uneven abilities visible. |
+
+Do not infer language ability from nationality, workplace or the language
+of a CV. Do not infer current certification validity from an old award.
+Missing dates or metrics need not prevent documenting otherwise clear
+capability; identify only gaps material to the proposed assessment.
+
+Describe capability in observable terms, for example “independently prepared
+routine analyses; sought help for unfamiliar methods.” **Do not assign or
+recommend High / Medium / Low or another portal proficiency choice here.**
+Preserve an existing source assessment as attributed evidence, without
+turning it into an authored rating. Do not use Option 6 scores, tenure or
+the evidence-ranking engine's scores as proficiency evidence.
+
+Include the map's material gaps in `## Metrics & Specifics Needed`, using
+item IDs to avoid repeating the same question. Group language capability,
+credential status and portal interpretation gaps separately from numerical
+metrics. In a Phase 1.4-only output, keep those gaps in their item records.
+
+The map is a derived index, not a new factual authority. Apply the intent
+gate and feedback-patch section restrictions in `AGENTS.md`; newly edited
+map/report claims require the same evaluation as other ad-hoc assertions.
+Keep unresolved facts visibly tagged. Do not regenerate applicant documents
+or write an approval patch as part of this skill.
 
 ## Rules
 
@@ -118,3 +218,9 @@ For each role identified in `USER_JOB_HISTORY_TEXT`, output:
 6. Compile a unified list of all placeholders the user needs to
    supply.
 7. Build the “Employment Record Fields Checklist” per role (Direct Reports, scope, reason for leaving options).
+8. Build the Phase 1.4 map from the full vacancy and applicant sources using
+   the contract above; retain supported evidence beyond the top 5–7 summary.
+   If only Phase 1.4 was requested, skip the other output sections.
+9. Check traceability, type-specific evidence and gaps. Leave final
+   proficiency assessment to Option 9 and gap follow-up to
+   [apex-user-feedback-revision](../apex-user-feedback-revision/SKILL.md).

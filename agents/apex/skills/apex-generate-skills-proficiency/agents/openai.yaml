@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apex ▸ Skills & Proficiency (Option 9)"
+  short_description: "Map job evidence to skills and proficiency entries"
+  default_prompt: "Use $apex-generate-skills-proficiency to generate Phase 8 Option 9 from the vacancy and applicant history, using current Phase 1.4 evidence and Phase 7.5 follow-up when available."
