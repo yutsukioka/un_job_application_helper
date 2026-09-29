@@ -35,12 +35,22 @@ def _cold_helper():
     global _COLD_HELPER
     if _COLD_HELPER is None:
         path = Path(__file__).with_name("storage_cold_archive.py")
-        _regular(path)
+        descriptor, before = _safe_file(path)
+        with os.fdopen(descriptor, "rb") as stream:
+            source = stream.read()
+            after = os.fstat(stream.fileno())
+        latest = _regular(path)
+        def identity(info):
+            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        if identity(before) != identity(after) or identity(after) != identity(latest):
+            raise ValueError("Storage retention cold archive helper changed during read")
         spec = importlib.util.spec_from_file_location("jobagg_storage_cold_for_retention", path)
         if spec is None or spec.loader is None:
             raise ValueError("Storage retention cold archive helper is unavailable")
         module = importlib.util.module_from_spec(spec)
-        exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+        # The dispatcher may lack jobagg on sys.path. Only the verified sibling
+        # module bytes are executed; no user path or content reaches this call.
+        exec(compile(source, str(path), "exec"), module.__dict__)  # noqa: S102  # nosec B102
         _COLD_HELPER = module
     return _COLD_HELPER
 
@@ -485,6 +495,7 @@ def _retire(group, *, deadline_at=None):
     _check_deadline(deadline_at)
     _validate_selected(group, deadline_at=deadline_at)
     _check_deadline(deadline_at)
+    signatures = None
     if receipt_path.exists() or receipt_path.is_symlink():
         receipt = _json(receipt_path)
         _validate_receipt(group, receipt)
@@ -515,13 +526,11 @@ def _retire(group, *, deadline_at=None):
         _check_deadline(deadline_at)
         path = _inside(group["path"], item["path"])
         if not path.exists() and not path.is_symlink():
-            if receipt["phase"] != "intent":
-                continue
             # An absent file is allowed only after the durable intent exists.
             continue
         if receipt["phase"] == "complete":
             raise ValueError(f"Storage retention completed receipt has a live file: {path}")
-        if "signatures" in locals():
+        if signatures is not None:
             current = _regular(path)
             if (
                 current.st_dev, current.st_ino, current.st_size,
@@ -538,6 +547,28 @@ def _retire(group, *, deadline_at=None):
     if receipt["phase"] != "complete":
         _replace_json(receipt_path, {**receipt, "phase": "complete"})
     return deleted
+
+
+def verified_retired_generation(generation):
+    """Confirm a completed export retirement before another scanner skips it."""
+    generation = Path(generation).absolute()
+    receipt_path = generation / RECEIPT
+    if not receipt_path.exists() and not receipt_path.is_symlink():
+        return False
+    group = _generation_group(generation)
+    if group is None or group["kind"] != "generation_exports":
+        raise ValueError(f"Storage retention receipt has no verified generation: {generation}")
+    receipt = _json(receipt_path)
+    _validate_receipt(group, receipt)
+    if receipt["phase"] != "complete":
+        raise ValueError(f"Storage retention export retirement is unfinished: {generation}")
+    _verify_controls(group, receipt["controls"])
+    _validate_selected(group)
+    for item in group["files"]:
+        path = _inside(generation, item["path"])
+        if path.exists() or path.is_symlink():
+            raise ValueError(f"Storage retention completed receipt has a live file: {path}")
+    return True
 
 
 def prune_completed(

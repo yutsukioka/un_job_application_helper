@@ -167,3 +167,23 @@ def test_enabled_dry_run_does_not_load_retention_helper(monkeypatch, fixture, ca
     assert result["storage_retention"]["enabled"] is True
     assert result["writes_performed"] is False
     assert set(fixture.root.rglob("*")) == before
+
+
+def test_retention_error_is_visible_in_persistent_health_without_failure_hold(tmp_path):
+    value = {
+        "started_at": "2026-09-29T00:00:00+00:00",
+        "finished_at": "2026-09-29T00:01:00+00:00",
+        "attempt_id": "attempt-1",
+        "status": "complete",
+        "result": {
+            "status": "complete", "publication_status": "published",
+            "storage_retention": {"status": "error", "reason": "ValueError: bad receipt"},
+        },
+    }
+    runner.OBSERVABILITY.update_health(tmp_path, value)
+    health = runner.OBSERVABILITY.health_view(tmp_path)
+    assert health["last_attempt_status"] == "complete"
+    assert health["publication_currently_confirmed"] is True
+    assert health["last_retention_status"] == "error"
+    assert health["last_retention_reason"] == "ValueError: bad receipt"
+    assert health["last_retention_event_at"] == value["finished_at"]

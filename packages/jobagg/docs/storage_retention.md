@@ -41,9 +41,15 @@ The default is disabled. Configuration validation limits maintenance to at most
 20 seconds and two groups per tick, with at least two newest completed groups.
 The dispatcher calls retention after the worker/publication phase is terminal,
 while it still owns the shared lock. Unresolved publication, maintenance, a busy
-owner or an unchanged-failure hold can prevent a cleanup attempt. Maintenance
-errors and deadline deferrals are reported separately in `storage_retention`.
-Dry-run reports the effective policy and performs no pruning.
+owner or an unchanged-failure hold can prevent a cleanup attempt. The storage
+reserve check runs before the dispatcher acquires the owner lock; below the
+configured reserve, automatic pruning is inactive. A direct bounded retention
+command remains available after the operator checks the mounted volume. It
+writes receipts, so it also requires some free space. Maintenance errors and
+deadline deferrals are reported separately in `storage_retention` and the
+persistent dispatcher health record; they do not change publication health or
+activate the fetch failure hold. Dry-run reports the effective policy and
+performs no pruning.
 
 The current implementation expects the existing physical layout under a real
 Jobagg root:
@@ -76,6 +82,13 @@ tick provide limited catch-up capacity after skipped ticks. Check retention
 status, eligible backlog and free-space trends; sustained deferrals require a
 separate bounded maintenance run or a future performance change. The earlier
 publication timeout and task backlog require separate fixes.
+
+The older `jobagg.retained_artifacts` scanner accepts a completed and verified
+`storage-retention.json` retirement receipt and validates a cold archived plan
+before scanning remaining generations. It still rejects unfinished or changed
+receipts and corrupt archives. The two tools protect different evidence: the
+older tool stores exact export-copy bytes, while the dispatcher prunes verified
+duplicate export copies after publication.
 
 ## Preview, archive and restore
 
