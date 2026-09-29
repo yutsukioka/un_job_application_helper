@@ -674,7 +674,7 @@ void main() {
       },
     );
 
-    test('Windows assembly retains the guarded public cache authority', () {
+    test('Windows assembly uses encrypted runtime without a plaintext cache', () {
       final source = File(
         'lib/features/app_shell/atlas_app.dart',
       ).readAsStringSync();
@@ -689,8 +689,10 @@ void main() {
       final windowsAssembly = source.substring(windowsStart, fallbackStart);
       expect(
         windowsAssembly,
-        contains('localCacheStoreFactory: _defaultCacheStore'),
+        contains('localCacheStoreFactory: _noPersistentPlaintextCache'),
       );
+      expect(windowsAssembly, contains('requireEncryptedPrivateState: true'));
+      expect(windowsAssembly, contains('privateStatePersistence: runtime'));
       expect(
         source,
         contains(
