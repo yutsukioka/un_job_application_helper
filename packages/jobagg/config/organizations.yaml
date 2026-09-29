@@ -1381,6 +1381,10 @@ sources:
     enabled: true
     extra:
       fetch_attachments: false
+      # Official listing/detail redirects captured on 29 September 2026.
+      # Exact HTTPS host only; redirects still pass SSRF, robots and downgrade checks.
+      reviewed_redirect_urls:
+        - https://selection.eu-careers.europa.eu/en/job-opportunities/open-vacancies/cast
       reviewed_document_origins:
         - https://commission.europa.eu/
         - https://ec.europa.eu/

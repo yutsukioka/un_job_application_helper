@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from jobagg.adapters.base import AdapterContext, get_adapter_class
+from jobagg.accepted_detail_lineage import ensure_detail_lineage_indexes
 from jobagg.atomic_files import atomic_write_text
 from jobagg.db import JobDatabase
 from jobagg.detail_quality import DETAIL_QUALITY_COMPLETE, detail_quality_status
@@ -407,6 +408,7 @@ CREATE TABLE IF NOT EXISTS remediation_documents(task_id TEXT PRIMARY KEY,job_ke
 CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,media_type TEXT,size_bytes INTEGER NOT NULL,content BLOB NOT NULL);
 """.replace("DEFAULT0", "DEFAULT 0")
             )
+            ensure_detail_lineage_indexes(conn)
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
             if "host" not in columns:
                 conn.execute("ALTER TABLE remediation_sources ADD COLUMN host TEXT")

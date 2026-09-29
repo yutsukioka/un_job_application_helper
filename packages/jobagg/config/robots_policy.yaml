@@ -466,6 +466,11 @@ domains:
     min_delay_seconds: 2.0
     override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
 
+  # Observed official redirect; do not extend the old host robots exception.
+  selection.eu-careers.europa.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
   eu-careers.europa.eu:
     honor_robots_txt: false
     min_delay_seconds: 2.0

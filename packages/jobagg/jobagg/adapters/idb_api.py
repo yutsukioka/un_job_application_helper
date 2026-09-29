@@ -4,10 +4,12 @@ import gzip
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 from jobagg.normalize import build_job
+from jobagg.pipelines.http_checkpoint import HostIneligible
 
 URL = "https://jobs.iadb.org/services/recruiting/v1/jobs"
 VERSION = "idb_public_search_api_v1"
@@ -99,6 +101,14 @@ def fetch(adapter):
         for page in range(cap):
             data = adapter.post_json(URL, request_payload(page, sort))
             total, rows = parse_page(data, page)
+            if pages and total != pages[0]["total"]:
+                # The endpoint has no snapshot token. A changing advertised
+                # inventory cannot be accepted or resumed across generations;
+                # preserve captures and restart in a later bounded cycle.
+                raise HostIneligible(
+                    "IDB inventory total changed during enumeration; restart next cycle",
+                    category="cooldown", eligible_at=time.time() + 900,
+                )
             pages.append(dict(page=page, sort=sort, total=total, rows=rows))
             if (page + 1) * 10 >= total:
                 break
