@@ -1,0 +1,24 @@
+{
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "**/site-packages",
+    "**/build",
+    "**/dist",
+    "**/*.egg-info",
+    "private",
+    "inputs",
+    "output",
+    "outputs",
+    "tmp",
+    "logs",
+    "bak",
+    "packages/jobagg/output",
+    "packages/jobagg/output_archive*",
+    "packages/jobagg/jobagg_bundles_*",
+    "packages/jobagg/tmp",
+    "agents/apex/logs",
+    "agents/apex/agent_sync"
+  ]
+}
