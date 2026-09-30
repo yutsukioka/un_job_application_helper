@@ -11,6 +11,7 @@ import json
 import math
 import re
 import secrets
+import sqlite3
 import threading
 import time
 import uuid
@@ -586,10 +587,13 @@ class AtlasVaultBackend:
 
     def accept_enrollment(self, token, vault_id, proof):
         with self._lock:
-            session = self._vault_session(token, vault_id, proof["key_epoch"])
-            return self.commitments.accept_enrollment(
-                session.account_id, vault_id, proof, session.device_id
-            )
+            try:
+                session = self._vault_session(token, vault_id, proof["key_epoch"])
+                return self.commitments.accept_enrollment(
+                    session.account_id, vault_id, proof, session.device_id
+                )
+            except (sqlite3.Error, OSError):
+                raise ActivationUnavailable("ATLAS_ACTIVATION_STORAGE_UNAVAILABLE") from None
 
     def publish_delivery(self, token, vault_id, epoch, packet):
         with self._lock:
@@ -1616,6 +1620,8 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             appended = service.accept_enrollment(
                 _credential_token(authorization), vault_id, request.model_dump()
             )
+            if appended:
+                service.telemetry.record("enrollment_admitted", 200)
             return EnrollmentReceipt(
                 root=request.root, registry_generation=request.next_registry_generation,
                 key_epoch=request.key_epoch, appended=appended,

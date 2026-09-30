@@ -1,11 +1,12 @@
 """D099 signed membership additions to an immutable D087 activation."""
 
+import copy
 import json
 import sqlite3
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from vaultsync.device_enrollment import verify_enrollment
+from vaultsync.device_enrollment import verify_enrollment_attestation
 from vaultsync.revocation import verify_transition
 
 from .commitments import (
@@ -56,7 +57,64 @@ class EnrollmentReceipt(BaseModel):
     appended: bool
 
 
+MAX_CACHED_MEMBERSHIPS = 8
+MAX_MEMBERSHIP_CACHE_BYTES = 32 * 1024 * 1024
+
+
+def _stamp(store):
+    # Other connections advance data_version; this connection advances
+    # total_changes, including rolled-back writes. Neither can reuse stale trust.
+    return (
+        store._db.execute("PRAGMA data_version").fetchone()[0],
+        store._db.total_changes,
+    )
+
+
+def _cache(store, stamp):
+    if store._membership_cache_stamp != stamp:
+        store._membership_cache.clear()
+        store._membership_cache_stamp = stamp
+    return store._membership_cache
+
+
+def _remember(store, account_id, vault_id, value, stamp):
+    cache = _cache(store, stamp)
+    size = len(json.dumps(value, separators=(",", ":")))
+    if size > MAX_MEMBERSHIP_CACHE_BYTES:
+        return
+    cache[(account_id, vault_id)] = (copy.deepcopy(value), size)
+    cache.move_to_end((account_id, vault_id))
+    while (
+        len(cache) > MAX_CACHED_MEMBERSHIPS
+        or sum(item[1] for item in cache.values()) > MAX_MEMBERSHIP_CACHE_BYTES
+    ):
+        cache.popitem(last=False)
+
+
 def membership(store, account_id, vault_id):
+    """Reuse only verified state at the unchanged durable database version."""
+    with store._lock:
+        try:
+            for _ in range(3):
+                before = _stamp(store)
+                cache = _cache(store, before)
+                if (account_id, vault_id) in cache:
+                    cache.move_to_end((account_id, vault_id))
+                    return copy.deepcopy(cache[(account_id, vault_id)][0])
+                value = _rebuild_membership(store, account_id, vault_id)
+                if _stamp(store) == before:
+                    _remember(store, account_id, vault_id, value, before)
+                    return value
+            raise ActivationUnavailable("ATLAS_ACTIVATION_STORAGE_UNAVAILABLE")
+        except (sqlite3.Error, OSError):
+            raise ActivationUnavailable(
+                "ATLAS_ACTIVATION_STORAGE_UNAVAILABLE"
+            ) from None
+        except (ValueError, TypeError, KeyError):
+            raise CommitmentConflict() from None
+
+
+def _rebuild_membership(store, account_id, vault_id):
     with store._lock:
         current = store.activation(account_id, vault_id)
         if current is None:
@@ -86,11 +144,10 @@ def membership(store, account_id, vault_id):
             if next_position < position:
                 raise CommitmentConflict()
             context["state_root"] = addition["state_root"]
-            registry = verify_enrollment(
+            registry = verify_enrollment_attestation(
                 addition,
                 registry=registry,
                 context=context,
-                confirmed_transcript=addition["transcript_sha256"],
                 status="ACTIVE",
             )
             position = next_position
@@ -105,6 +162,10 @@ def accept(store, account_id, vault_id, proof, issuer_id):
         raise ActivationUnavailable("ATLAS_ACTIVATION_STORAGE_UNAVAILABLE")
     with store._lock:
         try:
+            # Cold signature/history verification precedes the writer lock.
+            # BEGIN then rechecks the DB stamp so a competing commit cannot
+            # bypass generation/root CAS with a warmed stale registry.
+            membership(store, account_id, vault_id)
             store._db.execute("BEGIN IMMEDIATE")
             current = membership(store, account_id, vault_id)
             if proof["issuer_device_id"] != issuer_id or not any(
@@ -119,11 +180,10 @@ def accept(store, account_id, vault_id, proof, issuer_id):
                         raise CommitmentConflict()
                     store._db.execute("COMMIT")
                     return False
-            verify_enrollment(
+            registry = verify_enrollment_attestation(
                 proof,
                 registry=current["registry"],
                 context=current["context"],
-                confirmed_transcript=proof["transcript_sha256"],
                 status="ACTIVE",
             )
             if (
@@ -146,10 +206,28 @@ def accept(store, account_id, vault_id, proof, issuer_id):
                     body,
                 ),
             )
+            # Capture while SQLite still excludes external writers. Sampling
+            # after COMMIT could stamp our value with a competitor's newer write.
+            committed_stamp = _stamp(store)
             store._db.execute("COMMIT")
+            current["registry"] = registry
+            current["context"]["registry_generation"] = proof[
+                "next_registry_generation"
+            ]
+            current["records"].append(copy.deepcopy(proof))
+            _remember(store, account_id, vault_id, current, committed_stamp)
             return True
-        except (ValueError, TypeError, KeyError, sqlite3.Error):
+        except (sqlite3.Error, OSError):
+            raise ActivationUnavailable(
+                "ATLAS_ACTIVATION_STORAGE_UNAVAILABLE"
+            ) from None
+        except (ValueError, TypeError, KeyError):
             raise CommitmentConflict() from None
         finally:
             if store._db.in_transaction:
-                store._db.execute("ROLLBACK")
+                try:
+                    store._db.execute("ROLLBACK")
+                except (sqlite3.Error, OSError):
+                    raise ActivationUnavailable(
+                        "ATLAS_ACTIVATION_STORAGE_UNAVAILABLE"
+                    ) from None

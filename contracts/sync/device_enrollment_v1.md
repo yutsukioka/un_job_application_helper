@@ -6,12 +6,22 @@ rotate an epoch, or change HPKE. The original activation ID remains an anchor.
 
 ## Trust Inputs
 
-Verification requires the application's durably authenticated current registry,
+Client verification requires the application's durably authenticated current registry,
 account, vault, active epoch, activation ID, state root, registry generation,
 and locally SAS-confirmed transcript hash. Do not derive these expected inputs
 from the untrusted incoming record. The comparison value itself is absent.
 Only ACTIVE custody may sign or accept; all pending, revoked, and fork states
 fail closed. The issuer is an ACTIVE member of the prior registry.
+
+Server admission has a separate trust boundary: it verifies the ACTIVE issuer's
+signed `SAS_CONFIRMED` attestation against independently stored registry/context,
+not the human comparison. It never treats the record's transcript hash as an
+independent local confirmation. `verify_enrollment_attestation` implements that
+server check; client `verify_enrollment` additionally requires the transcript
+from its own local ceremony. A compromised ACTIVE signing authority can falsely
+attest confirmation and authorize an addition. Preventing that requires a
+separate owner authorization mechanism, which v1 does not provide. The signed
+category expresses the issuer's claim, not server-observed proof of a comparison.
 
 The target signing and agreement public keys determine its existing v1 device
 ID. Its agreement-key fingerprint is SHA-256 over the public-key bytes. An

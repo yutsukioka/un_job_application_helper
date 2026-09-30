@@ -7,6 +7,77 @@ import XCTest
 
 @MainActor
 final class AtlasVaultRuntimeIntegrationTests: XCTestCase {
+  func testPublicationRetainsMoreThan1024SignedEdits() throws {
+    let fixture = try RuntimeIntegrationFixture()
+    defer { fixture.remove() }
+    let owner = try fixture.enroll()
+    let author = owner.context["device_id"] as! String
+    let objectID = UUID().uuidString.lowercased()
+    let payload = try JSONSerialization.jsonObject(with: fixture.note().encodedPayloadEnvelope())
+    var parent: String? = nil
+    var operations: [AtlasVaultEncryptedPatchOperation] = []
+    for sequence in 1...1025 {
+      let id = UUID().uuidString.lowercased(), revision = UUID().uuidString.lowercased()
+      let body: [String: Any] = [
+        "format": "atlasvault-runtime-record", "version": 1, "operation_id": id,
+        "author_device_id": author, "author_sequence": sequence, "lamport": sequence,
+        "object_id": objectID, "revision": revision, "parent_revision": parent as Any? ?? NSNull(),
+        "tombstone": false, "payload": payload,
+      ]
+      var envelope = try owner.seal(
+        "patch", plaintext: AtlasVaultEpochRotation.canonical(body),
+        objectID: objectID, revision: revision, signingKey: fixture.signer()).jsonObject
+      envelope["parent_revision"] = parent as Any? ?? NSNull()
+      envelope["tombstone"] = false
+      operations.append(
+        try .init(jsonObject: [
+          "format": "atlasvault-encrypted-patch-operation", "version": 1, "operation_id": id,
+          "operation_type": "upsert", "author_device_id": author, "author_sequence": sequence,
+          "lamport": sequence, "envelope": envelope,
+        ]))
+      parent = revision
+    }
+    // Seed a synthetic, encrypted retained-operation archive once; production
+    // publication still verifies every signature, ciphertext and revision.
+    // Replaying 1,025 individual fixture disk writes obscures the count regression.
+    var state = try owner.load()
+    var components = try owner.map(state["components"])
+    components["runtime"] = [
+      "format": "atlasvault-encrypted-convergent-replica-state", "version": 1,
+      "collection_id": "collection-c26",
+      "operations": operations.sorted { $0.operationID < $1.operationID }.map(\.jsonObject),
+      "snapshots": [], "pending_operation_ids": [],
+    ] as [String: Any]
+    state["components"] = components
+    try owner.file.write(state)
+    let binding = try XCTUnwrap(
+      AtlasKeychainRuntimeBindingStore(client: fixture.keychain).load(for: fixture.vaultID))
+    let reopened = try binding.open(
+      directory: fixture.epochURL,
+      session: .init(vaultID: fixture.vaultID, vaultKey: fixture.legacyKey))
+    let page = try reopened.runtimePublication(
+      signingKey: fixture.signer(),
+      authenticatedRegistry: (fixture.vector()["initial_registry"] as! [[String: Any]]))
+    XCTAssertEqual(try owner.rows(page["operations"]).count, 1025)
+    let hydrated = try reopened.runtimeState()
+    XCTAssertEqual(hydrated.applicationNotes.count, 1)
+    XCTAssertEqual(hydrated.applicationNotes.first?.metadata.revision, parent)
+  }
+
+  func testAdmissionAllowsMoreThan1024IdempotentOperationRetries() throws {
+    let first = try RuntimeIntegrationFixture(), second = try RuntimeIntegrationFixture()
+    defer {
+      first.remove()
+      second.remove()
+    }
+    let sender = try first.enroll(), receiver = try second.enroll()
+    _ = try sender.commitRuntimeMutations(
+      .init(creates: [.init(payload: first.note(), keyID: "local")]), signingKey: first.signer())
+    let operation = try XCTUnwrap(sender.pendingOperations().first)
+    try first.admit(Array(repeating: operation, count: 1025), to: receiver)
+    XCTAssertEqual(try receiver.runtimeState().applicationNotes.count, 1)
+  }
+
   func testC30CurrentEpochOnlyBootstrapCannotRestoreRetainedRecord() async throws {
     let fixture = try RuntimeIntegrationFixture()
     defer { fixture.remove() }

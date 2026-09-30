@@ -408,7 +408,7 @@ extension AtlasVaultEpochVault {
     try run {
       var s = try load()
       try active(s)
-      guard incoming.count <= 1024 else { throw AtlasVaultRotationError.rejected }
+      guard incoming.count <= 65_536 else { throw AtlasVaultRotationError.rejected }
       let (staged, replica) = try checkedRuntime(s)
       let admission = try history(s)
       admission.store = try staged.file("history", owner: self)
@@ -462,7 +462,6 @@ extension AtlasVaultEpochVault {
         throw AtlasVaultRotationError.rejected
       }
       let operations = try runtimeOperations(staged.values)
-      guard operations.count <= 1024 else { throw AtlasVaultRotationError.rejected }
       for operation in operations { _ = try runtimeBody(operation) }
       let bytes = try R.canonical([
         "format": "atlasvault-guarded-collection", "version": 1,

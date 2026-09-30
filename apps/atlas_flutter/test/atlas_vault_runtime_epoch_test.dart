@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:atlas/features/app_shell/atlas_app.dart';
+import 'package:atlas/atlas.dart' show AtlasApplicationRecord;
 import 'package:atlas/atlas_vault.dart' as vault;
 import 'package:atlas/src/atlas_vault/epoch_rotation.dart';
 import 'package:atlas/src/atlas_vault/payloads.dart';
@@ -540,6 +541,63 @@ void runtimeProcessTests() {
 }
 
 void runtimePrivateStateTests(AtlasVaultPayloadEnvelope payload) {
+  test(
+    'epoch tracker upsert preserves imported identity and commit metadata',
+    () async {
+      final fixture = RuntimeFixture(), native = await runtimeNativeHarness();
+      final owner = await fixture.initialize(
+        native.binding.directory(RuntimeFixture.vaultID),
+      );
+      await native.binding.provision(
+        owner: owner,
+        signingSeed: runtimeTestKey(10),
+      );
+      final runtime = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: native.keyStore,
+        localStoreIO: native.localStore,
+        epochSessionFactory: native.binding.open,
+        now: () => DateTime.parse('2026-09-30T12:00:00Z'),
+      );
+      expect(
+        await runtime.activateExisting(RuntimeFixture.vaultID),
+        AtlasVaultActivationResult.activated,
+      );
+      await runtime.createRecord(
+        AtlasVaultPayloadEnvelope.fromJson({
+          'type': 'saved_job',
+          'payload_schema': 1,
+          'payload': {
+            'id': 'imported-job',
+            'job_key': 'un:123',
+            'status': 'saved',
+            'updated_at': '2026-01-01T00:00:00Z',
+          },
+          'client_created_at': '2026-01-01T00:00:00Z',
+          'client_updated_at': '2026-01-01T00:00:00Z',
+        }),
+      );
+      final before = (await runtime.read()).records.single;
+      await runtime.saveTrackerRecord(
+        AtlasApplicationRecord(id: '', jobKey: 'un:123', status: 'applied'),
+      );
+      await runtime.deactivate();
+      expect(
+        await runtime.activateExisting(RuntimeFixture.vaultID),
+        AtlasVaultActivationResult.activated,
+      );
+      final after = (await runtime.read()).records.single;
+      final saved = after.envelope.payload as AtlasSavedJobPayload;
+      expect(saved.id, 'imported-job');
+      expect(saved.updatedAt, '2026-09-30T12:00:00Z');
+      expect(saved.status, 'applied');
+      expect(after.recordId, before.recordId);
+      expect(after.parentRevision, before.revision);
+      expect(after.envelope.clientCreatedAt, before.envelope.clientCreatedAt);
+      expect(await owner.pendingOperations(), hasLength(2));
+      await runtime.deactivate();
+    },
+  );
+
   test(
     'runtime deactivation during owner read never returns a decrypted snapshot',
     () async {

@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -42,6 +43,244 @@ def enrollment(owner, signer):
         status="ACTIVE",
         signing_key=signer,
     )
+
+
+def test_enrolled_member_receives_next_rotation_delivery(tmp_path):
+    import base64
+    from test_atlasvault_activation_c26 import activation_record
+    from vaultsync.revocation import (
+        RevocationRegistry,
+        _message as removal_message,
+        _root as removal_root,
+    )
+    from vaultsync.epoch_rotation import create_epoch_rotation
+
+    (owner, _, _), env = initialize(tmp_path)
+    accept(owner, 0, env[4], backend_accept(env))
+    addition = enrollment(owner, env[2][0])
+    backend, http, devices, headers = env[:4]
+    assert (
+        http.post("/v1/vaults/vault-c26/enrollments", json=addition, headers=headers[0]).status_code
+        == 200
+    )
+    current = backend.commitments.enrollment_membership(addition["account_id"], "vault-c26")
+    registry = current["registry"]
+    removal = RevocationRegistry(
+        tmp_path / "next-removal",
+        bytes([50]) * 32,
+        addition["account_id"],
+        "vault-c26",
+        4,
+        registry,
+        current["context"]["state_root"],
+    )
+    removal.initialize()
+    unsigned = removal.prepare(devices[1].device_id, devices[0].device_id)
+    root = removal_root(unsigned)
+    transition = dict(
+        unsigned,
+        root=root,
+        signature_b64=base64.b64encode(devices[0].sign(removal_message(root))).decode(),
+    )
+    rotation = create_epoch_rotation(
+        transition,
+        registry=registry,
+        state_root=current["context"]["state_root"],
+        signing_key=devices[0],
+    )
+    record = activation_record(rotation)
+    for recipient in rotation["plan"]["recipients"]:
+        packet = create_device_delivery(
+            record,
+            recipient_device_id=recipient,
+            issuer_device_id=devices[0].device_id,
+            signing_key=devices[0],
+            current_registry=registry,
+            recovery_pending=False,
+        )
+        response = http.post(
+            "/v1/vaults/vault-c26/activations/5/delivery-proofs", json=packet, headers=headers[0]
+        )
+        assert response.status_code == 200, response.text
+    response = http.post("/v1/vaults/vault-c26/activations", json=rotation, headers=headers[0])
+    assert response.status_code == 200, response.text
+    members = backend.commitments.enrollment_membership(addition["account_id"], "vault-c26")[
+        "registry"
+    ]
+    assert any(
+        e["device_id"] == addition["target_device_id"] and e["state"] == "ACTIVE" for e in members
+    )
+    assert http.get("/v1/vaults/vault-c26/activations", headers=headers[1]).status_code == 403
+
+
+class FailingEnrollmentConnection:
+    def __init__(self, connection, statement):
+        self.connection, self.statement = connection, statement
+        self.failed = False
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def execute(self, sql, *args):
+        if sql.startswith(self.statement) and not self.failed:
+            self.failed = True
+            raise sqlite3.OperationalError("synthetic disk/busy failure with private detail")
+        return self.connection.execute(sql, *args)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["BEGIN IMMEDIATE", "SELECT body FROM activations", "INSERT INTO enrollments", "COMMIT"],
+)
+def test_enrollment_storage_fault_is_retryable_and_never_publishes(tmp_path, statement):
+    (owner, _, _), env = initialize(tmp_path)
+    accept(owner, 0, env[4], backend_accept(env))
+    proof = enrollment(owner, env[2][0])
+    backend, http = env[:2]
+    original = backend.commitments._db
+    backend.commitments._db = FailingEnrollmentConnection(original, statement)
+    response = http.post("/v1/vaults/vault-c26/enrollments", json=proof, headers=env[3][0])
+    assert response.status_code == 503
+    assert response.json() == {"detail": "ATLAS_ACTIVATION_STORAGE_UNAVAILABLE"}
+    events = backend.telemetry.snapshot()["events"]
+    assert events[-1] == {"category": "storage", "outcome": "error", "status_code": 503}
+    assert "private detail" not in json.dumps(backend.telemetry.snapshot())
+    assert not original.in_transaction
+    assert original.execute("SELECT COUNT(*) FROM enrollments").fetchone()[0] == 0
+    assert (
+        http.post("/v1/vaults/vault-c26/enrollments", json=proof, headers=env[3][0]).status_code
+        == 200
+    )
+
+
+def test_verified_membership_is_cached_and_external_changes_fail_closed(tmp_path, monkeypatch):
+    import atlasvault_api.enrollments as admissions
+
+    (owner, _, _), env = initialize(tmp_path)
+    accept(owner, 0, env[4], backend_accept(env))
+    proof = enrollment(owner, env[2][0])
+    backend, http = env[:2]
+    assert (
+        http.post("/v1/vaults/vault-c26/enrollments", json=proof, headers=env[3][0]).status_code
+        == 200
+    )
+    calls = []
+    original = admissions.verify_enrollment_attestation
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(admissions, "verify_enrollment_attestation", counted)
+    for _ in range(10):
+        value = backend.commitments.enrollment_membership(proof["account_id"], "vault-c26")
+        value["registry"][0]["state"] = "REVOKED"
+        assert http.get("/v1/vaults/vault-c26/activations", headers=env[3][0]).status_code == 200
+    assert len(calls) <= 1
+    external = sqlite3.connect(tmp_path / "backend.sqlite")
+    bad = dict(proof, signature_b64="AA" * 43 + "==")
+    external.execute("UPDATE enrollments SET body=?", (json.dumps(bad),))
+    external.commit()
+    external.close()
+    from atlasvault_api.commitments import CommitmentConflict
+
+    with pytest.raises(CommitmentConflict):
+        backend.commitments.enrollment_membership(proof["account_id"], "vault-c26")
+
+
+def test_external_commit_immediately_after_admission_invalidates_cache(tmp_path):
+    from atlasvault_api.commitments import CommitmentConflict
+
+    (owner, _, _), env = initialize(tmp_path)
+    accept(owner, 0, env[4], backend_accept(env))
+    proof = enrollment(owner, env[2][0])
+    backend = env[0]
+    original = backend.commitments._db
+
+    class ConcurrentWriter:
+        def __getattr__(self, name):
+            return getattr(original, name)
+
+        def execute(self, sql, *args):
+            result = original.execute(sql, *args)
+            if sql == "COMMIT":
+                with sqlite3.connect(tmp_path / "backend.sqlite") as external:
+                    external.execute(
+                        "UPDATE enrollments SET body=?", (json.dumps(dict(proof, root="ab" * 32)),)
+                    )
+            return result
+
+    backend.commitments._db = ConcurrentWriter()
+    assert backend.commitments.accept_enrollment(
+        proof["account_id"], "vault-c26", proof, env[2][0].device_id
+    )
+    with pytest.raises(CommitmentConflict):
+        backend.commitments.enrollment_membership(proof["account_id"], "vault-c26")
+
+
+def test_each_successor_verifies_only_the_new_enrollment(tmp_path, monkeypatch):
+    import base64
+    import atlasvault_api.enrollments as admissions
+    from vaultsync.device_identity import device_identity_from_private_keys
+
+    (owner, _, _), env = initialize(tmp_path)
+    accept(owner, 0, env[4], backend_accept(env))
+    backend = env[0]
+    issuer = env[2][0]
+    calls = []
+    original = admissions.verify_enrollment_attestation
+
+    def counted(proof, **kwargs):
+        calls.append(proof["root"])
+        return original(proof, **kwargs)
+
+    monkeypatch.setattr(admissions, "verify_enrollment_attestation", counted)
+    for i in range(3):
+        current = backend.commitments.enrollment_membership(
+            env[4]["plan"]["account_id"], "vault-c26"
+        )
+        target = device_identity_from_private_keys(
+            signing_private_seed=bytes([80 + i]) * 32,
+            agreement_private_key=bytes([90 + i]) * 32,
+            created_at="2026-01-01T00:00:00Z",
+            key_epoch=4,
+        )
+        entry = dict(
+            device_id=target.device_id,
+            signing_public_b64=base64.b64encode(target.signing_public_key).decode(),
+            agreement_public_b64=base64.b64encode(target.agreement_public_key).decode(),
+            state="ACTIVE",
+        )
+        unsigned = {k: v for k, v in VECTOR["proof"].items() if k not in ("root", "signature_b64")}
+        unsigned.update(current["context"])
+        unsigned.update(
+            next_registry_generation=current["context"]["registry_generation"] + 1,
+            prior_registry_root=registry_root(current["registry"]),
+            resulting_registry_root=registry_root([*current["registry"], entry]),
+            target_device_id=target.device_id,
+            target_signing_public_b64=entry["signing_public_b64"],
+            target_agreement_public_b64=entry["agreement_public_b64"],
+            target_agreement_sha256=hashlib.sha256(target.agreement_public_key).hexdigest(),
+            issuer_device_id=issuer.device_id,
+        )
+        proof = create_enrollment(
+            unsigned,
+            registry=current["registry"],
+            context=current["context"],
+            confirmed_transcript=unsigned["transcript_sha256"],
+            status="ACTIVE",
+            signing_key=issuer,
+        )
+        assert backend.commitments.accept_enrollment(
+            proof["account_id"], "vault-c26", proof, issuer.device_id
+        )
+        assert (
+            backend.commitments.enrollment_membership(proof["account_id"], "vault-c26")["records"][
+                -1
+            ]
+            == proof
+        )
+        assert len(calls) == i + 1
 
 
 def test_enrollment_adds_signed_current_member_without_rewriting_activation(tmp_path):
@@ -131,6 +370,12 @@ def test_backend_enrollment_cas_and_exact_retry_preserve_activation(tmp_path):
         replies = list(pool.map(lambda _: http.post(path, json=proof, headers=env[3][0]), range(2)))
     assert [r.status_code for r in replies] == [200, 200]
     assert sorted(r.json()["appended"] for r in replies) == [False, True]
+    admitted = [
+        e for e in backend.telemetry.snapshot()["events"] if e["category"] == "enrollment_admitted"
+    ]
+    assert admitted == [
+        {"category": "enrollment_admitted", "outcome": "success", "status_code": 200}
+    ]
     assert backend.commitments.activation(proof["account_id"], "vault-c26") == record
     before = backend.commitments.read(proof["account_id"], "vault-c26")
     for field in (

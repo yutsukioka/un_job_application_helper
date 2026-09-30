@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -62,6 +63,8 @@ class CommitmentLog:
 
     def __init__(self, path: Path | str = ":memory:"):
         self._lock = threading.RLock()
+        self._membership_cache = OrderedDict()
+        self._membership_cache_stamp = None
         self._durable = str(path) not in ("", ":memory:")
         self._db = sqlite3.connect(
             str(path), timeout=10, check_same_thread=False, isolation_level=None
@@ -166,11 +169,11 @@ class CommitmentLog:
                 recipient, body = self._delivery_body(
                     account_id, vault_id, epoch, issuer_id, packet, record
                 )
-                if current and (
-                    issuer_id not in current["proof"]["plan"]["recipients"]
-                    or recipient not in current["proof"]["plan"]["recipients"]
-                ):
-                    raise CommitmentConflict()
+                if current:
+                    members = self.enrollment_membership(account_id, vault_id)["registry"]
+                    active = {entry["device_id"] for entry in members if entry["state"] == "ACTIVE"}
+                    if issuer_id not in active or recipient not in active:
+                        raise CommitmentConflict()
                 if record is None:
                     transition = packet["proof"]["activation_id"]
                     row = self._db.execute(

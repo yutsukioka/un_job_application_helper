@@ -331,10 +331,16 @@ final class AtlasVaultPrivateStateRuntime
                       value.jobKey,
             )
             .firstOrNull;
+        final timestamp = _utcSeconds(_now());
+        final committedValue = _trackerForCommit(
+          value,
+          timestamp,
+          existing?.envelope,
+        );
         return _commitEpochPayload(
           _savedJobEnvelope(
-            value,
-            timestamp: _utcSeconds(_now()),
+            committedValue,
+            timestamp: timestamp,
             existing: null,
           ),
           existing,
@@ -861,7 +867,11 @@ final class AtlasVaultPrivateStateRuntime
   ) async {
     final existing = _trackerMetadata[value.jobKey];
     final timestamp = _utcSeconds(_now());
-    final committedValue = _trackerForCommit(value, timestamp, existing);
+    final committedValue = _trackerForCommit(
+      value,
+      timestamp,
+      existing?.envelope,
+    );
     final envelope = _savedJobEnvelope(
       committedValue,
       timestamp: timestamp,
@@ -1196,9 +1206,9 @@ final class AtlasVaultPrivateStateRuntime
   AtlasApplicationRecord _trackerForCommit(
     AtlasApplicationRecord value,
     String timestamp,
-    _PrivateRecordMetadata? existing,
+    vault.AtlasVaultPayloadEnvelope? existing,
   ) {
-    final existingPayload = existing?.envelope.payload;
+    final existingPayload = existing?.payload;
     final prior = existingPayload is vault.AtlasSavedJobPayload
         ? existingPayload
         : null;

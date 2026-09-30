@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from vaultsync.device_enrollment import EnrollmentError, create_enrollment, verify_enrollment
+from vaultsync.device_enrollment import (
+    EnrollmentError,
+    create_enrollment,
+    verify_enrollment,
+    verify_enrollment_attestation,
+)
 
 V = json.loads(
     (
@@ -45,12 +50,27 @@ def test_shared_enrollment_and_active_signature():
     assert created == V["proof"]
 
 
+def test_server_attestation_does_not_substitute_for_client_confirmation():
+    assert (
+        verify_enrollment_attestation(
+            V["proof"], registry=V["registry"], context=V["context"], status="ACTIVE"
+        )
+        == checked()
+    )
+    with pytest.raises(EnrollmentError):
+        checked(transcript="aa" * 32)
+
+
 @pytest.mark.parametrize("field", list(V["proof"]))
 def test_every_authenticated_field_rejects_substitution(field):
     bad = copy.deepcopy(V["proof"])
     bad[field] = "substitution"
     with pytest.raises(EnrollmentError, match="^ATLAS_ENROLLMENT_REJECTED$"):
         checked(bad)
+    with pytest.raises(EnrollmentError, match="^ATLAS_ENROLLMENT_REJECTED$"):
+        verify_enrollment_attestation(
+            bad, registry=V["registry"], context=V["context"], status="ACTIVE"
+        )
 
 
 @pytest.mark.parametrize("field", list(V["context"]))

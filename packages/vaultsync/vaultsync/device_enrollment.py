@@ -1,7 +1,8 @@
 """D099 additive enrollment signature. No activation, delivery, or HPKE mutation.
 
-The caller supplies durable current context and a locally confirmed transcript,
-never context or confirmation inferred from the incoming enrollment itself.
+Client verification requires independently confirmed local ceremony state.
+Backend attestation verification checks the ACTIVE issuer's signed claim; it
+does not observe or independently confirm the human SAS comparison.
 """
 
 import base64
@@ -61,7 +62,27 @@ def _message(root):
 
 
 def verify_enrollment(proof, *, registry, context, confirmed_transcript, status):
-    """Verify one next-generation addition, not a replay/idempotency store."""
+    """Client admission: require a transcript obtained from local ceremony state."""
+    try:
+        if (
+            _hex(confirmed_transcript) == "0" * 64
+            or proof["transcript_sha256"] != confirmed_transcript
+        ):
+            _reject()
+        return verify_enrollment_attestation(
+            proof, registry=registry, context=context, status=status
+        )
+    except Exception:
+        raise EnrollmentError("ATLAS_ENROLLMENT_REJECTED") from None
+
+
+def verify_enrollment_attestation(proof, *, registry, context, status):
+    """Server admission: authenticate the issuer's claim, not local SAS confirmation.
+
+    Expected registry/context must still come from trusted durable state. A
+    compromised ACTIVE issuer can sign a false confirmation claim; this verifier
+    cannot distinguish that from an honestly completed client ceremony.
+    """
     try:
         _exact(proof, FIELDS | {"root", "signature_b64"})
         _exact(context, CONTEXT)
@@ -85,8 +106,7 @@ def verify_enrollment(proof, *, registry, context, confirmed_transcript, status)
                 _reject()
         if (
             _number(proof["next_registry_generation"]) != context["registry_generation"] + 1
-            or _hex(confirmed_transcript) == "0" * 64
-            or proof["transcript_sha256"] != confirmed_transcript
+            or _hex(proof["transcript_sha256"]) == "0" * 64
             or registry_root(registry) != proof["prior_registry_root"]
         ):
             _reject()

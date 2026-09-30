@@ -34,7 +34,7 @@ DEFAULT_RESERVED_RETAINED_BYTES = 256 * 1024 * 1024
 MAX_RETAINED_SECURITY_EVENTS = 256
 MAX_COUNTER_PRUNE_PER_REQUEST = 64
 
-_CATEGORIES = frozenset({"account", "storage", "other"})
+_CATEGORIES = frozenset({"account", "storage", "enrollment_admitted", "other"})
 _SECURITY_LOGGER = logging.getLogger("atlasvault_api.security")
 
 
