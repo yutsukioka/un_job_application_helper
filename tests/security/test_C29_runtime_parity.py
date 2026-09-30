@@ -707,7 +707,11 @@ def test_legacy_import_uses_existing_authority_and_checks_content_and_lineage() 
         SWIFT + "AtlasVaultActivationController.swift", "static func runtimeServices<"
     )
     legacy_scope = _block(
-        scope, "if FileManager.default.fileExists(atPath: legacyURL.path)"
+        scope, "if try perVaultServices.pathLocator.localStoreExists(vaultID: vaultID)"
+    )
+    _find(
+        _function(SWIFT + "AtlasVaultPathLocator.swift", "func localStoreExists"),
+        "FileManager.default.fileExists(atPath: localStoreURL(vaultID: vaultID).path)",
     )
     _ordered(
         legacy_scope,

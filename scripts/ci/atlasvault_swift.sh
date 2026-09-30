@@ -70,7 +70,9 @@ flutter test test/tab_golden_test.dart
 
 cd "$APPLE_ROOT"
 
-xcodebuild -scheme AtlasApple -destination 'generic/platform=iOS Simulator' -derivedDataPath "$TEMP_ROOT/AtlasApple" CODE_SIGNING_ALLOWED=NO build
+# Build the iOS-compatible library product. The aggregate package scheme also
+# includes AtlasMacHost, which is a macOS-only executable.
+xcodebuild -scheme AtlasUI -destination 'generic/platform=iOS Simulator' -derivedDataPath "$TEMP_ROOT/AtlasApple" CODE_SIGNING_ALLOWED=NO build
 
 xcodebuild -project AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost -destination 'generic/platform=iOS Simulator' -derivedDataPath "$TEMP_ROOT/AtlasIOSHost" CODE_SIGNING_ALLOWED=NO build
 
