@@ -40,7 +40,7 @@ jobs:
 
       - name: Bandit security scan
         if: ${{ !cancelled() }}
-        run: bandit -q -r services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
+        run: bandit -q -r services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py packages/jobagg/jobagg/storage_retention.py packages/jobagg/jobagg/storage_cold_archive.py
 
       - name: Dependency vulnerability audit
         if: ${{ !cancelled() }}
@@ -48,7 +48,7 @@ jobs:
 
       - name: Ruff security scan
         if: ${{ !cancelled() }}
-        run: ruff check --select=S --ignore=S104 services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py
+        run: ruff check --select=S --ignore=S104 services/job-api/job_api packages/vaultsync/vaultsync packages/jobagg/jobagg/http_safe.py packages/jobagg/jobagg/browser_proxy.py packages/jobagg/jobagg/atomic_files.py packages/jobagg/jobagg/filters/saved_searches.py packages/jobagg/jobagg/pipelines/bundle_verify.py packages/jobagg/jobagg/storage_retention.py packages/jobagg/jobagg/storage_cold_archive.py
 
       - name: Security regression tests
         if: ${{ !cancelled() }}
