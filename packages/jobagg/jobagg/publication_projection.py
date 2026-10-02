@@ -113,20 +113,23 @@ def _accepted_attempt_ids(origin, deadline_at):
             proof = json.loads(row["accepted_proof"])
         except (TypeError, ValueError):
             continue  # The unchanged bad observation is still copied and rejected.
-        for binding in matching_detail_attempts(origin, row, proof):
+        for binding in matching_detail_attempts(origin, row, proof, deadline_at=deadline_at):
             identifiers.add(binding["attempt"]["attempt_id"])
     return identifiers
 
 
 def build_projection(origin, destination, *, deadline_at=None):
     """Copy only declared read dependencies within a single pinned source TX."""
-    origin.execute("BEGIN")
-    origin.set_progress_handler(
-        lambda: int(deadline_at is not None and time.monotonic() >= deadline_at), 1000
-    )
-    destination.execute("PRAGMA journal_mode=DELETE")
-    destination.execute("PRAGMA synchronous=FULL")
-    destination.execute("BEGIN")
+    if origin.in_transaction or destination.in_transaction:
+        raise ValueError("Publication projection requires connections without active transactions")
+    _check(deadline_at)
+    started = time.monotonic()
+    timings = {"tables": {}}
+    phase = "setup"
+
+    def progress():
+        return int(deadline_at is not None and time.monotonic() >= deadline_at)
+
     manifest = {
         "version": VERSION,
         "filters": FILTERS,
@@ -135,8 +138,15 @@ def build_projection(origin, destination, *, deadline_at=None):
         "freshness_or_completeness_certified": False,
     }
     try:
+        origin.execute("BEGIN")
+        origin.set_progress_handler(progress, 1000)
+        destination.set_progress_handler(progress, 1000)
+        destination.execute("PRAGMA journal_mode=DELETE")
+        destination.execute("PRAGMA synchronous=FULL")
+        destination.execute("BEGIN")
         if not _exists(origin, "jobs") or not _exists(origin, "remediation_observations"):
             raise ValueError("Publication projection requires jobs and observations schema")
+        phase = "original_diagnostics"
         manifest["original_diagnostics"] = {
             "worker_jobs": origin.execute("SELECT count(*) FROM jobs").fetchone()[0],
             "jobs_without_observations": origin.execute(
@@ -148,8 +158,14 @@ def build_projection(origin, destination, *, deadline_at=None):
             if _exists(origin, "baseline_inventory_jobs")
             else 0,
         }
+        timings["original_diagnostics_seconds"] = time.monotonic() - started
+        phase = "accepted_detail_lineage"
+        lineage_started = time.monotonic()
         accepted_attempt_ids = _accepted_attempt_ids(origin, deadline_at)
+        timings["accepted_detail_lineage_seconds"] = time.monotonic() - lineage_started
         for table, predicate in FILTERS.items():
+            phase = "copy_table:" + table
+            table_started = time.monotonic()
             _check(deadline_at)
             schema = _exists(origin, table)
             if schema is None:
@@ -201,6 +217,8 @@ def build_projection(origin, destination, *, deadline_at=None):
                 destination.execute(insert, values)
                 digest.update((_row_digest(values) + "\n").encode())
                 count += 1
+            copy_finished = time.monotonic()
+            phase = "readback_table:" + table
             actual_digest, actual_count = hashlib.sha256(), 0
             for row in destination.execute(
                 "SELECT " + quoted + ' FROM "' + table + '" ORDER BY ' + order_sql
@@ -218,11 +236,19 @@ def build_projection(origin, destination, *, deadline_at=None):
                 "source_rows": origin.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0],
                 "sha256": digest.hexdigest(),
             }
+            readback_finished = time.monotonic()
+            phase = "indexes_table:" + table
             for index in origin.execute(
                 "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL ORDER BY name",
                 (table,),
             ):
                 destination.execute(index[0])
+            timings["tables"][table] = {
+                "copy_seconds": copy_finished - table_started,
+                "readback_seconds": readback_finished - copy_finished,
+                "index_seconds": time.monotonic() - readback_finished,
+            }
+        phase = "manifest"
         validate_manifest(manifest)
         manifest_sha = _sha(manifest)
         destination.execute(
@@ -234,12 +260,22 @@ def build_projection(origin, destination, *, deadline_at=None):
         )
         _check(deadline_at)
         destination.commit()
-        return {"manifest": manifest, "sha256": manifest_sha}
-    except BaseException:
+        timings["total_seconds"] = time.monotonic() - started
+        return {"manifest": manifest, "sha256": manifest_sha, "timings": timings}
+    except BaseException as exc:
+        destination.set_progress_handler(None, 0)
         destination.rollback()
+        if (
+            isinstance(exc, sqlite3.OperationalError)
+            and getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT
+            and deadline_at is not None
+            and time.monotonic() >= deadline_at
+        ):
+            raise TimeoutError("Publication projection deadline exhausted during " + phase) from exc
         raise
     finally:
         origin.set_progress_handler(None, 0)
+        destination.set_progress_handler(None, 0)
         origin.rollback()
 
 

@@ -291,6 +291,14 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
             "worker_acceptance_sha256": acceptance_sha256,
             **({"projection": projection_receipt} if projection else {}),
         }
+    except sqlite3.OperationalError as exc:
+        if (
+            getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT
+            and deadline_at is not None
+            and time.monotonic() >= deadline_at
+        ):
+            raise TimeoutError("Publication snapshot deadline exhausted during SQLite validation") from exc
+        raise
     finally:
         # Close on failed backup/validation too, then remove only our unpublished temp.
         for connection in (locals().get("origin"), locals().get("copy")):
