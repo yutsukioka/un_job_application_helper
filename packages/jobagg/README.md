@@ -512,6 +512,11 @@ The defaults live in `config/robots_policy.yaml`.
 
 ## Development
 
+For implementation and review, read the [JobAgg change and review policy](docs/change-and-review-policy.md)
+and its evidence/enforcement map. The deployed deterministic cron workflow is
+described in [DETERMINISTIC_FETCH.md](DETERMINISTIC_FETCH.md); the CLI examples
+above describe separate entry points and do not authorize production changes.
+
 ```bash
 cd packages/jobagg
 pip install -e ".[dev]"

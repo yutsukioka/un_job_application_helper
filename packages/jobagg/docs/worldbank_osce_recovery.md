@@ -1,5 +1,11 @@
 # World Bank and OSCE recovery
 
+This records an earlier recovery implementation. OSCE's 1 October server-page
+listing and ordinary HTTP detail paths supersede the UI flow described below;
+see the [portable recovery evidence](recovery-integration-evidence-2026-10-01.md#osce-recovery).
+Use the [JobAgg change and review policy](change-and-review-policy.md) for future
+changes. Historical commands and receipts do not authorize another hold reset.
+
 The collectors enumerate the current board and independently reconcile captured
 IDs against the provider's advertised total. Counts and OSCE session numbers are
 never configured. The ordinary worker queues a separate public-detail task for
