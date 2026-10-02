@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:atlas/main.dart';
 import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
@@ -82,7 +84,21 @@ void main() {
 
     await tester.tap(find.text('Saved').last);
     await tester.pumpAndSettle();
-    expect(find.text('Saved Searches'), findsOneWidget);
+    if (Platform.isAndroid ||
+        Platform.isIOS ||
+        Platform.isMacOS ||
+        Platform.isWindows) {
+      // Supported platforms own an encrypted runtime before it is unlocked.
+      expect(find.text('Private records'), findsOneWidget);
+      expect(find.text('Read only'), findsOneWidget);
+      expect(find.text('No records'), findsOneWidget);
+      final createRecord = find.byWidgetPredicate(
+        (widget) => widget is IconButton && widget.tooltip == 'Create record',
+      );
+      expect(tester.widget<IconButton>(createRecord).onPressed, isNull);
+    } else {
+      expect(find.text('Saved Searches'), findsOneWidget);
+    }
 
     await tester.tap(find.text('Updates').last);
     await tester.pumpAndSettle();

@@ -78,9 +78,12 @@ class EpochVault:
         vault_id,
         key_epoch,
         state_root,
+        history_origin=None,
     ):
         self._key = bytes(storage_key)
         self._registry = copy.deepcopy(registry)
+        self._history_origin = copy.deepcopy(history_origin)
+        self._enrollment_staging = None
         self._context = dict(
             account_id=_identifier(account_id),
             vault_id=_identifier(vault_id),
@@ -89,6 +92,10 @@ class EpochVault:
             state_root=state_root,
             registry_root=registry_root(registry),
         )
+        if history_origin is not None:
+            self._context["history_origin_sha256"] = hashlib.sha256(
+                _canonical(history_origin)
+            ).hexdigest()
         if (
             device_id not in [e["device_id"] for e in registry]
             or type(key_epoch) is not int
@@ -114,7 +121,12 @@ class EpochVault:
         from .epoch_catch_up import bridge_records, verify_bridges
 
         records = bridge_records(state["components"]["history"])
-        return records, verify_bridges(records, self._registry, self._context)
+        context = (
+            self._history(state)._bridge_context()
+            if self._history_origin is not None
+            else self._context
+        )
+        return records, verify_bridges(records, self._registry, context)
 
     def _state_root(self, state):
         views = state["components"]["history"].get("views")
@@ -151,7 +163,11 @@ class EpochVault:
         return self._verify(record["proof"], state)
 
     def _load(self):
-        s = self._file.read({})
+        s = (
+            copy.deepcopy(self._enrollment_staging)
+            if self._enrollment_staging is not None
+            else self._file.read({})
+        )
         _exact(
             s,
             {
@@ -177,7 +193,7 @@ class EpochVault:
             _reject()
         registry_root(s["registry"])
         self._ring(s)
-        if set(s["components"]) != {"history", "outbox", "inbox"}:
+        if set(s["components"]) - {"runtime"} != {"history", "outbox", "inbox"}:
             _reject()
         journal = s["journal"]
         if journal and journal.get("kind") == "CATCH_UP":
@@ -206,9 +222,12 @@ class EpochVault:
                 _reject()
             if journal["phase"] == "ACTIVE":
                 records, bridges = self._bridges(s)
+                rotations = [
+                    r for r in records if r.get("format") != "atlasvault-enrollment-bridge"
+                ]
                 if (
-                    not records
-                    or self._bridge_proof(records[-1]) != journal["proof"]
+                    not rotations
+                    or self._bridge_proof(rotations[-1]) != journal["proof"]
                     or not bridges
                 ):
                     _reject()
@@ -224,7 +243,7 @@ class EpochVault:
                         or record["proof"] != journal["proof"]
                     ):
                         _reject()
-                plan = journal["proof"]["plan"]
+                plan = bridges[-1]["plan"]
                 if (
                     s["epoch"] != plan["new_epoch"]
                     or registry_root(s["registry"]) != plan["resulting_registry_root"]
@@ -239,6 +258,29 @@ class EpochVault:
                         _reject()
         return s
 
+    @_checked
+    def enrollment_context(self):
+        from .epoch_enrollment import current_context
+
+        with self._lock:
+            s = self._load()
+            self._active(s)
+            return current_context(self, s)
+
+    @_checked
+    def enrollment_registry(self):
+        with self._lock:
+            s = self._load()
+            self._active(s)
+            return copy.deepcopy(s["registry"])
+
+    @_checked
+    def accept_enrollment(self, proof, *, confirmed_transcript):
+        from .epoch_enrollment import accept_enrollment
+
+        with self._lock:
+            return accept_enrollment(self, proof, confirmed_transcript)
+
     def _ring(self, s):
         if type(s["keys"]) is not dict or not 1 <= len(s["keys"]) <= 32:
             _reject()
@@ -248,6 +290,10 @@ class EpochVault:
         return VaultKeyEpochRing.from_entries(current_key_epoch=s["epoch"], keys=keys)
 
     def _history(self, s):
+        if self._history_origin is not None:
+            from .anchored_history import publication_history
+
+            return publication_history(self, _EpochComponent(self, "history"))
         context = s["components"]["history"]["context"]
         if any(context[k] != self._context[k] for k in ("account_id", "vault_id", "key_epoch")):
             _reject()
@@ -275,11 +321,19 @@ class EpochVault:
             _reject("ATLAS_RECOVERY_PENDING")
 
     @_checked
-    def initialize(self, keys, *, history, outbox=None, inbox=None):
+    def initialize(self, keys, *, history, outbox=None, inbox=None, enrollment_projection=None):
         with self._lock:
             if self._file.path.exists():
                 _reject()
             h = history._load()
+            if self._history_origin is not None:
+                if history.publication_origin() != self._history_origin:
+                    _reject("ATLAS_BOOTSTRAP_REJECTED")
+                from .anchored_history import publication_history
+
+                publication_history(self, _EpochComponent(self, "history"))
+            elif history._origin is not None:
+                _reject("ATLAS_BOOTSTRAP_REQUIRED")
             if (
                 h["status"] != "ACTIVE"
                 or not h["views"]
@@ -295,27 +349,30 @@ class EpochVault:
                 outbox.pending_operations()
             if inbox:
                 inbox.pending_operations()
-            self._file.write(
-                dict(
-                    context=self._context,
-                    status="ACTIVE",
-                    epoch=self._context["key_epoch"],
-                    registry=self._registry,
-                    recipients=sorted(
-                        e["device_id"] for e in self._registry if e["state"] == "ACTIVE"
-                    ),
-                    keys={str(k): base64.b64encode(v).decode() for k, v in keys.items()},
-                    components=dict(
-                        history=h,
-                        outbox=outbox._store.read(_outbox_default())
-                        if outbox
-                        else _outbox_default(),
-                        inbox=inbox._store.read(_inbox_default()) if inbox else _inbox_default(),
-                    ),
-                    journal=None,
-                    generation=1,
-                )
-            )
+            initial = {
+                "context": self._context,
+                "status": "ACTIVE",
+                "epoch": self._context["key_epoch"],
+                "registry": self._registry,
+                "recipients": sorted(
+                    e["device_id"] for e in self._registry if e["state"] == "ACTIVE"
+                ),
+                "keys": {str(k): base64.b64encode(v).decode() for k, v in keys.items()},
+                "components": {
+                    "history": h,
+                    "outbox": outbox._store.read(_outbox_default())
+                    if outbox
+                    else _outbox_default(),
+                    "inbox": inbox._store.read(_inbox_default()) if inbox else _inbox_default(),
+                },
+                "journal": None,
+                "generation": 1,
+            }
+            if enrollment_projection is not None:
+                from .enrollment_runtime import stage_runtime_projection
+
+                initial = stage_runtime_projection(self, initial, enrollment_projection)
+            self._file.write(initial)
 
     def catch_up(
         self, packets, *, current_activation_id, agreement_private_key, history_updates=()
@@ -708,13 +765,20 @@ class EpochVault:
                 author_registry = s["registry"]
             elif envelope.key_epoch == self._context["key_epoch"]:
                 author_registry = self._registry
+            elif (
+                self._history_origin is not None and envelope.key_epoch < self._context["key_epoch"]
+            ):
+                from .historical_authority import retained_author
+
+                author_registry = retained_author(self, s, envelope)
             else:
                 records, _ = self._bridges(s)
                 author_registry = next(
                     (
                         self._bridge_proof(record)["registry"]
                         for record in records
-                        if self._bridge_proof(record)["plan"]["previous_epoch"]
+                        if record.get("format") != "atlasvault-enrollment-bridge"
+                        and self._bridge_proof(record)["plan"]["previous_epoch"]
                         == envelope.key_epoch
                     ),
                     None,

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtlasVault enrollment acknowledgement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "delivery_sha256", "anchor_root", "transcript_sha256", "recipient_device_id", "signature_b64"],
+  "properties": {
+    "format": {"const": "atlasvault-enrollment-acknowledgement"},
+    "version": {"const": 1, "type": "integer"},
+    "delivery_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "anchor_root": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "transcript_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "recipient_device_id": {"type": "string", "pattern": "^avd1-[0-9a-f]{64}$"},
+    "signature_b64": {"type": "string", "minLength": 88, "maxLength": 88}
+  }
+}

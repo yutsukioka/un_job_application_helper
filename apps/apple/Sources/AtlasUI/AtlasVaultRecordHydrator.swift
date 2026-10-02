@@ -8,6 +8,8 @@ public protocol AtlasVaultRecordHydrating: Sendable {
 }
 
 public struct AtlasVaultHydratedState: Equatable, Sendable {
+    // Local presentation capability only; not part of any encrypted record schema.
+    public var isReadOnly: Bool
     public var savedSearches: [AtlasHydratedSavedSearch]
     public var savedJobs: [AtlasHydratedSavedJob]
     public var applicationNotes: [AtlasHydratedApplicationNote]
@@ -21,7 +23,8 @@ public struct AtlasVaultHydratedState: Equatable, Sendable {
         applicationNotes: [AtlasHydratedApplicationNote] = [],
         profileSnippets: [AtlasHydratedProfileSnippet] = [],
         draftMetadata: [AtlasHydratedDraftMetadata] = [],
-        tombstones: [AtlasHydratedTombstone] = []
+        tombstones: [AtlasHydratedTombstone] = [],
+        isReadOnly: Bool = false
     ) {
         self.savedSearches = savedSearches
         self.savedJobs = savedJobs
@@ -29,6 +32,7 @@ public struct AtlasVaultHydratedState: Equatable, Sendable {
         self.profileSnippets = profileSnippets
         self.draftMetadata = draftMetadata
         self.tombstones = tombstones
+        self.isReadOnly = isReadOnly
     }
 }
 
@@ -192,7 +196,15 @@ public struct AtlasVaultRecordHydrator: AtlasVaultRecordHydrating {
 
         let metadata = AtlasHydratedRecordMetadata(record: record)
         let plaintext = try open(record: record, session: session)
-        guard !record.deleted else {
+        try hydratePayload(plaintext, metadata: metadata, into: &state)
+    }
+
+    func hydratePayload(
+        _ plaintext: Data,
+        metadata: AtlasHydratedRecordMetadata,
+        into state: inout AtlasVaultHydratedState
+    ) throws {
+        guard !metadata.deleted else {
             state.tombstones.append(AtlasHydratedTombstone(metadata: metadata))
             return
         }

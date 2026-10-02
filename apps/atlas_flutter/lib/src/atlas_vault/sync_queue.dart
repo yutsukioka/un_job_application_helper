@@ -11,12 +11,24 @@ import '../cache_file_replacement.dart';
 import 'epoch_rotation.dart' as rotation;
 import 'key_epochs.dart';
 import 'device_delivery.dart' as delivery;
+import 'device_enrollment.dart' as enrollment;
+import 'device_identity.dart' as identity;
+import 'payloads.dart';
+import 'models.dart' as legacy;
+import 'crypto.dart' as record_crypto;
 
 part 'authenticated_state_view.dart';
 part 'sync_recovery.dart';
+part 'anchored_history.dart';
+part 'historical_authority.dart';
+part 'enrollment_delivery.dart';
+part 'runtime_enrollment.dart';
 part 'revocation.dart';
 part 'epoch_vault.dart';
 part 'epoch_catch_up.dart';
+part 'runtime_records.dart';
+part 'runtime_binding.dart';
+part 'epoch_enrollment.dart';
 
 const _patchFormat = 'atlasvault-encrypted-patch-operation';
 const _opaqueEnvelopeFormat = 'atlasvault-opaque-ciphertext-envelope';
@@ -1208,7 +1220,7 @@ final class AtlasVaultDurableEncryptedConvergentReplica {
 
   final String _collectionId;
   final Uint8List _authenticationKey;
-  final _EncryptedQueueFile _store;
+  _EncryptedQueueFile _store;
 
   Future<_ConvergentReplicaState> _load() => _loadConvergentReplica(
     _store,

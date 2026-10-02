@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtlasVault recipient-bound history bootstrap v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "account_id",
+    "vault_id",
+    "activation_id",
+    "registry_generation",
+    "key_epoch",
+    "registry_root",
+    "state_root",
+    "sequence",
+    "collection_id",
+    "collection_root",
+    "collection_sha256",
+    "enrollment_root",
+    "recipient_device_id",
+    "recipient_agreement_sha256",
+    "transcript_sha256",
+    "issuer_device_id",
+    "signature_algorithm",
+    "root",
+    "signature_b64"
+  ],
+  "properties": {
+    "format": {
+      "const": "atlasvault-history-bootstrap"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "account_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+    },
+    "vault_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+    },
+    "activation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "registry_generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740990
+    },
+    "key_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740990
+    },
+    "registry_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "state_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740990
+    },
+    "collection_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.~-]{1,128}$"
+    },
+    "collection_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "collection_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "enrollment_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "recipient_device_id": {
+      "type": "string",
+      "pattern": "^avd1-[0-9a-f]{64}$"
+    },
+    "recipient_agreement_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "transcript_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "issuer_device_id": {
+      "type": "string",
+      "pattern": "^avd1-[0-9a-f]{64}$"
+    },
+    "signature_algorithm": {
+      "const": "Ed25519"
+    },
+    "root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signature_b64": {
+      "type": "string",
+      "minLength": 88,
+      "maxLength": 88,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  }
+}

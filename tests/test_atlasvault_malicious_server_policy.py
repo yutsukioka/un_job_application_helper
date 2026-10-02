@@ -20,10 +20,14 @@ def test_c27_standalone_swift_build_includes_recovery_dependencies():
     }
     assert {
         "AtlasVaultDeviceDelivery.swift",
+        "AtlasVaultDeviceEnrollment.swift",
         "AtlasVaultEpochCatchUp.swift",
         "AtlasVaultEpochVault.swift",
         "AtlasVaultKeyStore.swift",
     }.issubset(names)
+    assert any(name.endswith("AtlasVaultC24Boundary.swift") for name in names)
+    boundary = (ROOT / "scripts/ci/support/AtlasVaultC24Boundary.swift").read_text()
+    assert "throw AtlasVaultBootstrapError.rejected" in boundary
 
 
 def test_c24_hosted_gate_runs_and_removes_hash_only_report():

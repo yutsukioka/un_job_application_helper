@@ -3478,8 +3478,9 @@ final class _ControllerPairingCoordinator
       _pending();
 
   @override
-  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch() async =>
-      _pending();
+  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch({
+    String? expectedTranscriptSha256,
+  }) async => _pending();
 
   @override
   Future<AtlasVaultTrustedPairingResult> saveKeyDelivery() async => _pending();

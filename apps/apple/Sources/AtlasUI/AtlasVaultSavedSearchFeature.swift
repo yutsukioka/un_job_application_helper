@@ -30,9 +30,11 @@ public struct AtlasVaultSavedSearchSnapshot:
     CustomDebugStringConvertible
 {
     public let searches: [AtlasVaultSavedSearchPresentation]
+    public let isReadOnly: Bool
 
-    public init(searches: [AtlasVaultSavedSearchPresentation]) {
+    public init(searches: [AtlasVaultSavedSearchPresentation], isReadOnly: Bool = false) {
         self.searches = searches
+        self.isReadOnly = isReadOnly
     }
 
     public var description: String {
@@ -678,7 +680,7 @@ public actor AtlasVaultSavedSearchCoordinator:
         }
 
         return Projection(
-            snapshot: AtlasVaultSavedSearchSnapshot(searches: searches),
+            snapshot: AtlasVaultSavedSearchSnapshot(searches: searches, isReadOnly: state.isReadOnly),
             mapping: mapping,
             recordIdentifiers: recordIdentifiers
         )

@@ -9,6 +9,19 @@ public protocol AtlasVaultPathLocator: Sendable {
     func localStoreURL(vaultID: String) throws -> URL
 }
 
+public extension AtlasVaultPathLocator {
+    func localStoreExists(vaultID: String) throws -> Bool {
+        try FileManager.default.fileExists(atPath: localStoreURL(vaultID: vaultID).path)
+    }
+
+    func epochDirectoryExists(vaultID: String) throws -> Bool {
+        let directory = try localStoreURL(vaultID: vaultID)
+            .deletingLastPathComponent()
+            .appendingPathComponent("epoch", isDirectory: true)
+        return FileManager.default.fileExists(atPath: directory.path)
+    }
+}
+
 public struct AtlasInjectedRootVaultPathLocator: AtlasVaultPathLocator {
     public static let atlasDirectoryName = "Atlas"
     public static let vaultsDirectoryName = "Vaults"

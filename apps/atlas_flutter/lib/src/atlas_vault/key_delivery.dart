@@ -1319,6 +1319,27 @@ void _validateArtifactPayload(
         exactLength: 32,
       );
     case AtlasVaultPairingArtifactKind.delivery:
+      if (payload.containsKey('enrollment_delivery')) {
+        requireAtlasVaultExactKeys(
+          payload,
+          requiredKeys: const {'enrollment_delivery', 'inviter_proof'},
+          context: 'Enrollment delivery artifact',
+        );
+        final packet = requireAtlasVaultObject(
+          payload['enrollment_delivery'],
+          context: 'enrollment delivery',
+        );
+        if (packet['format'] != 'atlasvault-enrollment-delivery' ||
+            packet['version'] != 1) {
+          throw const AtlasVaultKeyDeliveryException();
+        }
+        requireAtlasVaultCanonicalBase64(
+          payload['inviter_proof'],
+          field: 'inviter_proof',
+          exactLength: 32,
+        );
+        break;
+      }
       requireAtlasVaultExactKeys(
         payload,
         requiredKeys: const <String>{
@@ -1343,6 +1364,40 @@ void _validateArtifactPayload(
         exactLength: 32,
       );
     case AtlasVaultPairingArtifactKind.acknowledgement:
+      if (payload.containsKey('enrollment_acknowledgement')) {
+        requireAtlasVaultExactKeys(
+          payload,
+          requiredKeys: const {'enrollment_acknowledgement'},
+          context: 'Enrollment acknowledgement',
+        );
+        final receipt = requireAtlasVaultObject(
+          payload['enrollment_acknowledgement'],
+          context: 'Enrollment acknowledgement',
+        );
+        requireAtlasVaultExactKeys(
+          receipt,
+          requiredKeys: const {
+            'format',
+            'version',
+            'delivery_sha256',
+            'anchor_root',
+            'transcript_sha256',
+            'recipient_device_id',
+            'signature_b64',
+          },
+          context: 'Enrollment acknowledgement',
+        );
+        if (receipt['format'] != 'atlasvault-enrollment-acknowledgement' ||
+            receipt['version'] != 1) {
+          throw const AtlasVaultKeyDeliveryException();
+        }
+        requireAtlasVaultCanonicalBase64(
+          receipt['signature_b64'],
+          field: 'signature_b64',
+          exactLength: 64,
+        );
+        break;
+      }
       requireAtlasVaultExactKeys(
         payload,
         requiredKeys: const <String>{'signed_acknowledgement'},

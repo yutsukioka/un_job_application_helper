@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AtlasVault Zero-Knowledge Sync API",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Account/device-authorized ciphertext-only storage with conditional revisions, safe retries, bounded requests, throttling, and secret-free observability."
   },
   "x-atlasvault-c15-controls": {
@@ -1309,6 +1309,131 @@
           },
           "403": {
             "description": "The authenticated device is revoked for this activation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/enrollments": {
+      "post": {
+        "summary": "Accept Device Enrollment",
+        "operationId": "acceptDeviceEnrollment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+)$",
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceEnrollmentProof"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentReceipt"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request path, header, or body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestValidationFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Account or device authorization failed",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the fixed ciphertext request ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authenticated account or device request window is exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Opaque storage request is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Opaque revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Durable enrollment storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -2634,6 +2759,192 @@
           "key_epoch"
         ],
         "title": "ActivationReceipt"
+      },
+      "DeviceEnrollmentProof": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "atlasvault-device-enrollment",
+            "title": "Format"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version"
+          },
+          "account_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Account Id"
+          },
+          "vault_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Vault Id"
+          },
+          "registry_generation": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Registry Generation"
+          },
+          "next_registry_generation": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Next Registry Generation"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Key Epoch"
+          },
+          "state_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "State Root"
+          },
+          "activation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Activation Id"
+          },
+          "prior_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Prior Registry Root"
+          },
+          "resulting_registry_root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Resulting Registry Root"
+          },
+          "target_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Target Device Id"
+          },
+          "target_signing_public_b64": {
+            "type": "string",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^[A-Za-z0-9+/]+=$",
+            "title": "Target Signing Public B64"
+          },
+          "target_agreement_public_b64": {
+            "type": "string",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^[A-Za-z0-9+/]+=$",
+            "title": "Target Agreement Public B64"
+          },
+          "target_agreement_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Agreement Sha256"
+          },
+          "transcript_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Transcript Sha256"
+          },
+          "issuer_device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Issuer Device Id"
+          },
+          "authorization_category": {
+            "type": "string",
+            "const": "SAS_CONFIRMED",
+            "title": "Authorization Category"
+          },
+          "signature_algorithm": {
+            "type": "string",
+            "const": "Ed25519",
+            "title": "Signature Algorithm"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Root"
+          },
+          "signature_b64": {
+            "type": "string",
+            "maxLength": 88,
+            "minLength": 88,
+            "pattern": "^[A-Za-z0-9+/]+==$",
+            "title": "Signature B64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "vault_id",
+          "registry_generation",
+          "next_registry_generation",
+          "key_epoch",
+          "state_root",
+          "activation_id",
+          "prior_registry_root",
+          "resulting_registry_root",
+          "target_device_id",
+          "target_signing_public_b64",
+          "target_agreement_public_b64",
+          "target_agreement_sha256",
+          "transcript_sha256",
+          "issuer_device_id",
+          "authorization_category",
+          "signature_algorithm",
+          "root",
+          "signature_b64"
+        ],
+        "title": "DeviceEnrollmentProof"
+      },
+      "EnrollmentReceipt": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Root"
+          },
+          "registry_generation": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Registry Generation"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Key Epoch"
+          },
+          "appended": {
+            "type": "boolean",
+            "title": "Appended"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "root",
+          "registry_generation",
+          "key_epoch",
+          "appended"
+        ],
+        "title": "EnrollmentReceipt"
       }
     }
   }

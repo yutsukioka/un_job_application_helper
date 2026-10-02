@@ -5,10 +5,12 @@ import 'package:atlas/atlas.dart' as app;
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/atlas_vault_windows.dart';
+import 'package:atlas/src/atlas_vault/canonical_json.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/atlas_vault_pairing_fakes.dart';
+import 'support/atlas_vault_runtime_fixtures.dart';
 import 'support/atlas_vault_vector_loader.dart';
 
 void main() {
@@ -21,6 +23,200 @@ void main() {
       'atlasvault_trusted_pairing_delivery_vectors_v1.json',
     );
   });
+
+  for (final interrupted in [false, true]) {
+    test(
+      'second enrollment completes after acknowledgement interrupted=$interrupted',
+      () async {
+        final journey = await _PairingJourney.create(
+          vector,
+          inviterTransactionReplaceFailureStage:
+              AtlasVaultPairingStage.trustCommitted,
+          inviterTransactionReplaceFailures: interrupted ? 1 : 0,
+        );
+        addTearDown(journey.stop);
+        await _exchangeDelivery(journey);
+        final firstDelivery = AtlasVaultPairingArtifact.fromCanonicalBytes(
+          journey.inviterStage.values[AtlasVaultPairingArtifactKind.delivery]!,
+        );
+        final firstPacket = atlasVaultObject(
+          firstDelivery.payload['enrollment_delivery'],
+        );
+        final firstRecipient = await _runtimeIdentity(true);
+        addTearDown(firstRecipient.destroy);
+        final firstHash = await atlasVaultSha256Hex(
+          firstDelivery.canonicalBytes(),
+        );
+        final firstAck = await AtlasVaultEnrollmentDelivery.acknowledge(
+          firstPacket,
+          firstHash,
+          firstRecipient,
+        );
+        expect(
+          (await journey.invitee.importKeyDelivery()).disposition,
+          AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+        );
+        expect(
+          (await journey.invitee.savePairingAcknowledgement()).disposition,
+          AtlasVaultTrustedPairingDisposition.completed,
+        );
+        expect(
+          (await journey.inviter.importPairingAcknowledgement()).disposition,
+          interrupted
+              ? AtlasVaultTrustedPairingDisposition.recoveryRequired
+              : AtlasVaultTrustedPairingDisposition.completed,
+        );
+        if (interrupted) {
+          expect(
+            journey.inviterTransactions.value!.stage,
+            AtlasVaultPairingStage.acknowledgementConsumed,
+          );
+          final restarted = journey.restartInviter();
+          addTearDown(restarted.stop);
+          expect(
+            (await restarted.resumePairing()).disposition,
+            AtlasVaultTrustedPairingDisposition.completed,
+          );
+        }
+        expect(await journey.inviterTransactions.read(), isNull);
+        // Reopen the encrypted sender state before the next ceremony.
+        await journey.inviterRuntime.deactivate();
+        expect(
+          await journey.inviterRuntime.activateExisting(journey.vaultId),
+          AtlasVaultActivationResult.activated,
+        );
+        final root = await Directory.systemTemp.createTemp(
+          'c30-third-recipient-',
+        );
+        addTearDown(() => root.delete(recursive: true));
+        final slots = <String, Uint8List>{};
+        addTearDown(() {
+          for (final key in slots.values) {
+            key.fillRange(0, key.length, 0);
+          }
+        });
+        final binding = AtlasVaultRuntimeBinding(
+          root: root,
+          loadKey: (id) async =>
+              slots[id] == null ? null : Uint8List.fromList(slots[id]!),
+          createKey: (id, value) async {
+            if (slots.containsKey(id)) throw StateError('duplicate test slot');
+            slots[id] = Uint8List.fromList(value);
+          },
+        );
+        final thirdKeys = AtlasVaultPairingMemorySecureKeyStore();
+        final thirdLocal = AtlasVaultPairingMemoryLocalStore();
+        final thirdRuntime = AtlasVaultPrivateStateRuntime(
+          secureKeyStore: thirdKeys,
+          localStoreIO: thirdLocal,
+          epochSessionFactory: binding.open,
+          epochEnrollmentInstaller: binding.installEnrollment,
+        );
+        addTearDown(thirdRuntime.deactivate);
+        final thirdIdentity = AtlasVaultPairingMemoryIdentityStore();
+        addTearDown(thirdIdentity.deletePrimaryIdentity);
+        final third = AtlasVaultTrustedPairingCoordinator(
+          identityStore: thirdIdentity,
+          registryStore: AtlasVaultPairingMemoryRegistryStore(),
+          replayStore: AtlasVaultPairingMemoryReplayStore(),
+          transactionStore: AtlasVaultPairingMemoryTransactionStore(),
+          stageStore: AtlasVaultPairingMemoryStageStore(),
+          artifactTransport: AtlasVaultPairingMemoryTransport(journey.mailbox),
+          runtime: thirdRuntime,
+          secureKeyStore: thirdKeys,
+          localStoreIO: thirdLocal,
+          selectedVaultStore: AtlasVaultPairingMemorySelectedVaultStore(),
+          cleanInstallProbe: () async =>
+              AtlasVaultPairingCleanInstallDisposition.clean,
+          authorizeKeyRelease: (_) async => true,
+          now: () => journey.clock.value,
+          identityGenerator: () => AtlasVaultDeviceIdentity.fromPrivateKeys(
+            signingPrivateSeed: runtimeTestKey(91),
+            agreementPrivateKey: runtimeTestKey(101),
+            createdAt: '2026-08-15T10:00:00Z',
+          ),
+        );
+        addTearDown(third.stop);
+        expect(
+          (await third.createDeviceIdentity()).disposition,
+          AtlasVaultTrustedPairingDisposition.identityReady,
+        );
+        expect(
+          (await journey.inviter.createPairingOffer()).disposition,
+          AtlasVaultTrustedPairingDisposition.offerReady,
+        );
+        expect(
+          (await journey.inviter.savePairingOffer()).disposition,
+          AtlasVaultTrustedPairingDisposition.offerSaved,
+        );
+        expect(
+          (await third.importPairingOffer()).disposition,
+          AtlasVaultTrustedPairingDisposition.acceptanceReady,
+        );
+        expect(
+          (await third.savePairingAcceptance()).disposition,
+          AtlasVaultTrustedPairingDisposition.acceptanceSaved,
+        );
+        expect(
+          (await journey.inviter.importPairingAcceptance()).disposition,
+          AtlasVaultTrustedPairingDisposition.codesReady,
+        );
+        expect(
+          (await journey.inviter.confirmCodesMatch()).disposition,
+          AtlasVaultTrustedPairingDisposition.deliveryReady,
+        );
+        // A late receipt from the first ceremony must not erase the second cache.
+        final sender = await journey.bindings[0].open(journey.vaultId);
+        try {
+          final before = await sender.owner.observation();
+          await expectLater(
+            sender.owner.completeRuntimeEnrollment(
+              packet: firstPacket,
+              deliverySha256: firstHash,
+              acknowledgement: firstAck,
+              recipient: firstRecipient.descriptor,
+              beforePublish: () async {},
+            ),
+            throwsA(anything),
+          );
+          expect(await sender.owner.observation(), before);
+        } finally {
+          sender.close();
+        }
+        expect(
+          (await third.confirmCodesMatch()).disposition,
+          AtlasVaultTrustedPairingDisposition.codesConfirmed,
+        );
+        expect(
+          (await journey.inviter.saveKeyDelivery()).disposition,
+          AtlasVaultTrustedPairingDisposition.deliverySaved,
+        );
+        expect(
+          (await third.importKeyDelivery()).disposition,
+          AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+        );
+        expect(
+          (await third.savePairingAcknowledgement()).disposition,
+          AtlasVaultTrustedPairingDisposition.completed,
+        );
+        expect(
+          (await journey.inviter.importPairingAcknowledgement()).disposition,
+          AtlasVaultTrustedPairingDisposition.completed,
+        );
+        expect(await journey.inviterTransactions.read(), isNull);
+        final installed = await binding.open(journey.vaultId);
+        try {
+          expect((await installed.read()).length, 2);
+          expect(
+            (await installed.owner.enrollmentContext())['registry_generation'],
+            6,
+          );
+        } finally {
+          installed.close();
+        }
+      },
+    );
+  }
 
   test('device fingerprint is canonical and cross-platform stable', () {
     expect(
@@ -88,7 +284,8 @@ void main() {
       inviteeAcceptance.disposition,
       AtlasVaultTrustedPairingDisposition.acceptanceReady,
     );
-    expect(inviteeAcceptance.sas, isNotNull);
+    // Comparison starts only after the acceptance has been exported.
+    expect(inviteeAcceptance.sas == null, isTrue);
     expect(
       (await journey.invitee.savePairingAcceptance()).disposition,
       AtlasVaultTrustedPairingDisposition.acceptanceSaved,
@@ -99,10 +296,26 @@ void main() {
       inviterCodes.disposition,
       AtlasVaultTrustedPairingDisposition.codesReady,
     );
-    expect(inviterCodes.sas, inviteeCodes.sas);
+    expect(
+      inviterCodes.sas == inviteeCodes.sas && inviterCodes.sas != null,
+      isTrue,
+    );
+    final wrongTranscript = await journey.inviter.confirmCodesMatch(
+      expectedTranscriptSha256: '0' * 64,
+    );
+    expect(
+      wrongTranscript.disposition,
+      AtlasVaultTrustedPairingDisposition.failed,
+    );
+    expect(
+      (await journey.inviter.inspect()).stage,
+      AtlasVaultPairingStage.acceptanceImported,
+    );
 
     expect(
-      (await journey.inviter.confirmCodesMatch()).disposition,
+      (await journey.inviter.confirmCodesMatch(
+        expectedTranscriptSha256: inviterCodes.transcriptSha256,
+      )).disposition,
       AtlasVaultTrustedPairingDisposition.deliveryReady,
     );
     expect(
@@ -118,27 +331,42 @@ void main() {
       AtlasVaultTrustedPairingDisposition.acknowledgementReady,
     );
 
-    final storeCreate = journey.inviteeEvents.indexOf('store.create');
-    final keyCreate = journey.inviteeEvents.indexOf('key.create');
+    final storageCreate = journey.inviteeEvents.indexOf(
+      'custody.create:storage',
+    );
+    final bindingCreate = journey.inviteeEvents.indexOf(
+      'custody.create:binding',
+    );
     final selectionCreate = journey.inviteeEvents.indexOf('selection.create');
     final activation = journey.inviteeEvents.indexOf('runtime.activate');
-    final trust = journey.inviteeEvents.lastIndexOf('registry.replace');
     final acknowledgementStage = journey.inviteeEvents.indexOf(
       'stage.create:acknowledgement',
     );
-    expect(storeCreate, greaterThanOrEqualTo(0));
-    expect(storeCreate, lessThan(keyCreate));
-    expect(keyCreate, lessThan(selectionCreate));
+    expect(storageCreate, greaterThanOrEqualTo(0));
+    expect(storageCreate, lessThan(bindingCreate));
+    expect(bindingCreate, lessThan(selectionCreate));
     expect(selectionCreate, lessThan(activation));
-    expect(activation, lessThan(trust));
-    expect(acknowledgementStage, lessThan(trust));
+    expect(activation, lessThan(acknowledgementStage));
 
-    final installed = journey.inviteeLocal.values[journey.vaultId]!;
-    expect(
-      installed.records.map((record) => record.toJson()).toList(),
-      journey.bootstrap.records.map((record) => record.toJson()).toList(),
-    );
-    expect(installed.records.where((record) => record.deleted), isNotEmpty);
+    final sender = await journey.bindings[0].open(journey.vaultId);
+    final installed = await journey.bindings[1].open(journey.vaultId);
+    try {
+      final actual = await installed.read(), expected = await sender.read();
+      expect(actual.length, 2);
+      expect(
+        jsonEncode(actual.map((r) => r.operation.toJson()).toList()) ==
+            jsonEncode(expected.map((r) => r.operation.toJson()).toList()),
+        isTrue,
+      );
+      expect(actual.where((r) => r.payload == null), hasLength(1));
+      expect(
+        await installed.owner.enrollmentContext(),
+        await sender.owner.enrollmentContext(),
+      );
+    } finally {
+      sender.close();
+      installed.close();
+    }
 
     expect(
       (await journey.invitee.savePairingAcknowledgement()).disposition,
@@ -148,8 +376,9 @@ void main() {
       (await journey.inviter.importPairingAcknowledgement()).disposition,
       AtlasVaultTrustedPairingDisposition.completed,
     );
-    expect(journey.inviterRegistry.value!.devices, hasLength(1));
-    expect(journey.inviteeRegistry.value!.devices, hasLength(1));
+    // The signed epoch registry, not the legacy peer mirror, grants membership.
+    expect(journey.inviterRegistry.value, isNull);
+    expect(journey.inviteeRegistry.value, isNull);
     expect(journey.inviterTransactions.value, isNull);
     expect(journey.inviteeTransactions.value, isNull);
     expect(
@@ -284,8 +513,8 @@ void main() {
       final deliveryArtifact = AtlasVaultPairingArtifact.fromCanonicalBytes(
         journey.inviterStage.values[AtlasVaultPairingArtifactKind.delivery]!,
       );
-      final delivery = AtlasVaultSignedVaultKeyDelivery.fromJson(
-        atlasVaultObject(deliveryArtifact.payload['signed_delivery']),
+      final packet = atlasVaultObject(
+        deliveryArtifact.payload['enrollment_delivery'],
       );
       final attacker = await AtlasVaultDeviceIdentity.fromPrivateKeys(
         signingPrivateSeed: Uint8List.fromList(
@@ -297,44 +526,29 @@ void main() {
         createdAt: '2026-08-15T10:00:00Z',
       );
       addTearDown(attacker.destroy);
-      final acknowledgement =
-          AtlasVaultPairingAcknowledgement.fromJson(<String, Object?>{
-            'format': 'atlasvault-pairing-acknowledgement',
-            'version': 1,
-            'acknowledgement_id': '54000000-0000-4000-8000-000000000001',
-            'delivery_id': delivery.delivery.deliveryId,
-            'transcript_sha256': delivery.delivery.transcriptSha256,
-            'inviter_device_id': delivery.delivery.inviterDeviceId,
-            'invitee_device_id': attacker.deviceId,
-            'vault_id': delivery.delivery.vaultId,
-            'key_epoch': delivery.delivery.keyEpoch,
-            'bootstrap_sha256': delivery.delivery.bootstrapSha256,
-            'installed_at': '2026-08-15T10:09:00Z',
-          });
-      final forged = AtlasVaultSignedPairingAcknowledgement.fromJson(
-        <String, Object?>{
-          'format': 'atlasvault-signed-pairing-acknowledgement',
-          'version': 1,
-          'acknowledgement': acknowledgement.toJson(),
-          'invitee': (await attacker.signDescriptor()).toJson(),
-          'signature': base64Encode(
-            await attacker.signBytes(<int>[
-              ...utf8.encode(
-                'atlasvault-pairing-acknowledgement-signature-v1:',
-              ),
-              ...acknowledgement.canonicalBytes(),
-            ]),
-          ),
-        },
+      final checkpoint = atlasVaultObject(
+        atlasVaultObject(packet['anchor'])['checkpoint'],
+      );
+      final forged = <String, Object?>{
+        'format': 'atlasvault-enrollment-acknowledgement',
+        'version': 1,
+        'delivery_sha256': journey.inviterTransactions.value!.deliverySha256,
+        'anchor_root': checkpoint['root'],
+        'transcript_sha256': checkpoint['transcript_sha256'],
+        'recipient_device_id': attacker.deviceId,
+      };
+      forged['signature_b64'] = base64Encode(
+        await attacker.signBytes([
+          ...utf8.encode('atlasvault-enrollment-acknowledgement-v1\u0000'),
+          ...encodeCanonicalJson(forged),
+        ]),
       );
       final forgedArtifact = AtlasVaultPairingArtifact.fromJson(
         <String, Object?>{
           'format': 'atlasvault-pairing-artifact',
           'version': 1,
           'kind': 'acknowledgement',
-          'payload': <String, Object?>{
-            'signed_acknowledgement': forged.toJson(),
-          },
+          'payload': <String, Object?>{'enrollment_acknowledgement': forged},
         },
       );
       journey.mailbox.bytes = Uint8List.fromList(
@@ -517,15 +731,14 @@ void main() {
     );
     addTearDown(secret.destroy);
     expect(secret.keyEpoch, 7);
-    expect(journey.inviterTransactions.value?.keyEpoch, 1);
+    expect(journey.inviterTransactions.value?.keyEpoch, 4);
   });
 
   test('full inviter registry rejects acceptance before persistence', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
     journey.inviterRegistry.value = await _trustedRegistry(
-      localDeviceId:
-          atlasVaultObject(vector['inviter'])['device_id']! as String,
+      localDeviceId: await _runtimeDeviceID(false),
       vaultId: journey.vaultId,
       peerCount: 64,
     );
@@ -552,11 +765,10 @@ void main() {
     () async {
       final journey = await _PairingJourney.create(vector);
       addTearDown(journey.stop);
-      final invitee = await _identityFromVector(vector, 'invitee');
+      final invitee = await _runtimeIdentity(true);
       try {
         journey.inviterRegistry.value = await _trustedRegistry(
-          localDeviceId:
-              atlasVaultObject(vector['inviter'])['device_id']! as String,
+          localDeviceId: await _runtimeDeviceID(false),
           vaultId: journey.vaultId,
           identities: <AtlasVaultDeviceIdentity>[invitee],
         );
@@ -586,8 +798,7 @@ void main() {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
     journey.inviteeRegistry.value = await _trustedRegistry(
-      localDeviceId:
-          atlasVaultObject(vector['invitee'])['device_id']! as String,
+      localDeviceId: await _runtimeDeviceID(true),
       vaultId: journey.vaultId,
       peerCount: 64,
     );
@@ -610,8 +821,7 @@ void main() {
       final journey = await _PairingJourney.create(vector);
       addTearDown(journey.stop);
       journey.inviteeRegistry.value = await _trustedRegistry(
-        localDeviceId:
-            atlasVaultObject(vector['inviter'])['device_id']! as String,
+        localDeviceId: await _runtimeDeviceID(false),
         vaultId: journey.vaultId,
       );
       await journey.inviter.createPairingOffer();
@@ -631,11 +841,10 @@ void main() {
   test('already-trusted inviter rejects offer before persistence', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
-    final inviter = await _identityFromVector(vector, 'inviter');
+    final inviter = await _runtimeIdentity(false);
     try {
       journey.inviteeRegistry.value = await _trustedRegistry(
-        localDeviceId:
-            atlasVaultObject(vector['invitee'])['device_id']! as String,
+        localDeviceId: await _runtimeDeviceID(true),
         vaultId: journey.vaultId,
         identities: <AtlasVaultDeviceIdentity>[inviter],
       );
@@ -811,7 +1020,10 @@ void main() {
       await journey.invitee.confirmCodesMatch();
 
       expect(journey.inviteeReplay.value?.entries, hasLength(1));
-      expect(journey.inviteeTransactions.value?.ephemeralPrivateKey, isNotNull);
+      expect(
+        journey.inviteeTransactions.value?.ephemeralPrivateKey != null,
+        isTrue,
+      );
 
       final result = await journey.invitee.discardPairing();
 
@@ -1053,25 +1265,33 @@ void main() {
         (await journey.invitee.importKeyDelivery()).disposition,
         AtlasVaultTrustedPairingDisposition.recoveryRequired,
       );
-      expect(journey.inviteeTransactions.value?.ephemeralPrivateKey, isNull);
+      expect(
+        journey.inviteeTransactions.value?.ephemeralPrivateKey == null,
+        isTrue,
+      );
 
       expect(
         (await journey.invitee.resumePairing()).disposition,
         AtlasVaultTrustedPairingDisposition.acknowledgementReady,
       );
 
-      expect(journey.inviteeTransactions.value?.ephemeralPrivateKey, isNull);
+      expect(
+        journey.inviteeTransactions.value?.ephemeralPrivateKey == null,
+        isTrue,
+      );
       final acknowledgementArtifact =
           AtlasVaultPairingArtifact.fromCanonicalBytes(
             journey.inviteeStage.values[AtlasVaultPairingArtifactKind
                 .acknowledgement]!,
           );
-      final signed = AtlasVaultSignedPairingAcknowledgement.fromJson(
-        atlasVaultObject(
-          acknowledgementArtifact.payload['signed_acknowledgement'],
-        ),
+      expect(
+        acknowledgementArtifact.payload,
+        contains('enrollment_acknowledgement'),
       );
-      expect(signed.acknowledgement.installedAt, '2026-08-15T10:09:00Z');
+      expect(
+        journey.inviteeTransactions.value?.installedAt,
+        '2026-08-15T10:09:00Z',
+      );
     },
   );
 
@@ -1137,18 +1357,18 @@ void main() {
           AtlasVaultTrustedPairingDisposition.recoveryRequired,
         );
         expect(transaction?.stage, failure.$2);
-        if (failure.$3 == 'store') {
-          expect(transaction?.storeSha256, isNotNull);
-        } else {
-          expect(transaction?.vaultKeySha256, isNotNull);
-        }
+        expect(transaction?.deliverySha256, isNotNull);
+        expect(transaction?.bootstrapSha256, isNotNull);
+        final installed = await journey.bindings[1].open(journey.vaultId);
+        expect((await installed.read()).length, 2);
+        installed.close();
         expect(
           (await journey.invitee.resumePairing()).disposition,
           AtlasVaultTrustedPairingDisposition.acknowledgementReady,
         );
         expect(
           journey.inviteeEvents.where(
-            (event) => event == '${failure.$3}.create',
+            (event) => event == 'custody.create:binding',
           ),
           hasLength(1),
         );
@@ -1344,8 +1564,11 @@ void main() {
       AtlasVaultTrustedPairingDisposition.recoveryRequired,
     );
     expect(journey.inviteeSelected.value, journey.vaultId);
-    expect(journey.inviteeLocal.values, contains(journey.vaultId));
-    expect(journey.inviteeKeys.values, contains(journey.vaultId));
+    final installed = await journey.bindings[1].open(journey.vaultId);
+    expect((await installed.read()).length, 2);
+    installed.close();
+    expect(journey.inviteeLocal.values, isEmpty);
+    expect(journey.inviteeKeys.values, isEmpty);
     expect(journey.inviteeTransactions.value, isNotNull);
   });
 
@@ -1467,6 +1690,100 @@ void main() {
     },
   );
 
+  for (final attack in [
+    'signature',
+    'recipient',
+    'signer',
+    'anchor',
+    'pins',
+    'wrapper',
+    'receipt',
+  ]) {
+    test(
+      'published enrollment retry rejects $attack without changing history',
+      () async {
+        final journey = await _PairingJourney.create(vector);
+        addTearDown(journey.stop);
+        await _exchangeDelivery(journey);
+        expect(
+          (await journey.invitee.importKeyDelivery()).disposition,
+          AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+        );
+        await journey.inviteeRuntime.saveSearch(
+          app.AtlasSavedSearch(
+            name: 'Synthetic later edit',
+            request: const app.AtlasSearchRequest(text: 'synthetic'),
+            createdAt: '2026-08-15T10:09:00Z',
+            updatedAt: '2026-08-15T10:09:00Z',
+          ),
+        );
+        final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(
+          journey.inviterStage.values[AtlasVaultPairingArtifactKind.delivery]!,
+        );
+        final packet = atlasVaultObject(
+          artifact.payload['enrollment_delivery'],
+        );
+        final recipient = await _runtimeIdentity(true),
+            sender = await _runtimeIdentity(false);
+        addTearDown(recipient.destroy);
+        addTearDown(sender.destroy);
+        final pins = await AtlasVaultEnrollmentDelivery.ceremonyPins(
+          packet,
+          recipient: recipient,
+          peer: sender.descriptor,
+          transcript: journey.inviterTransactions.value!.transcriptSha256!,
+        );
+        final owner = await journey.bindings[1].open(journey.vaultId);
+        addTearDown(owner.close);
+        final before = await owner.owner.enrollmentContext();
+        final records = jsonEncode(
+          (await owner.read()).map((r) => r.operation.toJson()).toList(),
+        );
+        switch (attack) {
+          case 'signature':
+            packet['signature_b64'] = base64Encode(Uint8List(64));
+          case 'anchor':
+            final anchor = atlasVaultObject(packet['anchor']);
+            packet['anchor'] = {
+              ...anchor,
+              'checkpoint': {
+                ...atlasVaultObject(anchor['checkpoint']),
+                'key_epoch': 1,
+              },
+            };
+          case 'pins':
+            pins['anchor_root'] = '0' * 64;
+          case 'wrapper':
+            packet['deliveries'] = [];
+          case 'receipt':
+            await File(
+              '${journey.bindings[1].directory(journey.vaultId).path}/enrollment-receipt',
+            ).writeAsString('invalid synthetic receipt', flush: true);
+        }
+        await expectLater(
+          journey.bindings[1].installEnrollment(
+            packet,
+            pins: pins,
+            trustedSigner: attack == 'signer'
+                ? recipient.signingPublicKey
+                : sender.signingPublicKey,
+            recipient: attack == 'recipient' ? sender : recipient,
+          ),
+          throwsA(anything),
+        );
+        expect(await owner.owner.enrollmentContext(), before);
+        expect(
+          jsonEncode(
+                (await owner.read()).map((r) => r.operation.toJson()).toList(),
+              ) ==
+              records,
+          isTrue,
+        );
+        expect(journey.inviteeRuntime.isActive, isTrue);
+      },
+    );
+  }
+
   test('invitee trust retry uses the journaled installation time', () async {
     final journey = await _PairingJourney.create(
       vector,
@@ -1486,15 +1803,15 @@ void main() {
       journey.inviteeTransactions.value?.stage,
       AtlasVaultPairingStage.runtimeActivated,
     );
-    final committed = journey.inviteeRegistry.value!.devices.single;
-    expect(committed.linkedAt, '2026-08-15T10:09:00Z');
+    final committed = journey.inviteeTransactions.value!.installedAt;
+    expect(committed, '2026-08-15T10:09:00Z');
     journey.clock.value = DateTime.utc(2026, 8, 15, 10, 10);
 
     expect(
       (await journey.invitee.resumePairing()).disposition,
       AtlasVaultTrustedPairingDisposition.acknowledgementReady,
     );
-    expect(journey.inviteeRegistry.value!.devices.single, committed);
+    expect(journey.inviteeTransactions.value!.installedAt, committed);
   });
 
   test('acknowledgement-saved resume completes cleanup idempotently', () async {
@@ -1544,9 +1861,9 @@ void main() {
         AtlasVaultTrustedPairingDisposition.completed,
       );
 
-      await expectLater(
-        journey.inviter.importPairingAcknowledgement(),
-        throwsA(isA<StateError>()),
+      expect(
+        (await journey.inviter.importPairingAcknowledgement()).disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
       );
       expect(
         journey.inviterTransactions.value?.stage,
@@ -1884,7 +2201,7 @@ final class _PairingJourney {
     required this.inviteeLocal,
     required this.inviteeKeys,
     required this.inviteeSelected,
-    required this.bootstrap,
+    required this.bindings,
     required this.vaultId,
     required this.inviterEvents,
     required this.inviteeEvents,
@@ -1911,7 +2228,7 @@ final class _PairingJourney {
   final AtlasVaultPairingMemoryLocalStore inviteeLocal;
   final AtlasVaultPairingMemorySecureKeyStore inviteeKeys;
   final AtlasVaultPairingMemorySelectedVaultStore inviteeSelected;
-  final AtlasVaultPairingBootstrap bootstrap;
+  final List<AtlasVaultRuntimeBinding> bindings;
   final String vaultId;
   final List<String> inviterEvents;
   final List<String> inviteeEvents;
@@ -1942,14 +2259,10 @@ final class _PairingJourney {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
     final inviterIdentity = AtlasVaultPairingMemoryIdentityStore(
-      await _identitySecret(
-        vector,
-        'inviter',
-        keyEpoch: inviterIdentityKeyEpoch,
-      ),
+      await _runtimeIdentitySecret(false, inviterIdentityKeyEpoch),
     );
     final inviteeIdentity = AtlasVaultPairingMemoryIdentityStore(
-      await _identitySecret(vector, 'invitee'),
+      await _runtimeIdentitySecret(true, 1),
     );
     final inviterRegistry = AtlasVaultPairingMemoryRegistryStore(
       events: inviterEvents,
@@ -2010,35 +2323,63 @@ final class _PairingJourney {
     final inviteeSelected = AtlasVaultPairingMemorySelectedVaultStore(
       events: inviteeEvents,
     );
-    final bootstrap = AtlasVaultPairingBootstrap.fromJson(
-      atlasVaultObject(vector['bootstrap']),
+    final root = await Directory.systemTemp.createTemp('c30-transaction-');
+    addTearDown(() => root.delete(recursive: true));
+    final slots = List.generate(2, (_) => <String, Uint8List>{});
+    addTearDown(() {
+      for (final device in slots) {
+        for (final value in device.values) {
+          value.fillRange(0, value.length, 0);
+        }
+      }
+    });
+    final bindings = List.generate(
+      2,
+      (i) => AtlasVaultRuntimeBinding(
+        root: Directory('${root.path}/device-$i'),
+        loadKey: (id) async =>
+            slots[i][id] == null ? null : Uint8List.fromList(slots[i][id]!),
+        createKey: (id, value) async {
+          if (slots[i].containsKey(id)) throw StateError('duplicate test slot');
+          slots[i][id] = Uint8List.fromList(value);
+          final events = i == 0 ? inviterEvents : inviteeEvents;
+          events.add('custody.create:${id.split('-')[1]}');
+        },
+      ),
     );
-    final vaultId = bootstrap.vaultMetadata.vaultId;
-    final vaultKey = Uint8List.fromList(
-      base64Decode(vector['test_only_vault_key_b64']! as String),
+    const vaultId = RuntimeFixture.vaultID;
+    final fixture = RuntimeFixture();
+    final owner = await fixture.initialize(bindings[0].directory(vaultId));
+    final payload = runtimePayloads().values.first;
+    await owner.commitRuntimeRecord(
+      payload: payload,
+      objectID: 'pairing-live',
+      signingKey: await fixture.signer(),
     );
-    inviterKeys.values[vaultId] = Uint8List.fromList(vaultKey);
-    inviterLocal.values[vaultId] = AtlasVaultLocalStore.fromJson(
-      <String, Object?>{
-        'format': AtlasVaultLocalStore.format,
-        'version': AtlasVaultLocalStore.version,
-        'store_id': '53000000-0000-4000-8000-000000000001',
-        'created_at': '2026-08-15T10:00:00Z',
-        'updated_at': '2026-08-15T10:00:00Z',
-        'vault_metadata': bootstrap.vaultMetadata.toJson(),
-        'records': <Object?>[
-          for (final record in bootstrap.records) record.toJson(),
-        ],
-      },
+    final deleted = await owner.commitRuntimeRecord(
+      payload: payload,
+      objectID: 'pairing-deleted',
+      signingKey: await fixture.signer(),
     );
+    await owner.commitRuntimeRecord(
+      payload: null,
+      objectID: 'pairing-deleted',
+      expectedRevision: deleted.envelope.revision,
+      signingKey: await fixture.signer(),
+    );
+    await bindings[0].provision(owner: owner, signingSeed: runtimeTestKey(10));
     inviterSelected.value = vaultId;
     final inviterRuntime = AtlasVaultPrivateStateRuntime(
       secureKeyStore: inviterKeys,
       localStoreIO: inviterLocal,
+      epochSessionFactory: bindings[0].open,
+      epochEnrollmentInstaller: bindings[0].installEnrollment,
     );
     final inviteeRuntime = AtlasVaultPrivateStateRuntime(
       secureKeyStore: inviteeKeys,
       localStoreIO: inviteeLocal,
+      epochSessionFactory: bindings[1].open,
+      epochEnrollmentInstaller: bindings[1].installEnrollment,
     );
     expect(
       await inviterRuntime.activateExisting(vaultId),
@@ -2109,7 +2450,6 @@ final class _PairingJourney {
       monotonicNow: () => clock.elapsed,
       authorizeKeyRelease: (_) async => true,
     );
-    vaultKey.fillRange(0, vaultKey.length, 0);
     return _PairingJourney(
       inviter: inviter,
       restartInviter: createInviterCoordinator,
@@ -2131,7 +2471,7 @@ final class _PairingJourney {
       inviteeLocal: inviteeLocal,
       inviteeKeys: inviteeKeys,
       inviteeSelected: inviteeSelected,
-      bootstrap: bootstrap,
+      bindings: bindings,
       vaultId: vaultId,
       inviterEvents: inviterEvents,
       inviteeEvents: inviteeEvents,
@@ -2142,6 +2482,8 @@ final class _PairingJourney {
   Future<void> stop() async {
     await inviter.stop();
     await invitee.stop();
+    await inviterRuntime.deactivate();
+    await inviteeRuntime.deactivate();
   }
 }
 
@@ -2171,12 +2513,8 @@ Future<void> _exchangeDelivery(_PairingJourney journey) async {
   await journey.inviter.saveKeyDelivery();
 }
 
-Future<Uint8List> _identitySecret(
-  Map<String, Object?> vector,
-  String name, {
-  int? keyEpoch,
-}) async {
-  final identity = await _identityFromVector(vector, name, keyEpoch: keyEpoch);
+Future<Uint8List> _runtimeIdentitySecret(bool invitee, int epoch) async {
+  final identity = await _runtimeIdentity(invitee, epoch);
   final secret = identity.secretBundle();
   try {
     return secret.canonicalBytes();
@@ -2186,23 +2524,23 @@ Future<Uint8List> _identitySecret(
   }
 }
 
-Future<AtlasVaultDeviceIdentity> _identityFromVector(
-  Map<String, Object?> vector,
-  String name, {
-  int? keyEpoch,
-}) async {
-  final data = atlasVaultObject(vector[name]);
-  return AtlasVaultDeviceIdentity.fromPrivateKeys(
-    signingPrivateSeed: Uint8List.fromList(
-      base64Decode(data['signing_private_seed_b64']! as String),
-    ),
-    agreementPrivateKey: Uint8List.fromList(
-      base64Decode(data['agreement_private_key_b64']! as String),
-    ),
-    createdAt: data['created_at']! as String,
-    keyEpoch: keyEpoch ?? data['key_epoch']! as int,
-    expectedDeviceId: data['device_id']! as String,
-  );
+Future<AtlasVaultDeviceIdentity> _runtimeIdentity(
+  bool invitee, [
+  int epoch = 1,
+]) => AtlasVaultDeviceIdentity.fromPrivateKeys(
+  signingPrivateSeed: runtimeTestKey(invitee ? 90 : 10),
+  agreementPrivateKey: runtimeTestKey(invitee ? 100 : 20),
+  createdAt: '2026-08-15T10:00:00Z',
+  keyEpoch: epoch,
+);
+
+Future<String> _runtimeDeviceID(bool invitee) async {
+  final identity = await _runtimeIdentity(invitee);
+  try {
+    return identity.deviceId;
+  } finally {
+    identity.destroy();
+  }
 }
 
 Future<AtlasVaultTrustedDeviceRegistry> _trustedRegistry({

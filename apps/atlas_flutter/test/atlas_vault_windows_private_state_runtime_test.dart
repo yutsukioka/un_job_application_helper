@@ -23,13 +23,13 @@ void main() {
       contains("import 'package:atlas/atlas_vault_windows.dart';"),
     );
     final windowsStart = source.indexOf('if (Platform.isWindows) {');
-    final fallbackStart = source.indexOf(
-      'if (!Platform.isAndroid)',
+    final appleStart = source.indexOf(
+      'if (Platform.isIOS || Platform.isMacOS)',
       windowsStart < 0 ? 0 : windowsStart,
     );
     expect(windowsStart, isNonNegative);
-    expect(fallbackStart, greaterThan(windowsStart));
-    final windowsAssembly = source.substring(windowsStart, fallbackStart);
+    expect(appleStart, greaterThan(windowsStart));
+    final windowsAssembly = source.substring(windowsStart, appleStart);
     expect(
       'AtlasWindowsVaultSecureKeyStore'.allMatches(windowsAssembly),
       hasLength(1),
@@ -50,8 +50,10 @@ void main() {
     );
     expect(
       windowsAssembly,
-      contains('localCacheStoreFactory: _defaultCacheStore'),
+      contains('localCacheStoreFactory: _noPersistentPlaintextCache'),
     );
+    expect(windowsAssembly, contains('requireEncryptedPrivateState: true'));
+    expect(windowsAssembly, contains('epochSessionFactory:'));
     expect(windowsAssembly, isNot(contains('activateExistingAtlasVault')));
     expect(windowsAssembly, isNot(contains('AtlasVaultPlaintextMigration')));
     expect(windowsAssembly, isNot(contains('AtlasVaultInteroperability')));

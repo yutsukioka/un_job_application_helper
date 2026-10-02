@@ -39,11 +39,17 @@ final class AtlasVaultTrustedPairingContext {
 final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
   AtlasVaultTrustedPairingPresentationOwner({
     required AtlasVaultTrustedPairingCoordinating coordinator,
+    DateTime Function()? now,
   }) : // Keep the public dependency label explicit at composition sites.
        // ignore: prefer_initializing_formals
-       _coordinator = coordinator;
+       _coordinator = coordinator,
+       _now = now ?? DateTime.now;
 
   final AtlasVaultTrustedPairingCoordinating _coordinator;
+  final DateTime Function() _now;
+  Timer? _comparisonTimer;
+  String? _comparisonTranscript;
+  DateTime? _comparisonExpiry;
 
   AtlasVaultTrustedPairingPresentationStatus status =
       AtlasVaultTrustedPairingPresentationStatus.hidden;
@@ -113,7 +119,22 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
   Future<void> importPairingAcceptance() =>
       _run(_coordinator.importPairingAcceptance);
 
-  Future<void> confirmCodesMatch() => _run(_coordinator.confirmCodesMatch);
+  Future<void> confirmCodesMatch() {
+    final transcript = _comparisonTranscript, expiry = _comparisonExpiry;
+    if (_disposed ||
+        isBusy ||
+        sas == null ||
+        transcript == null ||
+        expiry == null ||
+        !expiry.isAfter(_now().toUtc())) {
+      return Future<void>.value();
+    }
+    _clearComparison();
+    return _run(
+      () =>
+          _coordinator.confirmCodesMatch(expectedTranscriptSha256: transcript),
+    );
+  }
 
   Future<void> saveKeyDelivery() => _run(_coordinator.saveKeyDelivery);
 
@@ -168,7 +189,7 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
     stage = result.stage;
     localFingerprint = result.localFingerprint;
     peerFingerprint = result.peerFingerprint;
-    sas = result.sas;
+    _clearComparison();
     expiresAt = result.expiresAt;
     trusted = result.trusted;
     pendingTransaction = result.pendingTransaction;
@@ -212,12 +233,47 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
       AtlasVaultTrustedPairingDisposition.failed =>
         AtlasVaultTrustedPairingPresentationStatus.failed,
     };
+    final code = result.sas, transcript = result.transcriptSha256;
+    final expiry = DateTime.tryParse(result.expiresAt ?? '')?.toUtc();
+    final remaining = expiry?.difference(_now().toUtc());
+    if (result.pendingTransaction &&
+        [
+          AtlasVaultPairingStage.acceptanceSaved,
+          AtlasVaultPairingStage.acceptanceImported,
+        ].contains(result.stage) &&
+        [
+          AtlasVaultTrustedPairingDisposition.codesReady,
+          AtlasVaultTrustedPairingDisposition.acceptanceSaved,
+        ].contains(result.disposition) &&
+        code != null &&
+        RegExp(r'^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$').hasMatch(code) &&
+        transcript != null &&
+        RegExp(r'^[0-9a-f]{64}$').hasMatch(transcript) &&
+        remaining != null &&
+        remaining > Duration.zero &&
+        remaining <= const Duration(seconds: 600)) {
+      sas = code;
+      _comparisonTranscript = transcript;
+      _comparisonExpiry = expiry;
+      _comparisonTimer = Timer(remaining, () {
+        _clearComparison();
+        if (!_disposed) notifyListeners();
+      });
+    }
     notifyListeners();
+  }
+
+  void _clearComparison() {
+    _comparisonTimer?.cancel();
+    _comparisonTimer = null;
+    _comparisonTranscript = null;
+    _comparisonExpiry = null;
+    sas = null;
   }
 
   void clearSensitiveInput() {
     _coordinator.cancelActiveOperation();
-    sas = null;
+    _clearComparison();
     _generation += 1;
     if (!_disposed) {
       notifyListeners();
@@ -248,7 +304,7 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
     stage = null;
     localFingerprint = null;
     peerFingerprint = null;
-    sas = null;
+    _clearComparison();
     expiresAt = null;
     trusted = false;
     if (!preservePendingTransaction) {

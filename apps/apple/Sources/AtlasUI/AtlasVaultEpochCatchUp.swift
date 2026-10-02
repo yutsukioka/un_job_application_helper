@@ -20,8 +20,41 @@ enum EpochCatchUp {
   {
     var registry = registry
     var epoch = try R.integer(context["key_epoch"])
+    var generation = try context["registry_generation"].map { try R.integer($0) } ?? epoch
+    var activationID = context["activation_id"] as? String
+    var authority = context["issuer_device_id"] as? String
     var result = [[String: Any]]()
     for raw in records {
+      if raw["format"] as? String == "atlasvault-enrollment-bridge" {
+        try R.exact(raw, ["format", "version", "enrollment"])
+        guard try AtlasVaultDeviceEnrollment.integer(raw["version"]) == 1,
+          let activationID, let authority
+        else { throw AtlasVaultRotationError.rejected }
+        let p = try D.map(raw["enrollment"])
+        let after = try AtlasVaultDeviceEnrollment.verify(
+          p, registry: registry,
+          context: [
+            "account_id": context["account_id"]!, "vault_id": context["vault_id"]!,
+            "key_epoch": epoch, "registry_generation": generation,
+            "activation_id": activationID, "state_root": p["state_root"]!,
+          ],
+          confirmedTranscript: D.text(p["transcript_sha256"]), status: "ACTIVE")
+        // Live admission also checks the local ceremony. This validates the
+        // historical active issuer's attestation without changing its authority.
+        result.append([
+          "plan": [
+            "previous_epoch": epoch, "new_epoch": epoch,
+            "state_root": p["state_root"]!,
+            "resulting_registry_root": p["resulting_registry_root"]!,
+            "recipients": after.filter { $0["state"] as? String == "ACTIVE" }
+              .map { $0["device_id"] as! String }.sorted(),
+          ],
+          "registry": registry, "rotation_signer_device_id": authority,
+        ])
+        registry = after
+        generation = try AtlasVaultDeviceEnrollment.integer(p["next_registry_generation"])
+        continue
+      }
       let selective = raw["wrapper"] != nil
       let p = try raw["wrapper"] != nil ? D.map(raw["proof"]) : raw
       let plan = try D.map(p["plan"])
@@ -43,6 +76,9 @@ enum EpochCatchUp {
       ])
       registry = try D.rows(verified["registry"])
       epoch = try R.integer(verified["new_epoch"])
+      generation = epoch
+      activationID = try D.text(selective ? p["activation_id"] : p["root"])
+      authority = try D.text(p["rotation_signer_device_id"])
     }
     return result
   }
@@ -178,7 +214,11 @@ extension AtlasVaultEpochVault {
         let sameEpoch = try R.integer(plan["new_epoch"]) == epoch
         var verifyRegistry = currentRegistry
         var previousEpoch = epoch
+        var enrollments = [[String: Any]]()
         if sameEpoch {
+          while bridges.last?["format"] as? String == "atlasvault-enrollment-bridge" {
+            enrollments.insert(bridges.removeLast(), at: 0)
+          }
           guard let last = bridges.last else { throw AtlasVaultRotationError.rejected }
           let old = try last["wrapper"] != nil ? map(last["proof"]) : last
           guard p["activation_id"] as? String == (old["activation_id"] ?? old["root"]) as? String
@@ -251,9 +291,10 @@ extension AtlasVaultEpochVault {
         }
         keys[String(opened.keyEpoch)] = opened.vaultKey.base64EncodedString()
         bridges.append(packet)
+        bridges.append(contentsOf: enrollments)
         h.removeValue(forKey: "epoch_bridge")
         h["epoch_bridges"] = bridges
-        currentRegistry = try rows(verified["registry"])
+        if enrollments.isEmpty { currentRegistry = try rows(verified["registry"]) }
         epoch = try R.integer(verified["new_epoch"])
         try checkpoint?("verified_epoch")
       }
@@ -266,7 +307,9 @@ extension AtlasVaultEpochVault {
       _ = try EpochCatchUp.verify(bridges, registry: registry, context: context)
       staged.merge([
         "epoch": epoch, "registry": currentRegistry, "keys": keys,
-        "recipients": verified["recipients"]!, "generation": try R.integer(s["generation"]) + 1,
+        "recipients": currentRegistry.filter { $0["state"] as? String == "ACTIVE" }.map {
+          $0["device_id"] as! String
+        }.sorted(), "generation": try R.integer(s["generation"]) + 1,
         "status": "ACTIVE", "components": components,
         "journal": [
           "kind": "CATCH_UP", "phase": "ACTIVE", "target_id": currentActivationID,
@@ -310,6 +353,9 @@ extension AtlasVaultEpochVault {
       let available = Set(keys.keys.compactMap(Int.init))
       guard retainEpochs.contains(try R.integer(s["epoch"])), retainEpochs.isSubset(of: available)
       else { throw AtlasVaultRotationError.rejected }
+      guard try runtimeRequiredEpochs(s).isSubset(of: retainEpochs) else {
+        throw AtlasVaultRotationError.cleanupPending
+      }
       let inbox = try AtlasVaultDurableEncryptedInbox(fileURL: file.fileURL, encryptionKey: key)
       inbox.store = try componentFile("inbox")
       guard

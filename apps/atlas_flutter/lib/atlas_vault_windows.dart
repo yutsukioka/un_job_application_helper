@@ -72,9 +72,11 @@ export 'src/atlas_vault/private_state_runtime.dart'
     show
         AtlasVaultActivationResult,
         AtlasVaultPrivateStateException,
+        AtlasVaultPrivateRecord,
         AtlasVaultPrivateStatePersistence,
         AtlasVaultPrivateStateRuntime,
-        AtlasVaultPrivateStateSnapshot;
+        AtlasVaultPrivateStateSnapshot,
+        AtlasVaultPrivateTombstone;
 export 'src/atlas_vault/windows_storage.dart'
     show
         atlasVaultWindowsMethodChannelName,

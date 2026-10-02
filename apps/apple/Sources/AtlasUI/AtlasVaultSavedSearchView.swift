@@ -100,6 +100,7 @@ public final class AtlasVaultSavedSearchPresentationOwner:
         AtlasVaultSavedSearchPresentationStatus = .hidden
     @Published public private(set) var items:
         [AtlasVaultSavedSearchPresentation] = []
+    @Published public private(set) var isReadOnly = false
 
     private let coordinator: any AtlasVaultSavedSearchCoordinating
     private var ownerGeneration: UInt64 = 0
@@ -169,6 +170,7 @@ public final class AtlasVaultSavedSearchPresentationOwner:
         switch result {
         case let .success(snapshot):
             items = snapshot.searches
+            isReadOnly = snapshot.isReadOnly
             status = .ready
             return true
         case .failure:
@@ -268,6 +270,7 @@ public final class AtlasVaultSavedSearchPresentationOwner:
     }
 
     public func hidePrivatePresentation() {
+        isReadOnly = false
         handoffClaim = nil
         ownerGeneration &+= 1
         activationOperation?.work.cancel()
@@ -299,7 +302,7 @@ public final class AtlasVaultSavedSearchPresentationOwner:
     }
 
     private var mayBeginMutation: Bool {
-        mutationOperation == nil
+        !isReadOnly && mutationOperation == nil
             && activationOperation == nil
             && handoffClaim == nil
             && (
@@ -759,6 +762,12 @@ public struct AtlasVaultSavedSearchView: View {
 
     @ViewBuilder
     private var statusBanner: some View {
+        if owner.isReadOnly {
+            Text("Read-only legacy records. Runtime enrollment is required to save changes.")
+                .padding(12)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
+        }
         switch owner.status {
         case .saving:
             ProgressView("Saving encrypted search")
@@ -798,9 +807,9 @@ public struct AtlasVaultSavedSearchView: View {
     }
 
     private var allowsMutation: Bool {
-        owner.status == .ready
+        !owner.isReadOnly && (owner.status == .ready
             || owner.status == .saveFailed
-            || owner.status == .handoffFailed
+            || owner.status == .handoffFailed)
     }
 
     private func clearCreateDraft() {

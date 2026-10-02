@@ -84,9 +84,17 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
     private var operationTask: Task<Void, Never>?
     private var generation: UInt64 = 0
     private var terminal = false
+    private var comparisonTask: Task<Void, Never>?
+    private var comparisonTranscript: String?
+    private var comparisonExpiry: Date?
+    private let now: @Sendable () -> Date
 
-    public init(coordinator: any AtlasVaultTrustedPairingCoordinating) {
+    public init(
+        coordinator: any AtlasVaultTrustedPairingCoordinating,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
         self.coordinator = coordinator
+        self.now = now
     }
 
     public func present() {
@@ -154,7 +162,13 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
     }
 
     public func confirmCodesMatch() {
-        run { await self.coordinator.confirmCodesMatch() }
+        guard !terminal, !isBusy, sas != nil,
+              let transcript = comparisonTranscript, let expiry = comparisonExpiry,
+              expiry > now() else { return }
+        clearComparison()
+        run {
+            await self.coordinator.confirmCodesMatch(expectedTranscriptSHA256: transcript)
+        }
     }
 
     public func saveKeyDelivery() {
@@ -301,15 +315,43 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         stage = result.stage
         localFingerprint = result.localFingerprint
         peerFingerprint = result.peerFingerprint
-        sas = result.sas
+        clearComparison()
         expiresAt = result.expiresAt
         trusted = result.trusted
         pendingTransaction = result.pendingTransaction
         status = Self.presentationStatus(result.disposition)
+        if result.pendingTransaction,
+           result.stage == .acceptanceSaved || result.stage == .acceptanceImported,
+           result.disposition == .codesReady || result.disposition == .acceptanceSaved,
+           let code = result.sas,
+           code.range(of: "^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$", options: .regularExpression) != nil,
+           let transcript = result.transcriptSHA256,
+           transcript.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+           let text = result.expiresAt,
+           let expiry = try? AtlasVaultPairingValidation.date(text) {
+            let remaining = expiry.timeIntervalSince(now())
+            guard remaining > 0, remaining <= 600 else { return }
+            sas = code
+            comparisonTranscript = transcript
+            comparisonExpiry = expiry
+            comparisonTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
+                guard !Task.isCancelled else { return }
+                self?.clearComparison()
+            }
+        }
+    }
+
+    private func clearComparison() {
+        comparisonTask?.cancel()
+        comparisonTask = nil
+        comparisonTranscript = nil
+        comparisonExpiry = nil
+        sas = nil
     }
 
     private func clearSensitiveInputNow() {
-        sas = nil
+        clearComparison()
         pendingSave = nil
         generation &+= 1
     }

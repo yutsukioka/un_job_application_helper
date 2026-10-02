@@ -1,0 +1,511 @@
+{
+  "_warning": "Synthetic test-only ciphertext and public metadata; never production material.",
+  "delivery_case": {
+    "acknowledgement": {
+      "anchor_root": "a6778b4533c313245913b3e2149309b5710296ac02acb5b76a0ba92ad4756234",
+      "delivery_sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "format": "atlasvault-enrollment-acknowledgement",
+      "recipient_device_id": "avd1-d8336f480b5bf4e669fbbf648a05f34433bd9ffcde92e4b7bc0eef074c21def9",
+      "signature_b64": "PZik9xmfdjJmveB/kV+9l82qrzzp/58X40BFEZWqDDMCtvfNPR/e4QxND+MHtGi25K3laDcbiG1QIp9663iKAg==",
+      "transcript_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "version": 1
+    },
+    "acknowledgement_sha256": "2f8bbf358fa3e71a0706dd3d78c369df322a80bbf8a79b770602e8c976f6cfe4",
+    "acknowledgement_unsigned_sha256": "021fb64d283e46f8fd9ec0031f8343d0371245fd3374a56029ae66083856f0d3",
+    "packet": {
+      "anchor": {
+        "checkpoint": {
+          "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+          "activation_id": "62138812edc1b4ccb8d2a5efcd7763586e76fc6f455117a6c9ae2eeb3b3889b4",
+          "collection_id": "collection-c26",
+          "collection_root": "8c94c33abfb9231217da03648246d45e7d80fd107d7f67b179829a8e0c644316",
+          "collection_sha256": "d981cd018f8eeaf1002034a6f4129f30180f5d9569d2dd42052ab2ab01afa6ae",
+          "enrollment_root": "c631f31b073117085f26b405e1e4932e867ae52676c519ab58fb5e1152f6ce75",
+          "format": "atlasvault-history-bootstrap",
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "key_epoch": 4,
+          "recipient_agreement_sha256": "96e6c1ecaa2009c7fbc7f5aa2fadf04c664017e2fd2edf6d1232b82dae752dd5",
+          "recipient_device_id": "avd1-d8336f480b5bf4e669fbbf648a05f34433bd9ffcde92e4b7bc0eef074c21def9",
+          "registry_generation": 5,
+          "registry_root": "e37b15c2382e61c1d46a7c07a02d7e7af1f4ac1c29935ea2d8564b3dd8804d0d",
+          "root": "a6778b4533c313245913b3e2149309b5710296ac02acb5b76a0ba92ad4756234",
+          "sequence": 2,
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "upxfDfKsc2RrPcIZ9cVqagMmAq2KOVn3CaP1CMMWtBqOT2k4AXQCRQltyaLgpK2GKBwddqJEEH25mVrVaFqmDQ==",
+          "state_root": "52d703bb3bfadde5c87908b8cb1cbed17ad7221e7ce3b92061dd38e0f474baa2",
+          "transcript_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "vault_id": "vault-c26",
+          "version": 1
+        },
+        "enrollment": {
+          "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+          "activation_id": "62138812edc1b4ccb8d2a5efcd7763586e76fc6f455117a6c9ae2eeb3b3889b4",
+          "authorization_category": "SAS_CONFIRMED",
+          "format": "atlasvault-device-enrollment",
+          "issuer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "key_epoch": 4,
+          "next_registry_generation": 5,
+          "prior_registry_root": "c46e8da20ef886b0cd4888c1d1a34e1a348e5040817653772ec242b2fe2e311e",
+          "registry_generation": 4,
+          "resulting_registry_root": "e37b15c2382e61c1d46a7c07a02d7e7af1f4ac1c29935ea2d8564b3dd8804d0d",
+          "root": "c631f31b073117085f26b405e1e4932e867ae52676c519ab58fb5e1152f6ce75",
+          "signature_algorithm": "Ed25519",
+          "signature_b64": "2QTI+dmvWqoy5myxQbHCfQpJxCtqcq2T+UyfYrwUf9CV0EEskaoS/cLp7Dagp+TL0Ki7qWFdSiPL0+N+do5eCQ==",
+          "state_root": "85934382e0e2aafa15536d069019f8ba276a39ae739d385d3d1480c5a99446e4",
+          "target_agreement_public_b64": "az1Xdi+LrbaUM/nG0GD4X15ca2gDqBbRQcB19jVBrRA=",
+          "target_agreement_sha256": "96e6c1ecaa2009c7fbc7f5aa2fadf04c664017e2fd2edf6d1232b82dae752dd5",
+          "target_device_id": "avd1-d8336f480b5bf4e669fbbf648a05f34433bd9ffcde92e4b7bc0eef074c21def9",
+          "target_signing_public_b64": "DXVQdU4IAKXSN+71gmA1dmubPloVhoqUCrKJlYeI47A=",
+          "transcript_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "vault_id": "vault-c26",
+          "version": 1
+        },
+        "view": {
+          "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+          "collection_root": "8c94c33abfb9231217da03648246d45e7d80fd107d7f67b179829a8e0c644316",
+          "format": "atlasvault-authenticated-state-view",
+          "key_epoch": 4,
+          "previous_registry_root": "18177dd24e8abe1b265b47e983c9e532e2d7defe176f32ac012286ba895d08e8",
+          "previous_root": "85934382e0e2aafa15536d069019f8ba276a39ae739d385d3d1480c5a99446e4",
+          "registry_root": "e37b15c2382e61c1d46a7c07a02d7e7af1f4ac1c29935ea2d8564b3dd8804d0d",
+          "root": "52d703bb3bfadde5c87908b8cb1cbed17ad7221e7ce3b92061dd38e0f474baa2",
+          "sequence": 2,
+          "signature_b64": "IH6eezgOpsw5ioB1yIStbFtO77Dg+COzDsHmifVMETfsor8450nyxivBS0GwJrg/TvH7NLvAglt34rcqb0OCBg==",
+          "vault_id": "vault-c26",
+          "version": 2
+        }
+      },
+      "collection": {
+        "collection_id": "collection-c26",
+        "format": "atlasvault-state-commitment",
+        "previous_root": "4be9f49a7c2eb3f93648e21ef84972941df21f15e80060bbc4b1de5f70a47c96",
+        "root": "8c94c33abfb9231217da03648246d45e7d80fd107d7f67b179829a8e0c644316",
+        "sequence": 2,
+        "signature_b64": "TVuKb/KbNsJSLyhfW9uTra8fkdAaq0sdF7jTdg0k/rnDmqmwSyqNo0zzZzZ1as8+nRBVOFaR/A//cQyxZGU8Cg==",
+        "state_sha256": "d981cd018f8eeaf1002034a6f4129f30180f5d9569d2dd42052ab2ab01afa6ae",
+        "version": 1
+      },
+      "deliveries": [
+        {
+          "ciphertext_b64": "xKIp6QjczsleAupDm4gk5hD/fiJB2CKHFCJxaGB4Sr/oFNPP7L/wDTmGx/kZVQhp",
+          "encapsulated_key_b64": "xhkOU0DSOSSwLptWQaUy80PCZOdyJRyP4K9+CysQonc=",
+          "key_epoch": 3
+        },
+        {
+          "ciphertext_b64": "RPqreHA9eMfKt+lNvcK9YCBsP++K5p7IPqw6JuSA3T3D0Oxhz1rgiPwPUzR6PZ4B",
+          "encapsulated_key_b64": "ehnw8qlreHBRVOKIzdlfFe/gfBppb+uxycPi5UPyAnA=",
+          "key_epoch": 4
+        }
+      ],
+      "format": "atlasvault-enrollment-delivery",
+      "historical_authority": {
+        "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+        "anchor_root": "a6778b4533c313245913b3e2149309b5710296ac02acb5b76a0ba92ad4756234",
+        "collection_sha256": "d981cd018f8eeaf1002034a6f4129f30180f5d9569d2dd42052ab2ab01afa6ae",
+        "format": "atlasvault-historical-authority",
+        "key_epoch": 4,
+        "prior_registry": [
+          {
+            "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+            "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+            "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+            "state": "ACTIVE"
+          },
+          {
+            "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+            "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+            "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+            "state": "ACTIVE"
+          },
+          {
+            "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+            "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+            "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+            "state": "ACTIVE"
+          }
+        ],
+        "recipient_device_id": "avd1-d8336f480b5bf4e669fbbf648a05f34433bd9ffcde92e4b7bc0eef074c21def9",
+        "registry_generation": 5,
+        "registry_root": "e37b15c2382e61c1d46a7c07a02d7e7af1f4ac1c29935ea2d8564b3dd8804d0d",
+        "revocation": {
+          "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+          "authorization_category": "DEVICE_PRESENCE",
+          "format": "atlasvault-device-revocation",
+          "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "key_epoch": 3,
+          "prior_registry_root": "245e428030e1f903b1633fbe1245e63d169879e07fbb84fc0ddf9988a4187e42",
+          "resulting_registry_root": "c46e8da20ef886b0cd4888c1d1a34e1a348e5040817653772ec242b2fe2e311e",
+          "root": "e74a400d39dac8361d860a0df2b6741fb8c389d24290ad45515d43ff3652eedc",
+          "sequence": 1,
+          "signature_b64": "WnDaLKi0J2XRg1rBuIopyZwQbUYMNmbbRT/vYhZvVL3ySQX0RIU/jOtRLjUpxz2NP9TMkcRH6IMR75yfLiy2Dw==",
+          "target_device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "vault_id": "vault-c26",
+          "version": 1
+        },
+        "signed_descriptors": [
+          {
+            "descriptor": {
+              "agreement_public_key": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+              "created_at": "2026-01-01T00:00:00Z",
+              "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+              "format": "atlasvault-device-descriptor",
+              "key_epoch": 3,
+              "signing_public_key": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+              "version": 1
+            },
+            "format": "atlasvault-signed-device-descriptor",
+            "signature": "USeDXUwHM7dXtFGFC9hL18lB5ewJ7MIrFoMYWZsSh7Bt+jYtqZ2L/lpqKt9R/vN5pTmpXF0/clFm42p7wfSkDA==",
+            "version": 1
+          },
+          {
+            "descriptor": {
+              "agreement_public_key": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+              "created_at": "2026-01-01T00:00:00Z",
+              "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+              "format": "atlasvault-device-descriptor",
+              "key_epoch": 3,
+              "signing_public_key": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+              "version": 1
+            },
+            "format": "atlasvault-signed-device-descriptor",
+            "signature": "AvK4J0NtxJy8YAakQblCnrkrPjwpTMM94sXp7cFTwoVH7eqpwADYtzmReCEFWZSPU8ER7k+kuGdnFsM8OpxEDw==",
+            "version": 1
+          },
+          {
+            "descriptor": {
+              "agreement_public_key": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+              "created_at": "2026-01-01T00:00:00Z",
+              "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+              "format": "atlasvault-device-descriptor",
+              "key_epoch": 3,
+              "signing_public_key": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+              "version": 1
+            },
+            "format": "atlasvault-signed-device-descriptor",
+            "signature": "lPHveqinb4kEkbUR57rnXkXwymUndnXrAZgZ7bJGhWo4EAeUt+fzJ7QDZ61ajiBm0h11xtJ/+xKEbXG6SxMXDQ==",
+            "version": 1
+          }
+        ],
+        "transcript_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "vault_id": "vault-c26",
+        "version": 1,
+        "views": [
+          {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "collection_root": "4be9f49a7c2eb3f93648e21ef84972941df21f15e80060bbc4b1de5f70a47c96",
+            "format": "atlasvault-authenticated-state-view",
+            "key_epoch": 3,
+            "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+            "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+            "registry_root": "18177dd24e8abe1b265b47e983c9e532e2d7defe176f32ac012286ba895d08e8",
+            "root": "85934382e0e2aafa15536d069019f8ba276a39ae739d385d3d1480c5a99446e4",
+            "sequence": 1,
+            "signature_b64": "yzsQizat8WdShB7qgteBxn0vVAADza9fyIsEo2yz6771w1qWlg++1n3dYeP4bY5+i8jc64GfefzrH7/esZdjCQ==",
+            "vault_id": "vault-c26",
+            "version": 2
+          },
+          {
+            "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+            "collection_root": "8c94c33abfb9231217da03648246d45e7d80fd107d7f67b179829a8e0c644316",
+            "format": "atlasvault-authenticated-state-view",
+            "key_epoch": 4,
+            "previous_registry_root": "18177dd24e8abe1b265b47e983c9e532e2d7defe176f32ac012286ba895d08e8",
+            "previous_root": "85934382e0e2aafa15536d069019f8ba276a39ae739d385d3d1480c5a99446e4",
+            "registry_root": "e37b15c2382e61c1d46a7c07a02d7e7af1f4ac1c29935ea2d8564b3dd8804d0d",
+            "root": "52d703bb3bfadde5c87908b8cb1cbed17ad7221e7ce3b92061dd38e0f474baa2",
+            "sequence": 2,
+            "signature_b64": "IH6eezgOpsw5ioB1yIStbFtO77Dg+COzDsHmifVMETfsor8450nyxivBS0GwJrg/TvH7NLvAglt34rcqb0OCBg==",
+            "vault_id": "vault-c26",
+            "version": 2
+          }
+        ]
+      },
+      "hpke_suite": "0x0020/0x0001/0x0002",
+      "opaque_b64": "eyJmb3JtYXQiOiJhdGxhc3ZhdWx0LWd1YXJkZWQtY29sbGVjdGlvbiIsInJlY29yZHMiOlt7ImFhZF9iNjQiOiJleUpoWTJOdmRXNTBYMmxrSWpvaVlYWmhNUzFtWXpFMk5HWTRNalV3T0RBelpXRTRaRFF4T0RNMFpqRmtaVGcxT0RJeE1ETTFaREkzWkRNM05EZGxPRE0yTVRBM09EbGxNR1k0WlRVek1UTmlPV016SWl3aVpHVjJhV05sWDJsa0lqb2lZWFprTVMxaE9UUXpZemt6TXpVMU5EQTJOelppTlRBd1lqZzFNalkxTW1NM1ptRTVZelZrTm1GaFl6QTFNVGRsWW1WalpUYzFNR0k0TnpjM1lXWmxOemRtTkdFNElpd2labTl5YldGMElqb2lZWFJzWVhOMllYVnNkQzFsY0c5amFDMWphWEJvWlhKMFpYaDBJaXdpYTJWNVgyVndiMk5vSWpvekxDSnJhVzVrSWpvaWNHRjBZMmdpTENKdlltcGxZM1JmYVdRaU9pSnlaWFJoYVc1bFpDMWhZM1JwZG1VdFlYVjBhRzl5SWl3aWNtVjJhWE5wYjI0aU9pSXhNREF3TURBd01DMHdNREF3TFRRd01EQXRPREF3TUMwd01EQXdNREF3TURBd01ERWlMQ0oyWVhWc2RGOXBaQ0k2SW5aaGRXeDBMV015TmlJc0luWmxjbk5wYjI0aU9qRjkiLCJjaXBoZXJ0ZXh0X2I2NCI6IldYV2JqYUpRczlPcllieFRrUzkrcXkxVnc0Zk9NZ3R2Y3Z6WlU4YnU5UHlHWXJybTJ6Q3NTempYeU83eFFPSDJLcFRMbi9qdTdkRDZLb1hVcmdtWkNvZzFCTFpqRSs0aHB0UjVabEVYNU9tQkdaVDU4WTBUTnk5dnh1NVhBN0RwYXJVM2taZkhzWElVd2EvUGZOUnBROEpCcnV6YmZIYWRRR3c2cFM1cmw5R0lZcVNTbnhjSVdQUEZUK0pqbDFDc00yMjRYcG9zb0hKVVRxdVhneXJKVEFoa2FPUEV3Mlo1Z3g5RTRjWkNlZFQ1bDB2ZkJZanlDWVl6T2w1aVBKZlROMEZPejZsUFVTdDdFcWlFVVpua1VGdEMvbThSMFYxV3pzNkI1STVKNVZYNGxkS2tXNkpteEc2aFUyTkRLNDI1YzFLYXptVVJmR1FGSXdHNVQ3ekNZc3VVVDJxUWhJUXdDK3N5WEhBNHFhUFljYjd2Wk1aQnU3SC96NnJaSkt5VzA3SDZFT1R2d2xwcHd2dzdreEtyWlcrbVhFZS95a09vVTRuNWlBdDJ4b051cWwvNzM5TDE4NnltZDNka0hKcEtCSnBTZ0pMOG50bUpvbXBlTVVoUTdJd3JGTnAvYXU1OUF3YmREVHgyMkVTSm55OW1LdDdnc0ZUOXJTOXllbUd4UFlTdUFFSlFSTkFJRER1L3l3Vm91elF1cWt0OE05RDRicjY0RElDMzFLb0hPY3lwYXdwdDNHZ0FkRnlIODIwYWw3SmJmdW9ESVF1ZTdkZUJaSUc5V29BTm1lVDZLYXgyYTZXYVBwdThxbXRhMml6RUFmWGlQS2F4YlVrODNTbVgzQVFMQmxWdVNmQVVBcDJ5bGUxNzRYVDBodFFRU3Y5WklZRkczSXRNVGU3UG9FUVVHd2NoVWhCUlM3NXIxSk9RejdmdHlKTms3QStKdTBuNGpoQitvV0JKbXpmVElJTDNmWU13MGhNVDhuNnkvKzR2L3JlT2dIR0dqMGxIKzhJWGMwaGV5YkJzaGxRUVNJZGxneVZ1ODNmcldNWlo1U0VrdnN1QTBneXRreEJBczZYeUc2SzNTTnFsUkdUMDByUm9NUml6THMwRzFmYUFZRU9BUUMwMUEzQWVCSWxMdWNaRURjblUzcjMwbWlHWVQ2RkczelV2QUNEYjllcXhtOTIySUUxZmhmNE5FcGVrSi92TkRDTS9mY2tMellaVkRmN3dsdStRSjNudEFwM2JWOVlMN0hmTTBhNTdnL2NzbHVEZmp2b1J1UTRLYnlhQmEyUnBac1dUa2pneEdyc1lzR2VpLytEV3IrZFJWNnMvYlM1WGdlNEZMVTV3Umx3THZCUDJ0SVg0bTcrWVRmN1J3NFliUlBZcnVwWWdscTFXb2hERS83S3lsbkhhSTJhalFWbStjNGU0eEt6TStRK0IvaWR3T2RFa2NUOD0iLCJjb250ZW50X3NoYTI1NiI6ImUwMTMwZGFmM2JiZjY1MWM2ZGUyZjc3MjJjOWZmMWM2YWJhMmRlMDY3YWIyMmJhMTA5OWI4YjRjNzU5ZGU3ZWMiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjozLCJub25jZV9iNjQiOiJXRUEwUnQrWFVVRFJGeWJ5Iiwib2JqZWN0X2lkIjoicmV0YWluZWQtYWN0aXZlLWF1dGhvciIsInBhcmVudF9yZXZpc2lvbiI6bnVsbCwicmV2aXNpb24iOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJzaWduYXR1cmVfYjY0IjoiRHdGd2hQeEFHV3U4d0hlOW56d3RLQmJGSWZvUlJJcThCamVyT1lKeFFwT2dTdjNJUHFXZy9jc2luYUhObmtkUjJvZGVvVmxhaVZVbkU3K3BwenNERGc9PSIsInRvbWJzdG9uZSI6ZmFsc2UsInZlcnNpb24iOjF9LHsiYWFkX2I2NCI6ImV5SmhZMk52ZFc1MFgybGtJam9pWVhaaE1TMW1ZekUyTkdZNE1qVXdPREF6WldFNFpEUXhPRE0wWmpGa1pUZzFPREl4TURNMVpESTNaRE0zTkRkbE9ETTJNVEEzT0RsbE1HWTRaVFV6TVROaU9XTXpJaXdpWkdWMmFXTmxYMmxrSWpvaVlYWmtNUzFoT0dJek5HVTROVGM0WldFME1EYzVPV1ptTjJJNE0yTTJaREEyTUdJek1qSTROemt3TXpZNE1HTTFPV0prWVRobE4yVXpOakF4TTJVMFpXVXlOV0k0SWl3aVptOXliV0YwSWpvaVlYUnNZWE4yWVhWc2RDMWxjRzlqYUMxamFYQm9aWEowWlhoMElpd2lhMlY1WDJWd2IyTm9Jam96TENKcmFXNWtJam9pY0dGMFkyZ2lMQ0p2WW1wbFkzUmZhV1FpT2lKeVpYUmhhVzVsWkMxeVpYWnZhMlZrTFdGMWRHaHZjaUlzSW5KbGRtbHphVzl1SWpvaU1UQXdNREF3TURBdE1EQXdNQzAwTURBd0xUZ3dNREF0TURBd01EQXdNREF3TURBeUlpd2lkbUYxYkhSZmFXUWlPaUoyWVhWc2RDMWpNallpTENKMlpYSnphVzl1SWpveGZRPT0iLCJjaXBoZXJ0ZXh0X2I2NCI6IndCQkdrNHdTZHk0d3BhNVQzaUw3N3BTQU9BQ1VFRmZuR2U3dXVTMm84eFBVNm0waWt3aVlSY0pjRnhzK1g2d0hVMlRCQjR5d29wMGtQOXpSbTY0MDVSelBVZmJwSXFCYTNzWjFCWG84Yzc2eXBUa0o0VVQ5T00zaGhKOXpQNHRNTUNubU5MdGxtRXZGYi91UXpIcktmZUxJbzVJUTFQUHZBeElWVDFMayt4OHAwRkN5ME80b0gwTkZsWHdDUlZTOTFzdU1KZUFxYTdGckRlR1RjUURpcTdJSWF0OWVrSUdFZ0MvYVBETU1GTzlNZnBwY1c4RW9lM0tMSVIwTWFRRTlwd0pEMHozcGppS29aQ1Q3OE8yWEY1d1pCVkdiZndyT21EaTE0ZHd5bm00YjMxNFRoNElqakZxdlVUTDB4WnRGRkNjYjk4cUJSWFpiUERxUm9CS1UxYjhmOUcycnEzazRrck1BT3l0b3BpaDJ1Q3UzMlUwYUFlZTZqM2dxVlE5TDUvTHhEU0I0eExDbGtaSFI4VEJxM2tXZGZVdnZvQ3RwZzlvdERFN2wxRzkxRWJwbDZVTnY1OElwWTRZd1dQVFVWWkVob2kra3JLczVkVjIyUmxEMk5zdTRNamZnWGRNL3E5V2MvaUtsWk9qc1ZIdW9DTkNkSlZCUGlpSXBzcXcxOUY5MlVhMSt0b2Y1YkRsNkJEZjNyZS80TmFXbDVUaTYwLzFQUXl0MjJQTUJpUUFkRituUW9oenc4NHpOOXhHd2xUL3hZWHN2a2I4YlFpSTRLVnZDdlpsaW1BcngxdzNaN3BPbTJRUWVDM0YwQkpvL3NxRm1Pb1ZwbDVHVXI0TWdYbG9ScG54K1U4bDJsZnNqT1RPVHVMMk9pbE11dTc0UDA2U3VzZm1GWW8zajF6d2FOMVdWZXZiUnZRY1VNNWVvUWxaR0RmSkI2YTRKMHFJeFNocG80SmNzQjV5SHJ0WXRVbTNKZlN4d0lMWm4xc2cxdkFzZ0V3T3ZHL0NDTnA1L3R5QlpOdEtzSGZBTHgvbFZ4YlFlRnhKOFBtNzc2QnBRZW9qZTB3aXFjeE90b0NiOUdua3MrUjZ0dUk5ejRMYTZibnJKRU9pZlpVMlNhT2hmakduck5sWVM4blc4WHJiZDFESk83NGxrYndGdWdSaEVUS3ZHZGxoL1dCZUI5MXhYY2ZYQTJoQW43a1VZMFgvZmhKYU9rTWIydVA0TytVWm9zek5UekJDNlg5VEdqVnduc2hBREFFYjEyUXpuSVZCZUlQdFdFNmRqYXl5d3J5dDcrMHVoYk9mTjdFL3FLV21HTXl1c25FYktCaXVxOUN2eS9hZ1hnOVZrVFhCcEFmcEEyNlkyRUZoUFBGTVJ1bnRuY1VXYXJpamdoZitSbXc5aTJMcHFpdktzUHNVNVpnQ2I5ZXpWYUV5VUV1dW9PdG5WNUZodlVLNysiLCJjb250ZW50X3NoYTI1NiI6IjgxOTU3NjVmMjU1NjZkNWNiMWJkMGNjODEzMWNkMjAzZTJjZWRhYTE3ZmY0Mzc0MDE3YzI5OGQzYTc1NTkyNTAiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjozLCJub25jZV9iNjQiOiJvdU5teUtkM1F0YVNsN0tYIiwib2JqZWN0X2lkIjoicmV0YWluZWQtcmV2b2tlZC1hdXRob3IiLCJwYXJlbnRfcmV2aXNpb24iOm51bGwsInJldmlzaW9uIjoiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwic2lnbmF0dXJlX2I2NCI6InlWK2FtV25TVFIvWWlEdG4yY1R2cC9NNlhHNW1rSkx4bzJLSERhMWhla1VFWEZuUmdzQ3E3bEVBbnR1OThBQ1JCa3RJdndCWHJDeHpFbnEwa0ZkREN3PT0iLCJ0b21ic3RvbmUiOmZhbHNlLCJ2ZXJzaW9uIjoxfSx7ImFhZF9iNjQiOiJleUpoWTJOdmRXNTBYMmxrSWpvaVlYWmhNUzFtWXpFMk5HWTRNalV3T0RBelpXRTRaRFF4T0RNMFpqRmtaVGcxT0RJeE1ETTFaREkzWkRNM05EZGxPRE0yTVRBM09EbGxNR1k0WlRVek1UTmlPV016SWl3aVpHVjJhV05sWDJsa0lqb2lZWFprTVMxaE9UUXpZemt6TXpVMU5EQTJOelppTlRBd1lqZzFNalkxTW1NM1ptRTVZelZrTm1GaFl6QTFNVGRsWW1WalpUYzFNR0k0TnpjM1lXWmxOemRtTkdFNElpd2labTl5YldGMElqb2lZWFJzWVhOMllYVnNkQzFsY0c5amFDMWphWEJvWlhKMFpYaDBJaXdpYTJWNVgyVndiMk5vSWpvekxDSnJhVzVrSWpvaWNHRjBZMmdpTENKdlltcGxZM1JmYVdRaU9pSjBaWEp0YVc1aGJDMWtaV3hsZEdVaUxDSnlaWFpwYzJsdmJpSTZJakV3TURBd01EQXdMVEF3TURBdE5EQXdNQzA0TURBd0xUQXdNREF3TURBd01EQXdNeUlzSW5aaGRXeDBYMmxrSWpvaWRtRjFiSFF0WXpJMklpd2lkbVZ5YzJsdmJpSTZNWDA9IiwiY2lwaGVydGV4dF9iNjQiOiIybzd5Y2tnYTBGMEx0UmlSUzdidU84clRrelJ5NDlnWVNqeGtOSlJLMjZ6WVJoT3BQVE9LVDFOZGhSeUJvUHlScEtqT1JCVUZhcHVyRG1BK0tPOWtwN0F6UnlXUXVjRyswMTZ3NEFxNEpoQVJyV3RBYWROb292WHNKdUhncWI1b0l0MmhnNUsyR29LSXdZMnJSUElmOXVtQVRtc0QrdHJzc3BJN0pzTXlhcnZkV3ZzaUROTUNpQVp0eW13My9tR0U0RnR6VFVnVjY5M0pZTVlweHU5QXNJRXlOaDl6T2FRTVdDSTJIR3ZMU2RGSkJZdmJsWkxIckNsZ3NtZFJIV1phbHZJOXRPUDA3S0tDazdIcUFXdWowbGVUTjVxNEFpOG1vZHFtZTNzdU9FNjhkMG1CTFBUc2dvek5VT2ZJaFVlaVJEQXNBZCtZQktTeDhvUU1mK0t4VXdqZWlsL29iUjBUeFhZR0NqYUkvWUhtTVZpczdrNyt6QlphZC9OWFFKZS9Xb3ZoTnlFeW1DRjFpZ0dMVklDWWhqeEtUV0djSEVVYWt6RjBWTjBOVWhRbEo0WHBZdCs1TXU2YWkzdEVSTDlSYjlkZ3VCd3RBelgyRGtZdWpmaTNYcitMY0l6YzdaT3lJcHRiZGNWUldWUC9jUzA0Y3RKZkE0b1oiLCJjb250ZW50X3NoYTI1NiI6IjcyZDMzZTk5ZWNlZjYzOTI3MTgxN2U5MDYzZGIzYzEzYTZkMWJlOTQ5NGQyNjgwNzY0MmFhYWI3N2UyNDE3NzMiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjozLCJub25jZV9iNjQiOiJlWFVMNE12MExNOG1tclNpIiwib2JqZWN0X2lkIjoidGVybWluYWwtZGVsZXRlIiwicGFyZW50X3JldmlzaW9uIjpudWxsLCJyZXZpc2lvbiI6IjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsInNpZ25hdHVyZV9iNjQiOiJTdGpLS1JMeVFSajBJQmxlYTQxM3kxNmJXR3IwckpMK3ZTRElBS29yOHNSTC9YTXEva2NDdlY5R0ZLc2ZQVTVnRG83Ni8zdExBTkVBaEhMMUFCajZEUT09IiwidG9tYnN0b25lIjp0cnVlLCJ2ZXJzaW9uIjoxfV0sInJvdXRlIjoicGF0Y2giLCJ2ZXJzaW9uIjoxfQ==",
+      "registry": [
+        {
+          "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+          "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+          "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+          "state": "REVOKED"
+        },
+        {
+          "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+          "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "az1Xdi+LrbaUM/nG0GD4X15ca2gDqBbRQcB19jVBrRA=",
+          "device_id": "avd1-d8336f480b5bf4e669fbbf648a05f34433bd9ffcde92e4b7bc0eef074c21def9",
+          "signing_public_b64": "DXVQdU4IAKXSN+71gmA1dmubPloVhoqUCrKJlYeI47A=",
+          "state": "ACTIVE"
+        }
+      ],
+      "root": "96bc71b60535fcc5162010701639224ff419610f0747fc4f58beda9b1663783b",
+      "signature_b64": "omFlUrvtOQb1YRTKBQsGX/8bWdxg2Ap34Mi3t9PgPZhYRZNMeLeTXdx+wN6tNrqZdNJ+3JV0ly30BoUe7l3hAA==",
+      "version": 1
+    },
+    "pins": {
+      "anchor_root": "a6778b4533c313245913b3e2149309b5710296ac02acb5b76a0ba92ad4756234",
+      "confirmed_transcript": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "current_context": {
+        "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+        "activation_id": "62138812edc1b4ccb8d2a5efcd7763586e76fc6f455117a6c9ae2eeb3b3889b4",
+        "key_epoch": 4,
+        "registry_generation": 5,
+        "state_root": "52d703bb3bfadde5c87908b8cb1cbed17ad7221e7ce3b92061dd38e0f474baa2",
+        "vault_id": "vault-c26"
+      },
+      "recipient_device_id": "avd1-d8336f480b5bf4e669fbbf648a05f34433bd9ffcde92e4b7bc0eef074c21def9"
+    },
+    "trusted_signer_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw="
+  },
+  "device_ids": [
+    "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+    "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+    "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8"
+  ],
+  "format": "atlasvault-production-enrollment-fixture",
+  "initial_collection": {
+    "collection_id": "collection-c26",
+    "format": "atlasvault-state-commitment",
+    "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "root": "4be9f49a7c2eb3f93648e21ef84972941df21f15e80060bbc4b1de5f70a47c96",
+    "sequence": 1,
+    "signature_b64": "KbOOcW00eG9dVSVjVPO187CudPYXP8OnVgMieGztspZJWwRb/xJEb+FjoAkPDkO2RdBoiGqFg4Euu9nnUo7wBw==",
+    "state_sha256": "d981cd018f8eeaf1002034a6f4129f30180f5d9569d2dd42052ab2ab01afa6ae",
+    "version": 1
+  },
+  "initial_registry": [
+    {
+      "descriptor_sha256": "ecd7e50cf9b14dc90f3a1f20bda4c8b8164d5e99c35a82612c7b14505fb78c2d",
+      "device_id": "62db7c3f61bbc2554cec10305d452444067f8bfc8368731dd9d4621e57d7068b"
+    },
+    {
+      "descriptor_sha256": "2840994067d2c532c04283dd7c9a1c6b05fc421520924edf4437b53bec9f8d64",
+      "device_id": "d2095475726cacd5de75d01b284dcaa34482a13b9e8a9364533fafa032808cf5"
+    },
+    {
+      "descriptor_sha256": "1071898257f0bec2a5e1cd75f5d9b9dad2e8201b43c95a56b9e1b9bb544a6235",
+      "device_id": "5c5abdb490c4d12faa2a33acbc9d07d049d4eb4ea1d0aef039fe3aa4e688ca9d"
+    }
+  ],
+  "initial_view": {
+    "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+    "collection_root": "4be9f49a7c2eb3f93648e21ef84972941df21f15e80060bbc4b1de5f70a47c96",
+    "format": "atlasvault-authenticated-state-view",
+    "key_epoch": 3,
+    "previous_registry_root": "88500ab28a11532624e365f1ecbee2b2000bbab922d61d68abea88ff5a449c3c",
+    "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "registry_root": "18177dd24e8abe1b265b47e983c9e532e2d7defe176f32ac012286ba895d08e8",
+    "root": "85934382e0e2aafa15536d069019f8ba276a39ae739d385d3d1480c5a99446e4",
+    "sequence": 1,
+    "signature_b64": "yzsQizat8WdShB7qgteBxn0vVAADza9fyIsEo2yz6771w1qWlg++1n3dYeP4bY5+i8jc64GfefzrH7/esZdjCQ==",
+    "vault_id": "vault-c26",
+    "version": 2
+  },
+  "opaque_state_b64": "eyJmb3JtYXQiOiJhdGxhc3ZhdWx0LWd1YXJkZWQtY29sbGVjdGlvbiIsInJlY29yZHMiOlt7ImFhZF9iNjQiOiJleUpoWTJOdmRXNTBYMmxrSWpvaVlYWmhNUzFtWXpFMk5HWTRNalV3T0RBelpXRTRaRFF4T0RNMFpqRmtaVGcxT0RJeE1ETTFaREkzWkRNM05EZGxPRE0yTVRBM09EbGxNR1k0WlRVek1UTmlPV016SWl3aVpHVjJhV05sWDJsa0lqb2lZWFprTVMxaE9UUXpZemt6TXpVMU5EQTJOelppTlRBd1lqZzFNalkxTW1NM1ptRTVZelZrTm1GaFl6QTFNVGRsWW1WalpUYzFNR0k0TnpjM1lXWmxOemRtTkdFNElpd2labTl5YldGMElqb2lZWFJzWVhOMllYVnNkQzFsY0c5amFDMWphWEJvWlhKMFpYaDBJaXdpYTJWNVgyVndiMk5vSWpvekxDSnJhVzVrSWpvaWNHRjBZMmdpTENKdlltcGxZM1JmYVdRaU9pSnlaWFJoYVc1bFpDMWhZM1JwZG1VdFlYVjBhRzl5SWl3aWNtVjJhWE5wYjI0aU9pSXhNREF3TURBd01DMHdNREF3TFRRd01EQXRPREF3TUMwd01EQXdNREF3TURBd01ERWlMQ0oyWVhWc2RGOXBaQ0k2SW5aaGRXeDBMV015TmlJc0luWmxjbk5wYjI0aU9qRjkiLCJjaXBoZXJ0ZXh0X2I2NCI6IldYV2JqYUpRczlPcllieFRrUzkrcXkxVnc0Zk9NZ3R2Y3Z6WlU4YnU5UHlHWXJybTJ6Q3NTempYeU83eFFPSDJLcFRMbi9qdTdkRDZLb1hVcmdtWkNvZzFCTFpqRSs0aHB0UjVabEVYNU9tQkdaVDU4WTBUTnk5dnh1NVhBN0RwYXJVM2taZkhzWElVd2EvUGZOUnBROEpCcnV6YmZIYWRRR3c2cFM1cmw5R0lZcVNTbnhjSVdQUEZUK0pqbDFDc00yMjRYcG9zb0hKVVRxdVhneXJKVEFoa2FPUEV3Mlo1Z3g5RTRjWkNlZFQ1bDB2ZkJZanlDWVl6T2w1aVBKZlROMEZPejZsUFVTdDdFcWlFVVpua1VGdEMvbThSMFYxV3pzNkI1STVKNVZYNGxkS2tXNkpteEc2aFUyTkRLNDI1YzFLYXptVVJmR1FGSXdHNVQ3ekNZc3VVVDJxUWhJUXdDK3N5WEhBNHFhUFljYjd2Wk1aQnU3SC96NnJaSkt5VzA3SDZFT1R2d2xwcHd2dzdreEtyWlcrbVhFZS95a09vVTRuNWlBdDJ4b051cWwvNzM5TDE4NnltZDNka0hKcEtCSnBTZ0pMOG50bUpvbXBlTVVoUTdJd3JGTnAvYXU1OUF3YmREVHgyMkVTSm55OW1LdDdnc0ZUOXJTOXllbUd4UFlTdUFFSlFSTkFJRER1L3l3Vm91elF1cWt0OE05RDRicjY0RElDMzFLb0hPY3lwYXdwdDNHZ0FkRnlIODIwYWw3SmJmdW9ESVF1ZTdkZUJaSUc5V29BTm1lVDZLYXgyYTZXYVBwdThxbXRhMml6RUFmWGlQS2F4YlVrODNTbVgzQVFMQmxWdVNmQVVBcDJ5bGUxNzRYVDBodFFRU3Y5WklZRkczSXRNVGU3UG9FUVVHd2NoVWhCUlM3NXIxSk9RejdmdHlKTms3QStKdTBuNGpoQitvV0JKbXpmVElJTDNmWU13MGhNVDhuNnkvKzR2L3JlT2dIR0dqMGxIKzhJWGMwaGV5YkJzaGxRUVNJZGxneVZ1ODNmcldNWlo1U0VrdnN1QTBneXRreEJBczZYeUc2SzNTTnFsUkdUMDByUm9NUml6THMwRzFmYUFZRU9BUUMwMUEzQWVCSWxMdWNaRURjblUzcjMwbWlHWVQ2RkczelV2QUNEYjllcXhtOTIySUUxZmhmNE5FcGVrSi92TkRDTS9mY2tMellaVkRmN3dsdStRSjNudEFwM2JWOVlMN0hmTTBhNTdnL2NzbHVEZmp2b1J1UTRLYnlhQmEyUnBac1dUa2pneEdyc1lzR2VpLytEV3IrZFJWNnMvYlM1WGdlNEZMVTV3Umx3THZCUDJ0SVg0bTcrWVRmN1J3NFliUlBZcnVwWWdscTFXb2hERS83S3lsbkhhSTJhalFWbStjNGU0eEt6TStRK0IvaWR3T2RFa2NUOD0iLCJjb250ZW50X3NoYTI1NiI6ImUwMTMwZGFmM2JiZjY1MWM2ZGUyZjc3MjJjOWZmMWM2YWJhMmRlMDY3YWIyMmJhMTA5OWI4YjRjNzU5ZGU3ZWMiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjozLCJub25jZV9iNjQiOiJXRUEwUnQrWFVVRFJGeWJ5Iiwib2JqZWN0X2lkIjoicmV0YWluZWQtYWN0aXZlLWF1dGhvciIsInBhcmVudF9yZXZpc2lvbiI6bnVsbCwicmV2aXNpb24iOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJzaWduYXR1cmVfYjY0IjoiRHdGd2hQeEFHV3U4d0hlOW56d3RLQmJGSWZvUlJJcThCamVyT1lKeFFwT2dTdjNJUHFXZy9jc2luYUhObmtkUjJvZGVvVmxhaVZVbkU3K3BwenNERGc9PSIsInRvbWJzdG9uZSI6ZmFsc2UsInZlcnNpb24iOjF9LHsiYWFkX2I2NCI6ImV5SmhZMk52ZFc1MFgybGtJam9pWVhaaE1TMW1ZekUyTkdZNE1qVXdPREF6WldFNFpEUXhPRE0wWmpGa1pUZzFPREl4TURNMVpESTNaRE0zTkRkbE9ETTJNVEEzT0RsbE1HWTRaVFV6TVROaU9XTXpJaXdpWkdWMmFXTmxYMmxrSWpvaVlYWmtNUzFoT0dJek5HVTROVGM0WldFME1EYzVPV1ptTjJJNE0yTTJaREEyTUdJek1qSTROemt3TXpZNE1HTTFPV0prWVRobE4yVXpOakF4TTJVMFpXVXlOV0k0SWl3aVptOXliV0YwSWpvaVlYUnNZWE4yWVhWc2RDMWxjRzlqYUMxamFYQm9aWEowWlhoMElpd2lhMlY1WDJWd2IyTm9Jam96TENKcmFXNWtJam9pY0dGMFkyZ2lMQ0p2WW1wbFkzUmZhV1FpT2lKeVpYUmhhVzVsWkMxeVpYWnZhMlZrTFdGMWRHaHZjaUlzSW5KbGRtbHphVzl1SWpvaU1UQXdNREF3TURBdE1EQXdNQzAwTURBd0xUZ3dNREF0TURBd01EQXdNREF3TURBeUlpd2lkbUYxYkhSZmFXUWlPaUoyWVhWc2RDMWpNallpTENKMlpYSnphVzl1SWpveGZRPT0iLCJjaXBoZXJ0ZXh0X2I2NCI6IndCQkdrNHdTZHk0d3BhNVQzaUw3N3BTQU9BQ1VFRmZuR2U3dXVTMm84eFBVNm0waWt3aVlSY0pjRnhzK1g2d0hVMlRCQjR5d29wMGtQOXpSbTY0MDVSelBVZmJwSXFCYTNzWjFCWG84Yzc2eXBUa0o0VVQ5T00zaGhKOXpQNHRNTUNubU5MdGxtRXZGYi91UXpIcktmZUxJbzVJUTFQUHZBeElWVDFMayt4OHAwRkN5ME80b0gwTkZsWHdDUlZTOTFzdU1KZUFxYTdGckRlR1RjUURpcTdJSWF0OWVrSUdFZ0MvYVBETU1GTzlNZnBwY1c4RW9lM0tMSVIwTWFRRTlwd0pEMHozcGppS29aQ1Q3OE8yWEY1d1pCVkdiZndyT21EaTE0ZHd5bm00YjMxNFRoNElqakZxdlVUTDB4WnRGRkNjYjk4cUJSWFpiUERxUm9CS1UxYjhmOUcycnEzazRrck1BT3l0b3BpaDJ1Q3UzMlUwYUFlZTZqM2dxVlE5TDUvTHhEU0I0eExDbGtaSFI4VEJxM2tXZGZVdnZvQ3RwZzlvdERFN2wxRzkxRWJwbDZVTnY1OElwWTRZd1dQVFVWWkVob2kra3JLczVkVjIyUmxEMk5zdTRNamZnWGRNL3E5V2MvaUtsWk9qc1ZIdW9DTkNkSlZCUGlpSXBzcXcxOUY5MlVhMSt0b2Y1YkRsNkJEZjNyZS80TmFXbDVUaTYwLzFQUXl0MjJQTUJpUUFkRituUW9oenc4NHpOOXhHd2xUL3hZWHN2a2I4YlFpSTRLVnZDdlpsaW1BcngxdzNaN3BPbTJRUWVDM0YwQkpvL3NxRm1Pb1ZwbDVHVXI0TWdYbG9ScG54K1U4bDJsZnNqT1RPVHVMMk9pbE11dTc0UDA2U3VzZm1GWW8zajF6d2FOMVdWZXZiUnZRY1VNNWVvUWxaR0RmSkI2YTRKMHFJeFNocG80SmNzQjV5SHJ0WXRVbTNKZlN4d0lMWm4xc2cxdkFzZ0V3T3ZHL0NDTnA1L3R5QlpOdEtzSGZBTHgvbFZ4YlFlRnhKOFBtNzc2QnBRZW9qZTB3aXFjeE90b0NiOUdua3MrUjZ0dUk5ejRMYTZibnJKRU9pZlpVMlNhT2hmakduck5sWVM4blc4WHJiZDFESk83NGxrYndGdWdSaEVUS3ZHZGxoL1dCZUI5MXhYY2ZYQTJoQW43a1VZMFgvZmhKYU9rTWIydVA0TytVWm9zek5UekJDNlg5VEdqVnduc2hBREFFYjEyUXpuSVZCZUlQdFdFNmRqYXl5d3J5dDcrMHVoYk9mTjdFL3FLV21HTXl1c25FYktCaXVxOUN2eS9hZ1hnOVZrVFhCcEFmcEEyNlkyRUZoUFBGTVJ1bnRuY1VXYXJpamdoZitSbXc5aTJMcHFpdktzUHNVNVpnQ2I5ZXpWYUV5VUV1dW9PdG5WNUZodlVLNysiLCJjb250ZW50X3NoYTI1NiI6IjgxOTU3NjVmMjU1NjZkNWNiMWJkMGNjODEzMWNkMjAzZTJjZWRhYTE3ZmY0Mzc0MDE3YzI5OGQzYTc1NTkyNTAiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjozLCJub25jZV9iNjQiOiJvdU5teUtkM1F0YVNsN0tYIiwib2JqZWN0X2lkIjoicmV0YWluZWQtcmV2b2tlZC1hdXRob3IiLCJwYXJlbnRfcmV2aXNpb24iOm51bGwsInJldmlzaW9uIjoiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwic2lnbmF0dXJlX2I2NCI6InlWK2FtV25TVFIvWWlEdG4yY1R2cC9NNlhHNW1rSkx4bzJLSERhMWhla1VFWEZuUmdzQ3E3bEVBbnR1OThBQ1JCa3RJdndCWHJDeHpFbnEwa0ZkREN3PT0iLCJ0b21ic3RvbmUiOmZhbHNlLCJ2ZXJzaW9uIjoxfSx7ImFhZF9iNjQiOiJleUpoWTJOdmRXNTBYMmxrSWpvaVlYWmhNUzFtWXpFMk5HWTRNalV3T0RBelpXRTRaRFF4T0RNMFpqRmtaVGcxT0RJeE1ETTFaREkzWkRNM05EZGxPRE0yTVRBM09EbGxNR1k0WlRVek1UTmlPV016SWl3aVpHVjJhV05sWDJsa0lqb2lZWFprTVMxaE9UUXpZemt6TXpVMU5EQTJOelppTlRBd1lqZzFNalkxTW1NM1ptRTVZelZrTm1GaFl6QTFNVGRsWW1WalpUYzFNR0k0TnpjM1lXWmxOemRtTkdFNElpd2labTl5YldGMElqb2lZWFJzWVhOMllYVnNkQzFsY0c5amFDMWphWEJvWlhKMFpYaDBJaXdpYTJWNVgyVndiMk5vSWpvekxDSnJhVzVrSWpvaWNHRjBZMmdpTENKdlltcGxZM1JmYVdRaU9pSjBaWEp0YVc1aGJDMWtaV3hsZEdVaUxDSnlaWFpwYzJsdmJpSTZJakV3TURBd01EQXdMVEF3TURBdE5EQXdNQzA0TURBd0xUQXdNREF3TURBd01EQXdNeUlzSW5aaGRXeDBYMmxrSWpvaWRtRjFiSFF0WXpJMklpd2lkbVZ5YzJsdmJpSTZNWDA9IiwiY2lwaGVydGV4dF9iNjQiOiIybzd5Y2tnYTBGMEx0UmlSUzdidU84clRrelJ5NDlnWVNqeGtOSlJLMjZ6WVJoT3BQVE9LVDFOZGhSeUJvUHlScEtqT1JCVUZhcHVyRG1BK0tPOWtwN0F6UnlXUXVjRyswMTZ3NEFxNEpoQVJyV3RBYWROb292WHNKdUhncWI1b0l0MmhnNUsyR29LSXdZMnJSUElmOXVtQVRtc0QrdHJzc3BJN0pzTXlhcnZkV3ZzaUROTUNpQVp0eW13My9tR0U0RnR6VFVnVjY5M0pZTVlweHU5QXNJRXlOaDl6T2FRTVdDSTJIR3ZMU2RGSkJZdmJsWkxIckNsZ3NtZFJIV1phbHZJOXRPUDA3S0tDazdIcUFXdWowbGVUTjVxNEFpOG1vZHFtZTNzdU9FNjhkMG1CTFBUc2dvek5VT2ZJaFVlaVJEQXNBZCtZQktTeDhvUU1mK0t4VXdqZWlsL29iUjBUeFhZR0NqYUkvWUhtTVZpczdrNyt6QlphZC9OWFFKZS9Xb3ZoTnlFeW1DRjFpZ0dMVklDWWhqeEtUV0djSEVVYWt6RjBWTjBOVWhRbEo0WHBZdCs1TXU2YWkzdEVSTDlSYjlkZ3VCd3RBelgyRGtZdWpmaTNYcitMY0l6YzdaT3lJcHRiZGNWUldWUC9jUzA0Y3RKZkE0b1oiLCJjb250ZW50X3NoYTI1NiI6IjcyZDMzZTk5ZWNlZjYzOTI3MTgxN2U5MDYzZGIzYzEzYTZkMWJlOTQ5NGQyNjgwNzY0MmFhYWI3N2UyNDE3NzMiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LW9wYXF1ZS1jaXBoZXJ0ZXh0LWVudmVsb3BlIiwia2V5X2Vwb2NoIjozLCJub25jZV9iNjQiOiJlWFVMNE12MExNOG1tclNpIiwib2JqZWN0X2lkIjoidGVybWluYWwtZGVsZXRlIiwicGFyZW50X3JldmlzaW9uIjpudWxsLCJyZXZpc2lvbiI6IjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsInNpZ25hdHVyZV9iNjQiOiJTdGpLS1JMeVFSajBJQmxlYTQxM3kxNmJXR3IwckpMK3ZTRElBS29yOHNSTC9YTXEva2NDdlY5R0ZLc2ZQVTVnRG83Ni8zdExBTkVBaEhMMUFCajZEUT09IiwidG9tYnN0b25lIjp0cnVlLCJ2ZXJzaW9uIjoxfV0sInJvdXRlIjoicGF0Y2giLCJ2ZXJzaW9uIjoxfQ==",
+  "operations": [
+    {
+      "author_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+      "author_sequence": 1,
+      "envelope": {
+        "aad_b64": "eyJhY2NvdW50X2lkIjoiYXZhMS1mYzE2NGY4MjUwODAzZWE4ZDQxODM0ZjFkZTg1ODIxMDM1ZDI3ZDM3NDdlODM2MTA3ODllMGY4ZTUzMTNiOWMzIiwiZGV2aWNlX2lkIjoiYXZkMS1hOTQzYzkzMzU1NDA2NzZiNTAwYjg1MjY1MmM3ZmE5YzVkNmFhYzA1MTdlYmVjZTc1MGI4Nzc3YWZlNzdmNGE4IiwiZm9ybWF0IjoiYXRsYXN2YXVsdC1lcG9jaC1jaXBoZXJ0ZXh0Iiwia2V5X2Vwb2NoIjozLCJraW5kIjoicGF0Y2giLCJvYmplY3RfaWQiOiJyZXRhaW5lZC1hY3RpdmUtYXV0aG9yIiwicmV2aXNpb24iOiIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2YXVsdF9pZCI6InZhdWx0LWMyNiIsInZlcnNpb24iOjF9",
+        "ciphertext_b64": "WXWbjaJQs9OrYbxTkS9+qy1Vw4fOMgtvcvzZU8bu9PyGYrrm2zCsSzjXyO7xQOH2KpTLn/ju7dD6KoXUrgmZCog1BLZjE+4hptR5ZlEX5OmBGZT58Y0TNy9vxu5XA7DparU3kZfHsXIUwa/PfNRpQ8JBruzbfHadQGw6pS5rl9GIYqSSnxcIWPPFT+Jjl1CsM224XposoHJUTquXgyrJTAhkaOPEw2Z5gx9E4cZCedT5l0vfBYjyCYYzOl5iPJfTN0FOz6lPUSt7EqiEUZnkUFtC/m8R0V1Wzs6B5I5J5VX4ldKkW6JmxG6hU2NDK425c1KazmURfGQFIwG5T7zCYsuUT2qQhIQwC+syXHA4qaPYcb7vZMZBu7H/z6rZJKyW07H6EOTvwlppwvw7kxKrZW+mXEe/ykOoU4n5iAt2xoNuql/739L186ymd3dkHJpKBJpSgJL8ntmJompeMUhQ7IwrFNp/au59AwbdDTx22ESJny9mKt7gsFT9rS9yemGxPYSuAEJQRNAIDDu/ywVouzQuqkt8M9D4br64DIC31KoHOcypawpt3GgAdFyH820al7JbfuoDIQue7deBZIG9WoANmeT6Kax2a6WaPpu8qmta2izEAfXiPKaxbUk83SmX3AQLBlVuSfAUAp2yle174XT0htQQSv9ZIYFG3ItMTe7PoEQUGwchUhBRS75r1JOQz7ftyJNk7A+Ju0n4jhB+oWBJmzfTIIL3fYMw0hMT8n6y/+4v/reOgHGGj0lH+8IXc0heybBshlQQSIdlgyVu83frWMZZ5SEkvsuA0gytkxBAs6XyG6K3SNqlRGT00rRoMRizLs0G1faAYEOAQC01A3AeBIlLucZEDcnU3r30miGYT6FG3zUvACDb9eqxm922IE1fhf4NEpekJ/vNDCM/fckLzYZVDf7wlu+QJ3ntAp3bV9YL7HfM0a57g/csluDfjvoRuQ4KbyaBa2RpZsWTkjgxGrsYsGei/+DWr+dRV6s/bS5Xge4FLU5wRlwLvBP2tIX4m7+YTf7Rw4YbRPYrupYglq1WohDE/7KylnHaI2ajQVm+c4e4xKzM+Q+B/idwOdEkcT8=",
+        "content_sha256": "e0130daf3bbf651c6de2f7722c9ff1c6aba2de067ab22ba1099b8b4c759de7ec",
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "key_epoch": 3,
+        "nonce_b64": "WEA0Rt+XUUDRFyby",
+        "object_id": "retained-active-author",
+        "parent_revision": null,
+        "revision": "10000000-0000-4000-8000-000000000001",
+        "signature_b64": "DwFwhPxAGWu8wHe9nzwtKBbFIfoRRIq8BjerOYJxQpOgSv3IPqWg/csinaHNnkdR2odeoVlaiVUnE7+ppzsDDg==",
+        "tombstone": false,
+        "version": 1
+      },
+      "format": "atlasvault-encrypted-patch-operation",
+      "lamport": 1,
+      "operation_id": "10000000-0000-4000-8000-000000000001",
+      "operation_type": "upsert",
+      "version": 1
+    },
+    {
+      "author_device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+      "author_sequence": 2,
+      "envelope": {
+        "aad_b64": "eyJhY2NvdW50X2lkIjoiYXZhMS1mYzE2NGY4MjUwODAzZWE4ZDQxODM0ZjFkZTg1ODIxMDM1ZDI3ZDM3NDdlODM2MTA3ODllMGY4ZTUzMTNiOWMzIiwiZGV2aWNlX2lkIjoiYXZkMS1hOGIzNGU4NTc4ZWE0MDc5OWZmN2I4M2M2ZDA2MGIzMjI4NzkwMzY4MGM1OWJkYThlN2UzNjAxM2U0ZWUyNWI4IiwiZm9ybWF0IjoiYXRsYXN2YXVsdC1lcG9jaC1jaXBoZXJ0ZXh0Iiwia2V5X2Vwb2NoIjozLCJraW5kIjoicGF0Y2giLCJvYmplY3RfaWQiOiJyZXRhaW5lZC1yZXZva2VkLWF1dGhvciIsInJldmlzaW9uIjoiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwidmF1bHRfaWQiOiJ2YXVsdC1jMjYiLCJ2ZXJzaW9uIjoxfQ==",
+        "ciphertext_b64": "wBBGk4wSdy4wpa5T3iL77pSAOACUEFfnGe7uuS2o8xPU6m0ikwiYRcJcFxs+X6wHU2TBB4ywop0kP9zRm6405RzPUfbpIqBa3sZ1BXo8c76ypTkJ4UT9OM3hhJ9zP4tMMCnmNLtlmEvFb/uQzHrKfeLIo5IQ1PPvAxIVT1Lk+x8p0FCy0O4oH0NFlXwCRVS91suMJeAqa7FrDeGTcQDiq7IIat9ekIGEgC/aPDMMFO9MfppcW8Eoe3KLIR0MaQE9pwJD0z3pjiKoZCT78O2XF5wZBVGbfwrOmDi14dwynm4b314Th4IjjFqvUTL0xZtFFCcb98qBRXZbPDqRoBKU1b8f9G2rq3k4krMAOytopih2uCu32U0aAee6j3gqVQ9L5/LxDSB4xLClkZHR8TBq3kWdfUvvoCtpg9otDE7l1G91Ebpl6UNv58IpY4YwWPTUVZEhoi+krKs5dV22RlD2Nsu4MjfgXdM/q9Wc/iKlZOjsVHuoCNCdJVBPiiIpsqw19F92Ua1+tof5bDl6BDf3re/4NaWl5Ti60/1PQyt22PMBiQAdF+nQohzw84zN9xGwlT/xYXsvkb8bQiI4KVvCvZlimArx1w3Z7pOm2QQeC3F0BJo/sqFmOoVpl5GUr4MgXloRpnx+U8l2lfsjOTOTuL2OilMuu74P06SusfmFYo3j1zwaN1WVevbRvQcUM5eoQlZGDfJB6a4J0qIxShpo4JcsB5yHrtYtUm3JfSxwILZn1sg1vAsgEwOvG/CCNp5/tyBZNtKsHfALx/lVxbQeFxJ8Pm776BpQeoje0wiqcxOtoCb9Gnks+R6tuI9z4La6bnrJEOifZU2SaOhfjGnrNlYS8nW8Xrbd1DJO74lkbwFugRhETKvGdlh/WBeB91xXcfXA2hAn7kUY0X/fhJaOkMb2uP4O+UZoszNTzBC6X9TGjVwnshADAEb12QznIVBeIPtWE6djayywryt7+0uhbOfN7E/qKWmGMyusnEbKBiuq9Cvy/agXg9VkTXBpAfpA26Y2EFhPPFMRuntncUWarijghf+Rmw9i2LpqivKsPsU5ZgCb9ezVaEyUEuuoOtnV5FhvUK7+",
+        "content_sha256": "8195765f25566d5cb1bd0cc8131cd203e2cedaa17ff4374017c298d3a7559250",
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "key_epoch": 3,
+        "nonce_b64": "ouNmyKd3QtaSl7KX",
+        "object_id": "retained-revoked-author",
+        "parent_revision": null,
+        "revision": "10000000-0000-4000-8000-000000000002",
+        "signature_b64": "yV+amWnSTR/YiDtn2cTvp/M6XG5mkJLxo2KHDa1hekUEXFnRgsCq7lEAntu98ACRBktIvwBXrCxzEnq0kFdDCw==",
+        "tombstone": false,
+        "version": 1
+      },
+      "format": "atlasvault-encrypted-patch-operation",
+      "lamport": 2,
+      "operation_id": "10000000-0000-4000-8000-000000000002",
+      "operation_type": "upsert",
+      "version": 1
+    },
+    {
+      "author_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+      "author_sequence": 3,
+      "envelope": {
+        "aad_b64": "eyJhY2NvdW50X2lkIjoiYXZhMS1mYzE2NGY4MjUwODAzZWE4ZDQxODM0ZjFkZTg1ODIxMDM1ZDI3ZDM3NDdlODM2MTA3ODllMGY4ZTUzMTNiOWMzIiwiZGV2aWNlX2lkIjoiYXZkMS1hOTQzYzkzMzU1NDA2NzZiNTAwYjg1MjY1MmM3ZmE5YzVkNmFhYzA1MTdlYmVjZTc1MGI4Nzc3YWZlNzdmNGE4IiwiZm9ybWF0IjoiYXRsYXN2YXVsdC1lcG9jaC1jaXBoZXJ0ZXh0Iiwia2V5X2Vwb2NoIjozLCJraW5kIjoicGF0Y2giLCJvYmplY3RfaWQiOiJ0ZXJtaW5hbC1kZWxldGUiLCJyZXZpc2lvbiI6IjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsInZhdWx0X2lkIjoidmF1bHQtYzI2IiwidmVyc2lvbiI6MX0=",
+        "ciphertext_b64": "2o7yckga0F0LtRiRS7buO8rTkzRy49gYSjxkNJRK26zYRhOpPTOKT1NdhRyBoPyRpKjORBUFapurDmA+KO9kp7AzRyWQucG+016w4Aq4JhARrWtAadNoovXsJuHgqb5oIt2hg5K2GoKIwY2rRPIf9umATmsD+trsspI7JsMyarvdWvsiDNMCiAZtymw3/mGE4FtzTUgV693JYMYpxu9AsIEyNh9zOaQMWCI2HGvLSdFJBYvblZLHrClgsmdRHWZalvI9tOP07KKCk7HqAWuj0leTN5q4Ai8modqme3suOE68d0mBLPTsgozNUOfIhUeiRDAsAd+YBKSx8oQMf+KxUwjeil/obR0TxXYGCjaI/YHmMVis7k7+zBZad/NXQJe/WovhNyEymCF1igGLVICYhjxKTWGcHEUakzF0VN0NUhQlJ4XpYt+5Mu6ai3tERL9Rb9dguBwtAzX2DkYujfi3Xr+LcIzc7ZOyIptbdcVRWVP/cS04ctJfA4oZ",
+        "content_sha256": "72d33e99ecef639271817e9063db3c13a6d1be9494d26807642aaab77e241773",
+        "format": "atlasvault-opaque-ciphertext-envelope",
+        "key_epoch": 3,
+        "nonce_b64": "eXUL4Mv0LM8mmrSi",
+        "object_id": "terminal-delete",
+        "parent_revision": null,
+        "revision": "10000000-0000-4000-8000-000000000003",
+        "signature_b64": "StjKKRLyQRj0IBlea413y16bWGr0rJL+vSDIAKor8sRL/XMq/kcCvV9GFKsfPU5gDo76/3tLANEAhHL1ABj6DQ==",
+        "tombstone": true,
+        "version": 1
+      },
+      "format": "atlasvault-encrypted-patch-operation",
+      "lamport": 3,
+      "operation_id": "10000000-0000-4000-8000-000000000003",
+      "operation_type": "delete",
+      "version": 1
+    }
+  ],
+  "record": {
+    "format": "atlasvault-activation-record",
+    "proof": {
+      "deliveries": [
+        {
+          "ciphertext_b64": "5JtPADVvdoFB60jhFT0ufnkpmqETPm+NtQRc37dG8Wfi577tKqwblEUkcZCa4QEh",
+          "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "encapsulated_key_b64": "vq21FByiJQMQ0QVrvHys+5rDrTA5RRvu7uOubSuwKC0=",
+          "key_epoch": 4
+        },
+        {
+          "ciphertext_b64": "TiOy3q0x2dPzSOCfuAmkOv8Tgip/GmlLgTOYPHr5fasP0BXUW2M9sVuNQKQctn2g",
+          "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "encapsulated_key_b64": "3Vnmz0mD1bl0l5s3l2jptWBz7oR/9Hoh2e5Gtu2Fy2k=",
+          "key_epoch": 4
+        }
+      ],
+      "format": "atlasvault-epoch-rotation",
+      "plan": {
+        "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+        "format": "atlasvault-rotation-plan",
+        "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+        "new_epoch": 4,
+        "previous_epoch": 3,
+        "prior_registry_root": "245e428030e1f903b1633fbe1245e63d169879e07fbb84fc0ddf9988a4187e42",
+        "recipients": [
+          "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8"
+        ],
+        "resulting_registry_root": "c46e8da20ef886b0cd4888c1d1a34e1a348e5040817653772ec242b2fe2e311e",
+        "revocation_root": "e74a400d39dac8361d860a0df2b6741fb8c389d24290ad45515d43ff3652eedc",
+        "state_root": "85934382e0e2aafa15536d069019f8ba276a39ae739d385d3d1480c5a99446e4",
+        "vault_id": "vault-c26",
+        "version": 1
+      },
+      "registry": [
+        {
+          "agreement_public_b64": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+          "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+          "signing_public_b64": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+          "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+          "signing_public_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+          "state": "ACTIVE"
+        },
+        {
+          "agreement_public_b64": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+          "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+          "signing_public_b64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+          "state": "ACTIVE"
+        }
+      ],
+      "revocation": {
+        "account_id": "ava1-fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+        "authorization_category": "DEVICE_PRESENCE",
+        "format": "atlasvault-device-revocation",
+        "initiator_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+        "key_epoch": 3,
+        "prior_registry_root": "245e428030e1f903b1633fbe1245e63d169879e07fbb84fc0ddf9988a4187e42",
+        "resulting_registry_root": "c46e8da20ef886b0cd4888c1d1a34e1a348e5040817653772ec242b2fe2e311e",
+        "root": "e74a400d39dac8361d860a0df2b6741fb8c389d24290ad45515d43ff3652eedc",
+        "sequence": 1,
+        "signature_b64": "WnDaLKi0J2XRg1rBuIopyZwQbUYMNmbbRT/vYhZvVL3ySQX0RIU/jOtRLjUpxz2NP9TMkcRH6IMR75yfLiy2Dw==",
+        "target_device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+        "vault_id": "vault-c26",
+        "version": 1
+      },
+      "root": "62138812edc1b4ccb8d2a5efcd7763586e76fc6f455117a6c9ae2eeb3b3889b4",
+      "rotation_signer_device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+      "signature_b64": "fNCIrtTupLqS88pwZ059a1unREG7P5R2R+neTHf7WD2j0ufbLBUEX5DKk+Kl5JQOARCT8kmZu3slk+pIJhKACQ==",
+      "version": 1
+    },
+    "status": "ACTIVATION_ACCEPTED",
+    "transition_id": "62138812edc1b4ccb8d2a5efcd7763586e76fc6f455117a6c9ae2eeb3b3889b4",
+    "version": 1
+  },
+  "signed_descriptors": [
+    {
+      "descriptor": {
+        "agreement_public_key": "GKb4waf93yK9QQE4959ymM040dClQtQmbVVr6GCdiGI=",
+        "created_at": "2026-01-01T00:00:00Z",
+        "device_id": "avd1-a943c9335540676b500b852652c7fa9c5d6aac0517ebece750b8777afe77f4a8",
+        "format": "atlasvault-device-descriptor",
+        "key_epoch": 3,
+        "signing_public_key": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg+6/Tw=",
+        "version": 1
+      },
+      "format": "atlasvault-signed-device-descriptor",
+      "signature": "USeDXUwHM7dXtFGFC9hL18lB5ewJ7MIrFoMYWZsSh7Bt+jYtqZ2L/lpqKt9R/vN5pTmpXF0/clFm42p7wfSkDA==",
+      "version": 1
+    },
+    {
+      "descriptor": {
+        "agreement_public_key": "vOBZv1sqt6kfPoY6zwyE0+u+BMqEkAlLBStbFa+rF0M=",
+        "created_at": "2026-01-01T00:00:00Z",
+        "device_id": "avd1-2b65000ef7a54531f4ca1f158e4b5563975603a1249ac72ec0175b3b08260703",
+        "format": "atlasvault-device-descriptor",
+        "key_epoch": 3,
+        "signing_public_key": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+        "version": 1
+      },
+      "format": "atlasvault-signed-device-descriptor",
+      "signature": "AvK4J0NtxJy8YAakQblCnrkrPjwpTMM94sXp7cFTwoVH7eqpwADYtzmReCEFWZSPU8ER7k+kuGdnFsM8OpxEDw==",
+      "version": 1
+    },
+    {
+      "descriptor": {
+        "agreement_public_key": "f0QvtOzJ3WzeRjWIH74rtDO2ewBJNcQzDSHjb2gaDhI=",
+        "created_at": "2026-01-01T00:00:00Z",
+        "device_id": "avd1-a8b34e8578ea40799ff7b83c6d060b32287903680c59bda8e7e36013e4ee25b8",
+        "format": "atlasvault-device-descriptor",
+        "key_epoch": 3,
+        "signing_public_key": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+        "version": 1
+      },
+      "format": "atlasvault-signed-device-descriptor",
+      "signature": "lPHveqinb4kEkbUR57rnXkXwymUndnXrAZgZ7bJGhWo4EAeUt+fzJ7QDZ61ajiBm0h11xtJ/+xKEbXG6SxMXDQ==",
+      "version": 1
+    }
+  ],
+  "synthetic_test_only": true,
+  "version": 1
+}

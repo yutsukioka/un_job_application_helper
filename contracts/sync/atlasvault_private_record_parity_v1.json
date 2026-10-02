@@ -1,0 +1,346 @@
+{
+  "format": "atlasvault-private-record-parity",
+  "version": 1,
+  "capability_semantics": "Family booleans describe implemented core record capabilities. Native Apple and Flutter now have source-wired CRUD UI for all five families; Python has no product UI. recovery_display means a validated private projection, not full recovery UX. These booleans do not certify a provisioned production journey or C32 device/VM validation.",
+  "integration_semantics": "True verifies scoped C29 production composition through layered source, runtime/adversarial, exact cross-language, unchanged Python-core, UI/controller, and applicable native adapter/regression evidence. It does not certify every full provisioned-user journey or the C32 physical-device/VM matrix. The protected-owner and pre-first-rotation publication gaps are closed. Generic binding failures must fail closed; identical platform UI error categories are not required.",
+  "production_runtime_integration": {
+    "native_apple": true,
+    "flutter_android": true,
+    "flutter_windows": true,
+    "flutter_ios": true,
+    "flutter_macos": true
+  },
+  "blocking_gap": null,
+  "runtime_admission": {
+    "requires_provisioned_authenticated_owner": true,
+    "fabricated_bootstrap_allowed": false,
+    "required_legacy_context_outcome": "migrationRequired",
+    "required_legacy_context_scope": "Malformed or mismatched legacy import only; not a universal UI category for missing, un-enrolled, or rejected runtime bindings.",
+    "binding_failure_semantics": "Generic binding failures fail closed without fabricating authority or falling back around an existing epoch. Native genuine pre-enrollment legacy data may remain visibly read-only only while the binding is absent and no epoch directory exists. Dart refuses activation instead; this stricter admission is not a protocol-parity failure.",
+    "pre_bridge_publication": {
+      "requires_explicit_original_p6_descriptor_rows": true,
+      "validates_last_signed_registry_root_before_key_provision": true,
+      "persists_original_rows_only_pre_bridge": true,
+      "reconstructs_descriptors_from_device_keys": false,
+      "post_bridge_registry": "current_authenticated_P7_registry",
+      "behavioral_verification": "verified",
+      "scope": "Optional authenticatedRegistry is forwarded through runtimePublication. Protected runtime binding pins only explicitly supplied original P6 rows for pre-bridge reopening. Final Dart and Swift evidence confirms no-registry-argument publication after protected-binding reopen; descriptors are not fabricated from device keys."
+    },
+    "provisioning_scope": "Reopen only existing authenticated account/vault/device/registry/epoch/history and signing authority. Import authenticated legacy ciphertext into that existing P7 owner without fabricating identity, root, or enrollment.",
+    "legacy_import": {
+      "requires_existing_secure_vault_key_and_runtime_binding": true,
+      "preserved_fields": ["id", "revision", "parent_revision", "tombstone", "payload"],
+      "original_revision_replay_requires_exact_content_and_lineage": true,
+      "unknown_revision_for_existing_id": "migrationRequired",
+      "rewrites_legacy_source": false,
+      "publication": "New imported records are signed under the authenticated current owner and staged with their P5 outbox and projection in one encrypted epoch publication. Matching retained original revisions are skipped even after later runtime update/delete; a same-ID match alone is insufficient."
+    }
+  },
+  "verification": {
+    "external_evidence": {
+      "archive_destination": "evidence/C29/resume-20260905",
+      "archive_plan": "The parent will archive sanitized logs and a hash manifest. Evidence IDs and log basenames identify the external handoff; this does not assert that the archive already exists.",
+      "entries": {
+        "E-C29-006": {
+          "scope": "RED/GREEN and runtime evidence",
+          "log_basenames": ["initial-policy-red.log", "36-final-101-all.log", "frozen-policy-contract.aHwcAg"]
+        },
+        "E-C29-007": {
+          "scope": "Native and interoperability evidence",
+          "log_basenames": ["native-windows-short-encoded.log", "python-cross-language-runtime-final.log"]
+        }
+      }
+    },
+    "initial_policy_red": {"passed": 3, "failed": 1, "provenance": "parent_rerun"},
+    "source_policy": "tests/security/test_C29_runtime_parity.py checks scoped executable call edges and schema shape, not runtime execution or race freedom.",
+    "current_policy_schema": {
+      "status": "passed",
+      "provenance": "bounded_task_observed",
+      "test_path": "tests/security/test_C29_runtime_parity.py",
+      "passed": 49,
+      "failed": 0,
+      "evidence_id": "E-C29-006",
+      "log_basename": "frozen-policy-contract.aHwcAg",
+      "scope": "Final docs/contract freeze rerun against the parent's formatted, unchanged tests. Includes authenticatedRegistry forwarding, original-descriptor root validation before key provisioning, and post-bridge P7 registry checks; behavioral evidence is recorded separately.",
+      "schema_resolution": "revision and non-null parent_revision now require canonical lowercase UUID-shaped strings; the invalid-parent negative case passes."
+    },
+    "c32_full_device_vm_proof": false,
+    "full_provisioned_user_journey_proof": false,
+    "scoped_c29_integration": {
+      "status": "verified",
+      "basis": "Inspected production call chains plus the parent's completed layered runtime, interop, UI/controller, native adapter, binding, regression, and host-build handoffs.",
+      "scope": "All five production host entries and all five intended record families. Not complete C30/C31 UX, every full product journey, release approval, or C32 device/VM validation."
+    },
+    "pre_first_rotation_red": {
+      "provenance": "parent_reported",
+      "actual_p6_accepts_original_view_and_successor": true,
+      "previous_runtime_rejected_nil_journal": true,
+      "fix_status": "verified_closed_after_final_dart_and_swift_handoffs"
+    },
+    "reported_runtime_results": {
+      "dart_epoch": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/test/atlas_vault_runtime_epoch_test.dart",
+        "passed": 101,
+        "skipped": 0,
+        "sigkill_passed": 13,
+        "crud_sigkill_passed": 12,
+        "protected_binding_sigkill_passed": 1,
+        "fresh_pre_bridge_publications_after_binding_kill": 2,
+        "static_analysis": "reported_clean",
+        "evidence_id": "E-C29-006",
+        "log_basename": "36-final-101-all.log",
+        "scope": "Final 101-test result includes exact Swift-to-Dart payload conformance and 13 actual SIGKILL cases: 12 CRUD plus protected-binding pre-bridge reopen followed by two fresh publications. Process evidence uses synthetic slot adapters, not native secure-slot crash proof or C32."
+      },
+      "native_runtime": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/apple/Tests/AtlasUITests/AtlasVaultRuntimeIntegrationTests.swift",
+        "evidence_id": "E-C29-007",
+        "executed": 301,
+        "passed": 300,
+        "failed": 0,
+        "optional_export_skipped": 1,
+        "host_build": "reported_passed",
+        "scope": "Final affected Swift suite: 301 tests, zero failures, one optional export skip; final host build passed. Separate concrete-export runs supply interoperability proof, and the post-format registry/iOS batch is recorded separately."
+      },
+      "native_registry_and_ios_regressions": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "evidence_id": "E-C29-007",
+        "test_path": "apps/apple/Tests/AtlasUITests/AtlasVaultRuntimeIntegrationTests.swift",
+        "test_paths": ["apps/apple/Tests/AtlasUITests/AtlasIOSPrivateSavedSearchEndToEndTests.swift"],
+        "executed": 34,
+        "passed": 33,
+        "optional_export_skipped": 1,
+        "host_build": "reported_passed",
+        "scope": "Late initial-registry binding and existing iOS E2E batch after new-file formatting. Protected authenticatedHistoryRegistry is persisted/root-checked pre-bridge; publication after reopen succeeds without passing a registry argument."
+      },
+      "native_existing_ios_e2e": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/apple/Tests/AtlasUITests/AtlasIOSPrivateSavedSearchEndToEndTests.swift",
+        "passed": 6,
+        "scope": "Existing six-test E2E suite adapted to explicitly create the authenticated runtime binding. This is regression evidence, not implicit enrollment or a claim that every full product journey was exercised."
+      },
+      "exact_payload_interop": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/test/atlas_vault_runtime_epoch_test.dart",
+        "test_paths": ["apps/apple/Tests/AtlasUITests/AtlasVaultRuntimeIntegrationTests.swift"],
+        "swift_to_dart": "exact_payload_passed",
+        "dart_to_swift": "exact_payload_passed",
+        "scope": "Concrete signed encrypted exports consumed in both directions with exact payload checks; no plaintext evidence added to the repository."
+      },
+      "python_runtime_interop": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "evidence_id": "E-C29-007",
+        "log_basename": "python-cross-language-runtime-final.log",
+        "test_path": "tests/security/test_C29_runtime_interop.py",
+        "passed": 2,
+        "scope": "The unchanged Python core verifies both real Swift and Dart encrypted exports, including authenticated wrapper metadata and accepted history."
+      },
+      "security_schema_interop": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "tests/security/test_C29_runtime_parity.py",
+        "test_paths": ["tests/security/test_C29_runtime_interop.py"],
+        "passed": 134,
+        "scope": "Final security/schema/interop batch on current paths, including actual encrypted-export interop. Overlaps narrower results; not a unique-test total or C32 proof."
+      },
+      "ui_controller": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/test/atlas_private_records_panel_test.dart",
+        "test_paths": [
+          "apps/atlas_flutter/test/atlas_vault_runtime_controller_lifecycle_test.dart",
+          "apps/atlas_flutter/test/atlas_search_controller_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_runtime_parity_test.dart"
+        ],
+        "passed": 138,
+        "scope": "Latest parent-reported UI/controller batch, not the older 100-test focused-app-ui run."
+      },
+      "dart_affected": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/test/atlas_vault_private_state_runtime_test.dart",
+        "passed": 158,
+        "scope": "Final P3-P7 affected-regression batch: HPKE, epoch ring, payload vectors, recovery, revocation, rotation, catch-up, private runtime, Windows private runtime, and runtime parity."
+      },
+      "dart_p5_p6": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/test/atlas_vault_encrypted_patch_queue_test.dart",
+        "test_paths": [
+          "apps/atlas_flutter/test/atlas_vault_authenticated_snapshot_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_encrypted_patch_convergence_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_state_commitment_test.dart"
+        ],
+        "passed": 27
+      },
+      "native_storage_adapters": {
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/integration_test/atlas_vault_runtime_storage_integration_test.dart",
+        "macos": "reported_passed",
+        "macos_passed": 1,
+        "ios": "reported_passed",
+        "ios_passed": 1,
+        "windows": "reported_passed",
+        "windows_passed": 1,
+        "scope": "Focused synthetic encrypted-record create/read/decrypt/replace and key/store delete/retry through real Apple or Windows adapters; not the full provisioned runtime journey or C32 matrix."
+      },
+      "windows_native_followup": {
+        "status": "reported_passed",
+        "provenance": "parent_reported",
+        "test_path": "apps/atlas_flutter/test/atlas_vault_runtime_controller_lifecycle_test.dart",
+        "flutter_version": "3.44.4",
+        "dart_version": "3.12.2",
+        "native_build_seconds": 64,
+        "ui_controller_lifecycle_passed": 123,
+        "focus_manager_error_observed": false,
+        "temporary_ntfs_checkout_removed": true,
+        "evidence_id": "E-C29-007",
+        "log_basename": "native-windows-short-encoded.log",
+        "scope": "Real Windows native build and storage pass followed by the UI/controller/lifecycle batch. Contributes to scoped C29 composition proof, not a complete native recovery journey or C32 matrix."
+      }
+    },
+    "controlled_residuals": {
+      "R026": {
+        "status": "OPEN_CONTROLLED",
+        "provenance": "parent_reported",
+        "final_batches": 10,
+        "passed_batches": 9,
+        "failed_batches": 1,
+        "failure_preserved": true,
+        "scope": "The failed final lifecycle batch is not suppressed or erased by passing focused suites or later batches."
+      }
+    },
+    "blocking_gaps": {},
+    "resolved_gaps": {
+      "production_epoch_owner": "Verified UI/controller mutations reopen authenticated protected owners and publish the signed outbox and private projection atomically under owner admission; direct constructors in the app shell are not required.",
+      "pre_first_rotation_publication": "Verified final Dart and Swift protected bindings retain authenticated original P6 descriptor rows, support no-registry-argument publication after reopen before the first rotation, and preserve current P7 registry behavior after the transition.",
+      "existing_native_integration_regressions": "Late 34-test Swift registry/iOS batch, six existing explicitly bound E2E tests, final host build, and macOS/iOS/Windows focused storage handoffs passed.",
+      "native_handoff": "Completed for the bounded C29 evidence scope. Does not clear controlled residuals or expand proof to every product journey or C32."
+    },
+    "runtime_behavior": {
+      "native_apple": {
+        "status": "verified",
+        "test_paths": [
+          "apps/apple/Tests/AtlasUITests/AtlasVaultRuntimeIntegrationTests.swift",
+          "apps/apple/Tests/AtlasUITests/AtlasMacProductionHostTests.swift",
+          "apps/apple/Tests/AtlasUITests/AtlasIOSPrivateSavedSearchEndToEndTests.swift",
+          "apps/apple/Tests/AtlasUITests/AtlasVaultSavedSearchFeatureTests.swift",
+          "apps/apple/Tests/AtlasUITests/AtlasVaultSavedSearchViewTests.swift"
+        ],
+        "blocking_gaps": []
+      },
+      "flutter_android": {
+        "status": "verified",
+        "test_paths": [
+          "apps/atlas_flutter/test/atlas_vault_runtime_epoch_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_runtime_controller_lifecycle_test.dart",
+          "apps/atlas_flutter/test/atlas_private_records_panel_test.dart",
+          "apps/atlas_flutter/integration_test/atlas_vault_android_private_state_integration_test.dart"
+        ],
+        "blocking_gaps": []
+      },
+      "flutter_windows": {
+        "status": "verified",
+        "test_paths": [
+          "apps/atlas_flutter/test/atlas_vault_runtime_epoch_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_runtime_controller_lifecycle_test.dart",
+          "apps/atlas_flutter/test/atlas_private_records_panel_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_windows_private_state_runtime_test.dart",
+          "apps/atlas_flutter/integration_test/atlas_vault_runtime_storage_integration_test.dart",
+          "apps/atlas_flutter/integration_test/atlas_vault_windows_private_state_integration_test.dart"
+        ],
+        "blocking_gaps": []
+      },
+      "flutter_ios": {
+        "status": "verified",
+        "test_paths": [
+          "apps/atlas_flutter/test/atlas_vault_runtime_epoch_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_runtime_controller_lifecycle_test.dart",
+          "apps/atlas_flutter/test/atlas_private_records_panel_test.dart",
+          "apps/atlas_flutter/integration_test/atlas_vault_runtime_storage_integration_test.dart"
+        ],
+        "blocking_gaps": []
+      },
+      "flutter_macos": {
+        "status": "verified",
+        "test_paths": [
+          "apps/atlas_flutter/test/atlas_vault_runtime_epoch_test.dart",
+          "apps/atlas_flutter/test/atlas_vault_runtime_controller_lifecycle_test.dart",
+          "apps/atlas_flutter/test/atlas_private_records_panel_test.dart",
+          "apps/atlas_flutter/integration_test/atlas_vault_runtime_storage_integration_test.dart"
+        ],
+        "blocking_gaps": []
+      }
+    }
+  },
+  "record_families": [
+    {
+      "record_type": "saved_search",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "saved_job",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "application_note",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "profile_snippet",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    },
+    {
+      "record_type": "draft_metadata",
+      "hosts": {
+        "python_core": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "native_apple": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_android": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_windows": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_ios": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true},
+        "flutter_macos": {"create": true, "read_list": true, "update": true, "delete_tombstone": true, "encrypted_persistence": true, "sync_encoding_decoding": true, "conflict_handling": true, "recovery_display": true}
+      }
+    }
+  ],
+  "excluded_record_families": [
+    {
+      "record_type": "saved_text",
+      "reason": "legacy_reference_fixture_only"
+    }
+  ]
+}
