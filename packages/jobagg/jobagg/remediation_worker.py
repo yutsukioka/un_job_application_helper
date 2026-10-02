@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from jobagg.adapters.base import AdapterContext, get_adapter_class
+from jobagg.adapters.idb_api import IDBInventoryChanged
 from jobagg.accepted_detail_lineage import ensure_detail_lineage_indexes
 from jobagg.atomic_files import atomic_write_text
 from jobagg.db import JobDatabase
@@ -1427,8 +1428,22 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             return 0
         return int(receipt.get("incomplete_response_count", 0))
 
+    def inventory_change_count(self, task):
+        receipt = json.loads(task.get("receipt") or "{}")
+        if receipt.get("retry_input_sha256") != self.retry_input_fingerprint(json.loads(task["payload"])):
+            return 0
+        return int(receipt.get("inventory_change_count", 0))
+
     def retry_after_error(self, task, target, exc):
-        """Retry only eligibility deferrals or proven, non-held transport failures."""
+        """Retry eligibility deferrals, bounded typed responses, or proven transport failures."""
+        if isinstance(exc, IDBInventoryChanged) and task["kind"] == "listing":
+            # Count semantic failures independently of durable reservations and
+            # host/budget deferrals; the third failure requires task review.
+            count = self.inventory_change_count(task) + 1
+            if count >= 3:
+                return None
+            return {"category": exc.reason, "inventory_change_count": count,
+                    "eligible_at": time.time() + 900}
         if isinstance(exc, BlockingIOError) or (
             isinstance(exc, HostIneligible) and exc.category in {"budget", "cooldown"}
         ):
@@ -1582,6 +1597,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             retry = self.retry_after_error(task, target, exc)
             from jobagg.vacancy_outcomes import IncompleteDetailResponse
             incomplete_count = self.incomplete_response_count(task) + int(isinstance(exc, IncompleteDetailResponse))
+            inventory_count = self.inventory_change_count(task) + int(
+                isinstance(exc, IDBInventoryChanged) and task["kind"] == "listing"
+            )
             status = "dead_letter" if classify_failure(exc) == "local_policy" else ("pending" if retry else "blocked")
             with self.db.connection_scope() as conn:
                 self.finish(
@@ -1591,6 +1609,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     status,
                     {"capture_directory": str(target), "error": reason, "retry_decision": retry,
                      "incomplete_response_count": incomplete_count,
+                     **({"inventory_change_count": inventory_count,
+                         "inventory_change_reason": IDBInventoryChanged.reason}
+                        if inventory_count else {}),
                      "retry_input_sha256": self.retry_input_fingerprint(json.loads(task["payload"]))},
                     reason,
                     retry["eligible_at"] if retry else 0,

@@ -68,9 +68,13 @@ measured snapshot; they do not establish live source freshness or catch-up rate.
 
 EU Careers' observed redirect to `selection.eu-careers.europa.eu` requires an
 exact reviewed redirect URL in its source configuration. Other host, protocol
-and redirect checks continue to apply. A changing IDB count during a bounded
-enumeration defers a later attempt rather than accepting an incomplete inventory.
-Stable count shortages and invalid identities still fail validation.
+and redirect checks continue to apply. A changing IDB count during enumeration
+defers the first two failed attempts by 15 minutes. A third inventory-change
+failure with the same input binding blocks the listing task for review. The
+persisted semantic count survives worker restarts and intervening host/budget
+deferrals; a successful inventory starts a fresh retry sequence. Captures and
+attempt history remain intact, and no incomplete inventory is accepted. Stable
+count shortages and invalid identities still fail validation.
 
 Historical blocked or dead-letter tasks require a separately audited selected
 repair after deployment; code changes alone must not clear their history.
