@@ -1675,13 +1675,9 @@ private actor UnlockMultiWaiterGate {
     }
 
     func waitUntilEntered() async -> Bool {
-        for _ in 0..<1_000 {
-            if enteredCount > 0 {
-                return true
-            }
-            await Task.yield()
+        await waitForUnlockObservation {
+            await self.enteredCount > 0
         }
-        return enteredCount > 0
     }
 
     func open() {
