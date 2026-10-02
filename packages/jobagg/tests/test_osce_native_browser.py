@@ -202,7 +202,7 @@ def test_native_fullboard_pagination_uses_same_session(native, monkeypatch):
     from jobagg.adapters.osce_inventory import parse_bundle
     source, _, _, _ = inputs()
     jobs, total, count = parse_bundle(source, response.text)
-    assert total == 3 and count == 2 and {j.external_id for j in jobs} == {'1', '2', '3'}
+    assert total == 3 and count == 2 and {j.raw['provider_id'] for j in jobs} == {'1', '2', '3'}
     assert len(calls) == 3
 
 

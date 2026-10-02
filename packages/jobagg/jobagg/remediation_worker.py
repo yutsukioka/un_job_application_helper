@@ -13,12 +13,12 @@ from copy import deepcopy
 from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
 import fcntl
+import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
-import ssl
 import threading
 import time
 import urllib.error
@@ -51,6 +51,7 @@ from jobagg.pipelines.sync_source import (
 )
 from jobagg.remediation_scheduling import Task, select_due
 from jobagg.remediation_concurrency import HARD_CEILING
+from jobagg.source_health import worker_source_health, listing_recovery_pending
 from jobagg.robots import load_policy
 from jobagg.pipelines.host_recovery import host_eligibility, classify_failure
 from jobagg.vacancy_outcomes import (
@@ -579,10 +580,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     ON a.task_id=t.task_id WHERE t.status='pending'""")
                 if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
             ]
-            served = {
-                row["source_id"]: row["last_service"]
-                for row in conn.execute("SELECT source_id,last_service FROM remediation_sources")
-            }
+            source_states = {row["source_id"]: dict(row) for row in conn.execute(
+                "SELECT source_id,last_service,last_list_at,listing_proof FROM remediation_sources")}
+            served = {key: state["last_service"] for key, state in source_states.items()}
             kind_served = {
                 row["kind"]: row["last_service"]
                 for row in conn.execute(
@@ -618,6 +618,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if host not in hosts:
                 hosts[host] = self.host_state(host)
             state = hosts[host]
+            if row["kind"] != "listing" and listing_recovery_pending(source_states.get(source.id), state):
+                continue
             eligibility = host_eligibility(state, now)
             if eligibility["category"] == "review":
                 continue
@@ -678,6 +680,11 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if any(row[key] != task[key] for key in ("payload", "source_id", "kind")):
                 raise ValueError("Selected task changed before durable reservation")
             state = self.host_state(self.task_host(task))
+            if task["kind"] != "listing" and listing_recovery_pending(
+                conn.execute("SELECT last_list_at,listing_proof FROM remediation_sources WHERE source_id=?",
+                             (task["source_id"],)).fetchone(), state
+            ):
+                raise HostIneligible("Fresh complete listing required before detail recovery", category="cooldown")
             eligibility = host_eligibility(state, now)
             if eligibility["category"] == "review":
                 raise HostIneligible("Host stopped before durable reservation")
@@ -744,6 +751,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             default_header_origin=source.base_url,
             phase=phase,
             deadline_at=deadline,
+            source=source,
         )
         capture.current_id = phase["job_id"]
         original_transport = capture.original
@@ -939,6 +947,24 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 or epoch(proof["started_at"]) <= epoch(evidence["observed_at"])):
             return
         receipt = json.loads(task["receipt"])
+        if evidence.get("category") == "vacancy_detail_denied":
+            # A source-specific public detail refusal is not proof of closure.
+            # A newer complete inventory can schedule one daily recheck while
+            # preserving the prior accepted detail and every charged attempt.
+            rechecks = receipt.get("detail_denied_rechecks", 0)
+            if type(rechecks) is not int or rechecks < 0:
+                raise ValueError("Detail denial retry accounting is malformed")
+            receipt["detail_denied_rechecks"] = rechecks + 1
+            due = max(time.time(), epoch(evidence["observed_at"]) + 86400)
+            receipt["listing_reconciliation"] = {
+                "status": "still_listed_after_detail_denial", "frame_path": str(frame_path),
+                "frame_sha256": sha(frame_path), "enumeration": proof,
+                "closure_inferred": False, "bounded_recheck_scheduled": True,
+                "not_before": due,
+            }
+            conn.execute("UPDATE remediation_tasks SET status='pending',eligible_at=?,receipt=?,last_error=? WHERE task_id=?",
+                         (due, dump(receipt), "Public vacancy still listed; detail recheck limited to once per day", task["task_id"]))
+            return
         retries = receipt.get("unavailable_rechecks", 0)
         if type(retries) is not int or retries not in {0, 1}:
             raise ValueError("Unavailable detail retry accounting is malformed")
@@ -963,7 +989,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         old = json.loads(task.get("receipt") or "{}")
         receipt = {"vacancy_unavailable": evidence, "frame_path": payload["frame_path"],
                    "frame_sha256": payload["frame_sha256"], "capture_directory": str(target),
-                   "error": reason, "unavailable_rechecks": old.get("unavailable_rechecks", 0)}
+                   "error": reason, "unavailable_rechecks": old.get("unavailable_rechecks", 0),
+                   "detail_denied_rechecks": old.get("detail_denied_rechecks", 0)}
         with self.db.connection_scope() as conn:
             self.finish(conn, task, token, "unavailable_pending_inventory", receipt, reason)
             # The next regular tick coalesces all failed IDs into one due listing.
@@ -1474,14 +1501,14 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if isinstance(cause, urllib.error.URLError) and isinstance(cause.reason, Exception):
                 chain.append(cause.reason)
             cause = cause.__cause__
-        if any(isinstance(error, ssl.SSLError) for error in chain):
+        if classify_failure(exc) == "tls_validation":
             return None
         deferred = [error for error in chain if isinstance(error, HostIneligible)
                     and error.category in {"budget", "cooldown"}]
         if deferred and not any(isinstance(error, urllib.error.HTTPError) for error in chain):
             return {"category": "eligibility_deferred",
                     "eligible_at": max(time.time() + 60, *(error.eligible_at or 0 for error in deferred))}
-        transient = any(isinstance(error, (TimeoutError, ConnectionError)) for error in chain)
+        transient = classify_failure(exc) == "transient_transport"
         statuses = [error.code for error in chain if isinstance(error, urllib.error.HTTPError)]
         transient |= bool(statuses) and statuses[-1] in {408, 429, 500, 502, 503, 504}
         paths = sorted((target / "http").glob("*.json"))
@@ -1501,9 +1528,37 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         matching_phase = phase.get("kind") == task["kind"] or (
             phase.get("kind") == "robots" and phase.get("originating_phase") == task["kind"]
         )
+        body_captured = meta.get("body_captured")
+        if body_captured is True:
+            # Only a typed, source/phase-bound transient HTTP response may
+            # requeue after its complete error body was durably captured.
+            if (not statuses or statuses[-1] != meta.get("status_code")
+                    or statuses[-1] not in {408, 429, 500, 502, 503, 504}
+                    or category != ("rate_limit" if statuses[-1] == 429 else "transient_transport")
+                    or classify_failure(exc) != category
+                    or meta.get("source_binding", {}).get("source_id") != task["source_id"]
+                    or phase.get("job_id") != (task["external_id"] or None)):
+                return None
+            try:
+                artifact = Path(meta["artifact"])
+                if artifact.resolve() != path.with_suffix(".body.gz").resolve():
+                    return None
+                digest = hashlib.sha256()
+                size = 0
+                with gzip.open(artifact, "rb") as source:
+                    for block in iter(lambda: source.read(1024 * 1024), b""):
+                        digest.update(block)
+                        size += len(block)
+                        if size > meta["body_bytes"]:
+                            return None
+                if size != meta["body_bytes"] or digest.hexdigest() != meta.get("body_sha256"):
+                    return None
+            except (KeyError, TypeError, ValueError, OSError, EOFError):
+                return None
+        elif body_captured is not False:
+            return None
         if (
             meta.get("state") != "failed"
-            or meta.get("body_captured") is not False
             or meta.get("error_type") != type(exc).__name__
             or not matching_phase
             or not meta.get("finished_at")
@@ -1713,8 +1768,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             snapshot_complete = False
         access = [
             meta for meta in captures
-            if meta.get("status_code") in {401, 403, 429}
-            or "Fresh host access challenge:" in meta.get("error", "")
+            if (meta.get("status_code") in {401, 403, 429}
+                or "Fresh host access challenge:" in meta.get("error", ""))
+            and meta.get("failure_category") != "vacancy_detail_denied"
         ]
         failed = [item for item in tasks if item.get("outcome", {}).get("status") in {"blocked", "dead_letter"}]
         http_intervals = [item for item in requests if not item["local_policy_denial"]]
@@ -1757,6 +1813,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         from jobagg.source_health import source_health
         sources = []
         source_holds = json.loads((self.shared_policy.root / "source_holds.json").read_text())
+        report_now = time.time()
+        events = self.shared_policy.event_snapshot()
+        host_cache = {}
         with self.db.connect() as conn:
             for source in self.by_id.values():
                 state = conn.execute(
@@ -1798,6 +1857,11 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                             (source.id,),
                         ).fetchone()[0],
                         "source_policy_hold": source_holds.get(source.id),
+                        "health": worker_source_health(
+                            self, conn, source, state, now=report_now,
+                            source_hold=source_holds.get(source.id),
+                            events=events.get(source.id, []), host_cache=host_cache,
+                        ),
                         "capability": source_capability(source),
                     }
                 )
@@ -1810,6 +1874,14 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             "generated_at": utc(),
             "status": "incomplete",
             "sources": sources,
+            "source_health_summary": {
+                "observed_at": report_now,
+                "enabled_sources": len(sources),
+                "stale_listing_sources": [s["source_id"] for s in sources if s["health"]["listing_stale"]],
+                "listing_sources_requiring_review": [s["source_id"] for s in sources
+                    if s["health"]["listing"]["next_permitted_attempt_at"] is None],
+                "scope": "Listing freshness and eligibility; separate from publication and full-detail completeness.",
+            },
             "disabled_sources": [source_capability(s) for s in self.sources if not s.enabled],
             "binding": self.binding,
             "database": str(self.db.path),

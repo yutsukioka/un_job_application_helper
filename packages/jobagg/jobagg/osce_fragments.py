@@ -12,8 +12,19 @@ from jobagg.adapters.osce_inventory import captured_scope, pagination_state
 
 DATA_ROUTE = "osce_job_results_v1"
 CSRF_CONTRACT = "osce_tss_token_v1"
+UI_NAVIGATION = "osce_ui_navigation_v1"
+SERVER_NAVIGATION = "osce_server_pages_v1"
 ORIGIN = "https://vacancies.osce.org"
 ENDPOINT = "/ajax/content/job_results"
+
+
+# These publisher assets serve application, account, upload and sharing actions.
+# The normal anonymous listing scripts were replayed with these omitted; they
+# still generated every Next request and reconciled the complete inventory.
+UI_OMITTED_ASSETS = frozenset({
+    "/rfl.apply.js", "/facebook_status_post.js", "/campaign/campaign_utils.js",
+    "/changePassword.js", "/sha1.js", "/plugins/jquery.fileupload.js",
+})
 
 
 def csrf_token(html):

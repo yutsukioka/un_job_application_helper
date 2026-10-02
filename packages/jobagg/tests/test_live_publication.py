@@ -790,6 +790,8 @@ def test_complete_workday_listing_records_absence_without_closure(setup):
             "phase": {"kind": "listing"},
             "url": "https://example.org/cxs/test/jobs",
             "response_url": "https://example.org/cxs/test/jobs",
+            "started_at": "2025-09-14T11:59:59+00:00",
+            "finished_at": "2025-09-14T12:00:00+00:00",
             "method": "POST",
             "public_pagination_request": request,
             "request_body_sha256": hashlib.sha256(

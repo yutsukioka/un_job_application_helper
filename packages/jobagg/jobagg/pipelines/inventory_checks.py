@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import gzip
 import hashlib
 import json
@@ -121,6 +122,7 @@ def verify_listing(source, jobs, capture_paths) -> dict:
     search = str(source.extra.get("search_text") or "")
     limit = int(source.extra.get("page_size", 20))
     paths, totals, offset, count, terminal = [], set(), 0, 0, False
+    intervals = []
     try:
         for path in capture_paths:
             meta = json.loads(Path(path).read_text())
@@ -145,6 +147,11 @@ def verify_listing(source, jobs, capture_paths) -> dict:
                 json.dumps(request, separators=(",", ":")).encode()
             ).hexdigest() != meta.get("request_body_sha256"):
                 raise ValueError("Pagination parameters differ from original request bytes")
+            stamps = [datetime.fromisoformat(str(meta.get(key, "")).replace("Z", "+00:00"))
+                      for key in ("started_at", "finished_at")]
+            if any(stamp.tzinfo is None for stamp in stamps) or stamps[0] > stamps[1]:
+                raise ValueError("Invalid Workday listing capture interval")
+            intervals.append(tuple(stamp.astimezone(timezone.utc) for stamp in stamps))
             payload = captured_json(meta)
             rows = payload.get("jobPostings") if isinstance(payload, dict) else None
             if not isinstance(rows, list) or type(payload.get("total")) is not int:
@@ -185,6 +192,8 @@ def verify_listing(source, jobs, capture_paths) -> dict:
             reported_total=next(iter(totals)),
             page_count=count,
             verified_zero=not paths,
+            started_at=min(start for start, end in intervals).isoformat(),
+            finished_at=max(end for start, end in intervals).isoformat(),
         )
     except (ValueError, TypeError, KeyError, OSError) as exc:
         result["method"] = "workday_cxs_v1"

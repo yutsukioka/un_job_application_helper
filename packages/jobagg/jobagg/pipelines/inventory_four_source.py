@@ -164,7 +164,16 @@ def verify_four_source(source, jobs, capture_paths):
                 "OSCE browser evidence changed",
             )
             data_captures = []
-            if source.extra.get("browser_render", {}).get("data_route") == "osce_job_results_v1":
+            navigation = receipt["contract"].get("navigation")
+            require(navigation in {None, "osce_ui_navigation_v1", "osce_server_pages_v1"},
+                    "OSCE browser navigation receipt unrecognized")
+            if navigation == "osce_server_pages_v1":
+                from jobagg.pipelines.inventory_osce_server import verify_server_captures
+                data_captures, interval = verify_server_captures(
+                    source, html.decode(), capture_paths, receipt, receipt_path,
+                )
+                result.update(interval)
+            elif source.extra.get("browser_render", {}).get("data_route") == "osce_job_results_v1":
                 from jobagg.osce_fragments import verify_captures
                 require(receipt["contract"].get("data_route") == "osce_job_results_v1",
                         "OSCE data-route receipt differs")
@@ -172,16 +181,26 @@ def verify_four_source(source, jobs, capture_paths):
                         "OSCE CSRF receipt differs")
                 data_captures = verify_captures(html.decode(), capture_paths)
             captured, total, _ = parse_bundle(source, html.decode())
-            require(
-                {j.external_id for j in captured} == set(parsed),
-                "OSCE parsed and captured ID sets differ",
-            )
-            for job in captured:
-                require(
-                    parsed[job.external_id].source_url == job.source_url
-                    and parsed[job.external_id].title == job.title,
-                    "OSCE card data differs",
-                )
+            # Older full-board frames used only the numeric card suffix. Keep
+            # their proof verifiable without changing the live database key:
+            # each accepted alias must bind to this exact captured URL/title.
+            by_provider = {job.raw["provider_id"]: job for job in captured}
+            seen = set()
+            for actual in parsed.values():
+                expected = next((job for key, job in by_provider.items()
+                                 if actual.external_id in {key, job.external_id}), None)
+                require(expected is not None, "OSCE external identity is not a captured URL/card alias")
+                provider_id = expected.raw["provider_id"]
+                require(provider_id not in seen, "OSCE repeated normalized card identity")
+                require(actual.source_url == expected.source_url
+                        and actual.apply_url == expected.apply_url and actual.title == expected.title
+                        and actual.raw.get("href") == expected.source_url
+                        and actual.raw.get("title") == expected.title
+                        and actual.raw.get("external_id") == actual.external_id
+                        and actual.raw.get("provider_id", provider_id) == provider_id,
+                        "OSCE card data/identity differs")
+                seen.add(provider_id)
+            require(seen == set(by_provider), "OSCE parsed and captured ID sets differ")
             result["capture_paths"] = [
                 {
                     "path": str(receipt_path),

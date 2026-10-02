@@ -353,8 +353,16 @@ def classify_failure(exc):
     chain = list(exception_chain(exc))
     if any(isinstance(error, SSRFProtectionError) for error in chain):
         return "local_policy"
-    if any(isinstance(error, ssl.SSLError) for error in chain):
+    # EOF means the peer/transport closed the TLS stream unexpectedly. It is
+    # not evidence of an invalid certificate. Check the whole chain for actual
+    # verification failures first so wrapping never makes them retryable.
+    if any(isinstance(error, ssl.SSLCertVerificationError) for error in chain):
         return "tls_validation"
+    if any(isinstance(error, ssl.SSLError) and not isinstance(error, ssl.SSLEOFError)
+           for error in chain):
+        return "tls_validation"
+    if any(isinstance(error, ssl.SSLEOFError) for error in chain):
+        return "transient_transport"
     statuses = [error.code for error in chain if isinstance(error, urllib.error.HTTPError)]
     if statuses:
         status = statuses[0]
@@ -366,7 +374,11 @@ def classify_failure(exc):
     transient_errnos = {errno.ECONNRESET, errno.ECONNABORTED, errno.ETIMEDOUT, errno.EHOSTUNREACH, errno.ENETUNREACH}
     if any(isinstance(error, (TimeoutError, ConnectionError)) or
            (isinstance(error, OSError) and error.errno in transient_errnos) or
-           (isinstance(error, socket.gaierror) and error.errno == socket.EAI_AGAIN) for error in chain):
+           # macOS can report EAI_NONAME during a short resolver outage even
+           # for configured hosts which resolved immediately before and after.
+           # Treat this as bounded recovery, never as permission to skip fresh
+           # DNS/IP validation or to connect to a fallback/cached address.
+           (isinstance(error, socket.gaierror) and error.errno in {socket.EAI_AGAIN, socket.EAI_NONAME}) for error in chain):
         return "transient_transport"
     return "local_failure"
 

@@ -54,7 +54,11 @@ class HttpResponse:
 
 
 class HTTPError(RuntimeError):
-    pass
+    def __init__(self, message, *, response=None):
+        super().__init__(message)
+        # A bounded response stays in memory for the guarded collector. Never
+        # infer a vacancy outcome from the truncated human-readable message.
+        self.response = response
 
 
 class ResponseTooLargeError(HTTPError):
@@ -315,7 +319,9 @@ class JobAggHTTPClient:
                         time.sleep(max(delay, self._with_jitter(delay)) if retry_after is not None else self._with_jitter(delay))
                     continue
                 raise HTTPError(
-                    f"{method} {url} failed with HTTP {exc.code}: {response_body[:300]}"
+                    f"{method} {url} failed with HTTP {exc.code}: {response_body[:300]}",
+                    response=HttpResponse(exc.geturl(), exc.code, dict(exc.headers or {}),
+                                          response_body, error_bytes),
                 ) from exc
             except urllib.error.URLError as exc:
                 self._mark_request(host)
