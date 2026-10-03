@@ -192,30 +192,41 @@ public final class AtlasSearchViewModel: ObservableObject {
         await refresh()
     }
 
-    public func refresh() async {
+    @discardableResult
+    public func refresh() async -> Bool {
         guard !usesPreviewData else {
             applyPreviewResults()
-            return
+            return true
         }
-
-        if cachedSnapshot == nil || cachedAllJobs.isEmpty {
-            _ = loadCachedSnapshot()
-        }
-
+        if cachedSnapshot == nil || cachedAllJobs.isEmpty { _ = loadCachedSnapshot() }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
-
+        let previousClient = client
         do {
-            let health = try await client.health()
-            let fetchedSnapshot = try await fetchSnapshot(health: health)
+            let candidates = AtlasAPIClient.recoveryBaseURLs(cached: cachedSnapshot?.baseURL)
+            let (endpoint, health) = try await AtlasAPIClient.healthWithRecovery(
+                baseURL: client.baseURL, candidates: candidates
+            ) { endpoint in try await AtlasAPIClient(baseURL: endpoint).health() }
+            guard client.baseURL == previousClient.baseURL else { return false }
+            let recoveredClient = AtlasAPIClient(baseURL: endpoint)
+            let fetchedSnapshot = try await fetchSnapshot(health: health, client: recoveredClient)
+            try Task.checkCancellation()
+            guard client.baseURL == previousClient.baseURL else { return false }
             let snapshot = snapshotWithCurrentSavedAt(fetchedSnapshot)
             try AtlasLocalCache.commitSnapshot(snapshot, replacingDetailsWith: nil)
+            client = recoveredClient
             applyCachedSnapshot(snapshot)
             startDetailCacheWarmupIfNeeded(snapshot, force: true)
-            userMessage = "Local save refreshed"
+            if endpoint != previousClient.baseURL {
+                UserDefaults.standard.set(endpoint.absoluteString, forKey: AtlasAPIClient.baseURLDefaultsKey)
+                userMessage = "Reconnected and refreshed the local save"
+            } else { userMessage = "Local save refreshed" }
+            return true
         } catch {
+            guard client.baseURL == previousClient.baseURL else { return false }
             applyOfflineFallback(error)
+            return false
         }
     }
 
@@ -921,7 +932,7 @@ public final class AtlasSearchViewModel: ObservableObject {
         }
     }
 
-    private func fetchSnapshot(health: AtlasHealthSummary) async throws -> AtlasLocalSnapshot {
+    private func fetchSnapshot(health: AtlasHealthSummary, client: AtlasAPIClient) async throws -> AtlasLocalSnapshot {
         let openJobs = health.openJobs ?? 10_000
         let limit = max(openJobs + 250, 10_000)
         async let searchResponse = client.search(cacheSearchRequest(limit: limit))

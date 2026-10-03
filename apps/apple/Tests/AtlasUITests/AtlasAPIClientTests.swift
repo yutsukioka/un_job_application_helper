@@ -212,4 +212,86 @@ final class AtlasAPIClientTests: XCTestCase {
         XCTAssertTrue(response.results.isEmpty)
         XCTAssertEqual(response.total, 500)
     }
+    func testConfiguredEndpointNormalizesAHealthPathWithoutPersonalHost() {
+        let endpoint = AtlasAPIClient.configuredDefaultBaseURL(infoDictionary: [
+            AtlasAPIClient.configuredBaseURLInfoKey: "https://atlas.test:8765/api/health?q=1"
+        ])
+        XCTAssertEqual(endpoint?.absoluteString, "https://atlas.test:8765")
+        XCTAssertNil(AtlasAPIClient.configuredDefaultBaseURL(infoDictionary: [
+            AtlasAPIClient.configuredBaseURLInfoKey: "ftp://atlas.test"
+        ]))
+    }
+
+    func testRecoveryCandidatesPreserveOrderAndRemoveDuplicates() {
+        let configured = URL(string: "https://configured.test")!
+        let cached = URL(string: "https://cached.test")!
+        XCTAssertEqual(AtlasAPIClient.recoveryBaseURLs(configured: configured, cached: cached, platform: configured),
+                       [configured, cached])
+    }
+
+    @MainActor
+    func testHealthRecoveryUsesConfiguredThenCachedAndReturnsSuccessfulEndpoint() async throws {
+        let primary = URL(string: "https://primary.test")!
+        let configured = URL(string: "https://configured.test")!
+        let cached = URL(string: "https://cached.test")!
+        var attempts: [URL] = []
+        let (endpoint, health) = try await AtlasAPIClient.healthWithRecovery(
+            baseURL: primary, candidates: [primary, configured, configured, cached]
+        ) { endpoint in
+            attempts.append(endpoint)
+            if endpoint != cached { throw AtlasAPIError.transport("unavailable") }
+            return AtlasHealthSummary(status: "ok", dbPath: nil, schemaVersion: nil,
+                                      openJobs: nil, enabledSources: nil, lastSyncAt: nil)
+        }
+        XCTAssertEqual(endpoint, cached)
+        XCTAssertEqual(health.status, "ok")
+        XCTAssertEqual(attempts, [primary, configured, cached])
+    }
+
+    @MainActor
+    func testHealthRecoveryDoesNotMaskAuthorizationOrMalformedResponses() async {
+        for error in [AtlasAPIError.httpStatus(401, "Unauthorized"), .httpStatus(403, "Forbidden"), .invalidResponse] {
+            var attempts = 0
+            do {
+                _ = try await AtlasAPIClient.healthWithRecovery(
+                    baseURL: URL(string: "https://primary.test")!,
+                    candidates: [URL(string: "https://fallback.test")!]
+                ) { _ in attempts += 1; throw error }
+                XCTFail("Expected terminal health failure")
+            } catch let actual as AtlasAPIError { XCTAssertEqual(actual, error) }
+            catch { XCTFail("Unexpected error") }
+            XCTAssertEqual(attempts, 1)
+        }
+    }
+
+    @MainActor
+    func testHealthRecoveryKeepsOriginalTransientErrorAtExhaustion() async {
+        var attempts = 0
+        do {
+            _ = try await AtlasAPIClient.healthWithRecovery(
+                baseURL: URL(string: "https://primary.test")!,
+                candidates: [URL(string: "https://fallback.test")!]
+            ) { _ in
+                attempts += 1
+                throw attempts == 1 ? AtlasAPIError.httpStatus(503, "original") : .transport("fallback")
+            }
+            XCTFail("Expected exhausted recovery")
+        } catch let error as AtlasAPIError { XCTAssertEqual(error, .httpStatus(503, "original")) }
+        catch { XCTFail("Unexpected error") }
+        XCTAssertEqual(attempts, 2)
+    }
+
+    @MainActor
+    func testHealthRecoveryDoesNotMaskCancellation() async {
+        var attempts = 0
+        do {
+            _ = try await AtlasAPIClient.healthWithRecovery(
+                baseURL: URL(string: "https://primary.test")!,
+                candidates: [URL(string: "https://fallback.test")!]
+            ) { _ in attempts += 1; throw CancellationError() }
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(attempts, 1)
+    }
+
 }
