@@ -483,12 +483,38 @@ public struct AtlasAPIClient: Sendable {
             let initialError = error
             var seen: Set<URL> = [baseURL]
             for candidate in candidates where seen.insert(candidate).inserted {
+                guard ["http", "https"].contains(candidate.scheme?.lowercased() ?? ""),
+                      baseURL.scheme?.lowercased() != "https" || candidate.scheme?.lowercased() == "https"
+                else { continue }
                 try Task.checkCancellation()
                 do { return (candidate, try await fetch(candidate)) }
                 catch { if !retryable(error) { throw error } }
             }
             throw initialError
         }
+    }
+
+    static func transportFailure(_ error: Error, url: URL?) -> Error {
+        if error is CancellationError { return error }
+        let terminalCodes: Set<Int> = [
+            URLError.cancelled, .secureConnectionFailed, .serverCertificateHasBadDate,
+            .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
+            .serverCertificateNotYetValid, .clientCertificateRejected,
+            .clientCertificateRequired, .appTransportSecurityRequiresSecureConnection
+        ].reduce(into: []) { $0.insert($1.rawValue) }
+        var current = error as NSError
+        var seen = Set<ObjectIdentifier>()
+        for _ in 0..<8 {
+            guard seen.insert(ObjectIdentifier(current)).inserted else { return error }
+            if current.domain == NSURLErrorDomain && terminalCodes.contains(current.code) {
+                return error
+            }
+            guard let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError else {
+                return AtlasAPIError.transport(transportErrorMessage(error, url: url))
+            }
+            current = underlying
+        }
+        return error
     }
 
     public static func normalizedBaseURL(from rawValue: String) -> URL? {
@@ -626,7 +652,7 @@ public struct AtlasAPIClient: Sendable {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw AtlasAPIError.transport(transportErrorMessage(error, url: request.url))
+            throw Self.transportFailure(error, url: request.url)
         }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AtlasAPIError.invalidResponse
