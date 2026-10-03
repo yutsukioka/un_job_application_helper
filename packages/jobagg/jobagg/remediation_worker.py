@@ -448,7 +448,10 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             (key,),
         ).fetchone()
         if kind == "detail":
-            from jobagg.deadline_review import blocks_detail, reviewed_future_extension
+            from jobagg.deadline_review import (
+                active_hold, blocks_detail, matches_hold_review, record_hold,
+                release_hold, reviewed_future_extension,
+            )
             current = conn.execute(
                 "SELECT source_id,external_id,closes_at,raw_json FROM jobs WHERE source_id=? AND external_id=?",
                 (source, str(identity)),
@@ -460,6 +463,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                         "INSERT INTO remediation_tasks(task_id,source_id,kind,external_id,payload,status,eligible_at,discovered_at) VALUES(?,?,?,?,?,?,?,?)",
                         (key, source, kind, identity, dump(payload), "past_deadline", due or now, now),
                     )
+                    record_hold(conn, key, source, identity, current, proposed_deadline)
                 elif old["status"] == "pending":
                     # This classification never clears errors/receipts or changes
                     # attempts, claims, eligible_at, or protected hold states.
@@ -467,10 +471,15 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                         "UPDATE remediation_tasks SET status='past_deadline' WHERE task_id=? AND status='pending'",
                         (key,),
                     )
+                    record_hold(conn, key, source, identity, current, proposed_deadline)
+                elif old["status"] == "past_deadline":
+                    record_hold(conn, key, source, identity, current, proposed_deadline)
                 return key
             if old and old["status"] == "past_deadline":
-                if not reviewed_future_extension(current, proposed_deadline):
+                if (not reviewed_future_extension(current, proposed_deadline)
+                        or not matches_hold_review(active_hold(conn, key), current)):
                     return key
+                release_hold(conn, key, {'kind': 'positive_future_deadline', 'deadline': proposed_deadline})
                 refresh = True
         if old and old["status"] in {"inflight", "interrupted", *UNAVAILABLE_STATUSES}:
             return key
