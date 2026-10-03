@@ -2,6 +2,10 @@
 
 Generated: 2026-05-20
 
+Historical workflow snapshot. For current engineering requirements use the
+[JobAgg change and review policy](change-and-review-policy.md); for the deployed
+deterministic pipeline see [DETERMINISTIC_FETCH.md](../DETERMINISTIC_FETCH.md).
+
 This document explains how `jobagg` collects current vacancy listings, enriches job details, preserves history, and decides whether a source run is operationally safe. It is intended as a reference before expanding normalization and search features.
 
 ## Current Completeness Position

@@ -1,5 +1,9 @@
 # Python job fetching and live publication
 
+For changes and reviews, use the [JobAgg policy](docs/change-and-review-policy.md).
+This document includes dated deployment history; current limits and state must
+be read from the active configuration and timestamped receipts.
+
 The production cron entry runs every 15 minutes. Its dispatcher runs `jobagg.remediation_worker`, then `jobagg.publish_worker` against the live databases and exports. Routine fetching, extraction, queueing and publication make **zero LLM calls**.
 
 The configured universe has 49 enabled sources and 10 disabled sources. Every observed listing receives a separate detail task. Since 17 September 2026, supplementary attachments are excluded by user request: all sources set `extra.fetch_attachments: false`. The worker skips attachment discovery, enqueueing and existing document tasks; publication and coverage omit attachment reconciliation. Previously stored files and associations remain intact. A PDF that is the vacancy posting itself remains a source for its main text. A successful publication is not a claim that every source is complete.

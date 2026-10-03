@@ -24,9 +24,9 @@ un_job_application_helper/
 
 1. **Git root is the workspace root.**
    - Use `cd <workspace>` for normal Git work.
-   - The active unification branch is `repo-unification`.
-   - `master`, `develop`, `multi-agent`, and `job_aggregator` are legacy
-     snapshots until the unified branch is promoted.
+   - Read the actual branch, HEAD and working-tree state before work.
+   - Branch names in historical migration documents are context, not an
+     instruction to switch or reset the current checkout.
 
 2. **Skills live under `agents/apex/skills/`.**
    - `SKILL.md` is the source of truth for each skill.
@@ -55,11 +55,20 @@ un_job_application_helper/
 
 ## Git Workflow
 
+For JobAgg fetching, parsing, scheduling, recovery, storage or publication changes
+and reviews, read [the canonical JobAgg policy](../packages/jobagg/docs/change-and-review-policy.md)
+and its evidence/enforcement map. Keep the rules there rather than duplicating
+them in agent metadata or review prompts.
+
+Inspect first; stage and commit only when the task authorizes it, using the
+explicit reviewed paths rather than every change in a shared checkout:
+
 ```bash
 cd <workspace>
-git switch repo-unification
+git branch --show-current
+git rev-parse HEAD
 git status
-git add -A
+git add <reviewed-paths>
 git status
 git commit -m "descriptive message"
 ```

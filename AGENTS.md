@@ -21,6 +21,13 @@ GitHub Copilot should rely on `SKILL.md`. Any file Copilot must read
 should be linked or referenced from `SKILL.md`; do not require Copilot
 to read `agents/openai.yaml` during normal skill execution.
 
+## JobAgg engineering changes and reviews
+
+For JobAgg fetching, parsing, scheduling, recovery, storage or publication work,
+read [the JobAgg change and review policy](packages/jobagg/docs/change-and-review-policy.md)
+and its linked evidence/enforcement map. That policy is the canonical contract
+for this scope; application-document review rules below serve a different task.
+
 ## Ad-hoc user inputs are NOT a "golden record" (IMPORTANT)
 
 Users may paste extra facts, metrics, rewrites, or corrections in chat, or may edit
