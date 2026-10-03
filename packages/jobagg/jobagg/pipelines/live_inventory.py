@@ -71,6 +71,7 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
                     ats_family=item["ats_family"],
                     title=item["title"],
                     apply_url=item["apply_url"],
+                    source_url=item.get("source_url"),
                     external_id=item["external_id"],
                     raw=item.get("raw", {}),
                 )
@@ -96,6 +97,7 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
                     ats_family=item["ats_family"],
                     title=item["title"],
                     apply_url=item["apply_url"],
+                    source_url=item.get("source_url"),
                     external_id=item["external_id"],
                     raw=item.get("raw", {}),
                 )

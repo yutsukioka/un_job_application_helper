@@ -11,7 +11,7 @@ from html.parser import HTMLParser
 import re
 import json
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, unquote
 
 
 class DetailIdentityMismatch(ValueError):
@@ -92,8 +92,94 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
     return {"category": EXPLICIT_VACANCY_UNAVAILABLE, "detector": "fao_active_unavailable_template_v1"}
 
 
+
+class _UnavailableHeading(HTMLParser):
+    """Read visible headings, excluding script/style/template contents."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tag = None
+        self.parts = []
+        self.headings = []
+        self.ignored = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "template"}:
+            self.ignored += 1
+        if not self.ignored and tag in {"h1", "h2"}:
+            self.tag, self.parts = tag, []
+
+    def handle_data(self, value):
+        if self.tag and not self.ignored:
+            self.parts.append(value)
+
+    def handle_endtag(self, tag):
+        if self.ignored and tag in {"script", "style", "template"}:
+            self.ignored -= 1
+        if tag == self.tag:
+            self.headings.append(" ".join("".join(self.parts).split()).casefold())
+            self.tag = None
+
+
+def detail_denial_template(source_id, external_id, metadata, body, original_url, *, redirected=False):
+    """Narrow provider errors are job scoped; they never establish closure.
+
+    Source binding is supplied by the guarded worker, not by a response body.
+    A Workday S22 can affect a still-open vacancy, so a fresh complete inventory
+    and bounded detail recheck must resolve the task independently.
+    """
+    binding = metadata.get("source_binding") or {}
+    if (binding.get("source_id") != source_id or metadata.get("method") != "GET"
+            or metadata.get("status_code") != 403):
+        return None
+    request = urlsplit(original_url)
+    response = urlsplit(metadata.get("response_url", ""))
+    if any(p.scheme != "https" or not p.hostname or p.username or p.password
+           or p.query or p.fragment or p.port not in (None, 443) for p in (request, response)):
+        return None
+    text = body.decode("utf-8", errors="replace")
+    if re.search(r"awswaf|cf-chl-|verify (?:you are human|that you're not a robot)|"
+                 r"checking your browser|<title[^>]*>\s*(?:just a moment|access denied|access forbidden)|"
+                 r"<input[^>]+type=[\"']password", text, re.I):
+        return None
+    if binding.get("ats_family") == "workday":
+        endpoint = urlsplit(binding.get("cxs_base_url", ""))
+        if (redirected or request != response or request.netloc != endpoint.netloc
+                or endpoint.scheme != "https" or endpoint.query or endpoint.fragment
+                or not re.fullmatch(r"/wday/cxs/[^/]+/[^/]+", endpoint.path)
+                or not request.hostname.endswith((".myworkdayjobs.com", ".myworkdaysite.com"))
+                or not request.path.startswith(endpoint.path + "/job/")
+                or not unquote(request.path).rsplit("/", 1)[-1].endswith("_" + str(external_id))):
+            return None
+        content_type = next((v for k, v in (metadata.get("response_headers") or {}).items()
+                             if k.lower() == "content-type"), "")
+        if content_type.split(";", 1)[0].strip().lower() != "application/json":
+            return None
+        try:
+            value = json.loads(body)
+        except (ValueError, UnicodeError):
+            return None
+        if (not isinstance(value, dict)
+                or set(value) != {"errorCode", "errorCaseId", "httpStatus", "message", "messageParams"}
+                or value.get("errorCode") != "S22" or value.get("httpStatus") != 403
+                or value.get("message") != "permission denied" or value.get("messageParams") != {}
+                or not isinstance(value.get("errorCaseId"), str) or not value["errorCaseId"]):
+            return None
+        return {"category": "vacancy_detail_denied", "detector": "workday_exact_cxs_s22_v1"}
+    if source_id != "unops_avature" or binding.get("ats_family") != "avature":
+        return None
+    if (not redirected or request.netloc != "careers.unops.org" or response.netloc != request.netloc
+            or response.path != "/careersmarketplace/Error"
+            or not re.fullmatch(r"/careersmarketplace/JobDetail/[^/]+/" + re.escape(str(external_id)), request.path)
+            or re.search(r"Position Title|Posting End Date|<input[^>]+(?:name|id)=[\"'](?:password|login)", text, re.I)):
+        return None
+    parsed = _UnavailableHeading()
+    parsed.feed(text)
+    if parsed.headings != ["page not found"]:
+        return None
+    return {"category": "vacancy_detail_denied", "detector": "unops_exact_detail_error_not_found_v1"}
+
 def classify_unavailable(source_id, external_id, metadata, body, *, redirects=()):
-    """Return typed evidence only for an exact successful captured detail response.
+    """Return typed evidence only for an exact captured provider detail outcome.
 
     Callers must additionally bind the metadata file hash and original queued
     listing frame. This function is usable by reviewed old-task migrations.
@@ -101,7 +187,7 @@ def classify_unavailable(source_id, external_id, metadata, body, *, redirects=()
     if not isinstance(body, bytes):
         return None
     phase = metadata.get("phase", {})
-    if (metadata.get("state") != "response_captured" or metadata.get("status_code") != 200
+    if (metadata.get("state") != "response_captured" or metadata.get("status_code") not in {200, 403}
             or metadata.get("body_captured") is not True
             or phase.get("kind") != "detail"
             or str(phase.get("job_id")) != str(external_id)
@@ -123,8 +209,11 @@ def classify_unavailable(source_id, external_id, metadata, body, *, redirects=()
                     or not hop.get("started_at") or not hop.get("finished_at")):
                 return None
         original_url = redirects[0].get("url", "")
-    result = unavailable_template(source_id, external_id, original_url,
-                                  metadata.get("response_url", ""), body)
+    result = (unavailable_template(source_id, external_id, original_url,
+                                   metadata.get("response_url", ""), body)
+              if metadata.get("status_code") == 200 else
+              detail_denial_template(source_id, external_id, metadata, body, original_url,
+                                     redirected=bool(redirects)))
     if result is None:
         return None
     return {**result, "source_id": source_id, "external_id": str(external_id),

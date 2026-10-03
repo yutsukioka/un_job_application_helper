@@ -45,11 +45,18 @@ def verify_recovery_listing(source, jobs, capture_paths):
         require(limit > 0, 'Page size must be positive')
         ids, totals, pages = [], set(), 0
         terminal = False
+        empty_terminator = False
         for path in capture_paths:
             meta = json.loads(Path(path).read_text())
             if meta.get('phase', {}).get('kind') != 'listing' or urlsplit(meta.get('url','')).path.rstrip('/') != urlsplit(endpoint).path.rstrip('/'):
                 continue
-            require(not terminal and pages < source.extra['max_pages'], 'Extra page after terminal/cap')
+            # Historical collectors fetched an empty page after a full final
+            # UNOPS page. Permit that single, independently verified terminator,
+            # never extra nonempty pages or repeated terminal probes.
+            after_terminal = terminal
+            require(pages < source.extra['max_pages'] and not empty_terminator
+                    and (not terminal or (not unv and len(ids) > 0 and len(ids) % limit == 0)),
+                    'Extra page after terminal/cap')
             if unv:
                 request = deepcopy(source.extra.get('search_payload') or {})
                 request.setdefault('take', limit)
@@ -85,6 +92,9 @@ def verify_recovery_listing(source, jobs, capture_paths):
                     page_ids.append(key)
                 require(len(page_ids) <= limit, 'UNOPS page exceeds configured size')
                 result['capture_paths'].append({'path': str(path), 'sha256': hashlib.sha256(Path(path).read_bytes()).hexdigest()})
+            if after_terminal:
+                require(not page_ids, 'Nonempty page after advertised total')
+                empty_terminator = True
             require(len(set(page_ids)) == len(page_ids) and not set(ids).intersection(page_ids), 'Duplicate listing identity across pages')
             stamps = [datetime.fromisoformat(str(meta.get(key, '')).replace('Z', '+00:00'))
                       for key in ('started_at', 'finished_at')]

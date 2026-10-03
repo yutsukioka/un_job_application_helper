@@ -91,8 +91,16 @@ class GuardedBrowser:
         if not self.contract.get("ready_selector"):
             raise BrowserContractError("A reviewed browser ready_selector is required")
         self.timeout = float(self.contract.get("timeout_seconds", 120))
-        if not 1 <= self.timeout <= 300:
-            raise BrowserContractError("Browser timeout must be within 1–300 seconds")
+        # The reviewed OSCE UI must load its publisher scripts under the same
+        # per-host pacing as pagination. Keep the generic renderer bound while
+        # allowing this full-board contract its measured startup allowance.
+        osce_ui = (self.contract.get("transport") == "chromium_cdp_native_v1"
+                   and self.contract.get("data_route") == "osce_job_results_v1"
+                   and self.contract.get("navigation") == "osce_ui_navigation_v1"
+                   and self.contract.get("inventory") == "osce_full_search_v1")
+        maximum_timeout = 360 if osce_ui else 300
+        if not 1 <= self.timeout <= maximum_timeout:
+            raise BrowserContractError(f"Browser timeout must be within 1–{maximum_timeout} seconds")
         self.headed = headed
         self.failed = None
         self.last_receipt = None
@@ -376,6 +384,22 @@ class GuardedBrowser:
 def install_browser_transport(client, capture, source):
     contract = source.extra.get("browser_render")
     if contract:
+        listing_only = contract.get("listing_only", False)
+        if type(listing_only) is not bool:
+            raise BrowserContractError("Browser listing_only must be a boolean")
+        if listing_only:
+            if (source.id != "osce_custom_html"
+                    or contract.get("transport") != "chromium_cdp_native_v1"
+                    or contract.get("navigation") != "osce_server_pages_v1"
+                    or contract.get("inventory") != "osce_full_search_v1"):
+                raise BrowserContractError("Listing-only browser transport is reviewed for OSCE server pages only")
+            phase = getattr(capture, "phase", None)
+            if not isinstance(phase, dict) or phase.get("kind") not in {"listing", "detail"}:
+                raise BrowserContractError("Listing-only browser transport requires an explicit task phase")
+            if phase["kind"] == "detail":
+                # Worker.context already installed its ordinary DurableCapture
+                # HTTP path. Keep its TLS, pacing, denial and evidence guards.
+                return None
         renderer_type = GuardedBrowser
         if contract.get("transport") == "chromium_cdp_native_v1":
             if source.id != "osce_custom_html" or contract.get("inventory") != "osce_full_search_v1":

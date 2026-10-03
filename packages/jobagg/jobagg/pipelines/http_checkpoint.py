@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit, urljoin
 
-from jobagg.http import HttpResponse
+from jobagg.http import HttpResponse, HTTPError
 from jobagg.robots import BlankLineSafeRobotFileParser
 from jobagg.atomic_files import atomic_write_text
 from jobagg.pipelines.host_recovery import (
@@ -170,12 +170,21 @@ class DurableCapture:
         default_header_origin=None,
         phase=None,
         deadline_at=None,
+        source=None,
     ):
         self.client, self.policy, self.target = client, policy, Path(target)
         self.lock_root = Path(lock_root)
         self.forbidden_paths = tuple(forbidden_paths)
         self.phase = phase
         self.deadline_at = deadline_at
+        self.source_binding = None
+        if source is not None:
+            endpoint = source.extra.get("cxs_base_url")
+            if endpoint is None:
+                endpoint = source.extra.get("jobs_url") or source.extra.get("api_url")
+                endpoint = str(endpoint).rstrip("/")[:-5] if endpoint and str(endpoint).rstrip("/").endswith("/jobs") else None
+            self.source_binding = {"source_id": source.id, "ats_family": source.ats_family,
+                                   "cxs_base_url": safe_url(str(endpoint)) if endpoint else None}
         self.denied_hosts = dict(denied_hosts)
         self.checker = CapturedRobotsChecker(self)
         self.original = client._request
@@ -289,7 +298,7 @@ class DurableCapture:
             if not state.get("stopped") and recovery.get("probe_owner") == self.probe_owner:
                 save(path, transport_success(state, is_robots=False))
 
-    def request(self, url, *, _depth=0, _is_robots=False, _native_dispatch=None, **kwargs):
+    def request(self, url, *, _depth=0, _is_robots=False, _native_dispatch=None, _redirects=(), **kwargs):
         self._check_deadline()
         configured_timeout = float(kwargs.get("timeout_seconds") or self.client.timeout_seconds)
         request_allowance = min(configured_timeout, 5.0) + 1.0
@@ -328,6 +337,8 @@ class DurableCapture:
             "started_at": utc(),
             "configured_timeout_seconds": configured_timeout,
         }
+        if self.source_binding is not None:
+            record["source_binding"] = self.source_binding
         if _native_dispatch is not None:
             record["transport"] = "chromium_cdp_native_v1"
         request_body = kwargs.get("body")
@@ -385,7 +396,14 @@ class DurableCapture:
                             response = (observer(url, _native_dispatch=_native_dispatch, **kwargs)
                                         if observer else _native_dispatch(url, **kwargs))
                         else:
-                            response = self.transport(url, **kwargs)
+                            try:
+                                response = self.transport(url, **kwargs)
+                            except HTTPError as exc:
+                                # Preserve bounded error bodies and the upstream
+                                # timing/diagnostic evidence for classification.
+                                if not isinstance(exc.response, HttpResponse):
+                                    raise
+                                response = exc.response
                     finally:
                         record["transport_elapsed_seconds"] = max(0.0, time.monotonic() - transport_started)
                         diagnostics = getattr(self.client, "last_request_diagnostics", None)
@@ -417,6 +435,18 @@ class DurableCapture:
                     # Native Chromium pauses before releasing the response to
                     # the page. Persist errors too, then apply the same holds.
                     if response.status_code >= 400:
+                        from jobagg.vacancy_outcomes import classify_unavailable, VacancyUnavailable
+                        outcome = classify_unavailable(
+                            (self.source_binding or {}).get("source_id"), self.current_id,
+                            {**record, "state": "response_captured", "finished_at": utc()}, body,
+                            redirects=_redirects,
+                        )
+                        if outcome:
+                            record.update(state="response_captured", failure_category="vacancy_detail_denied",
+                                          detail_outcome=outcome["detector"])
+                            state.update(transport_success(state, is_robots=False))
+                            state.pop("recovery", None)
+                            raise VacancyUnavailable("Public vacancy detail denied; fresh inventory reconciliation required")
                         raise urllib.error.HTTPError(url, response.status_code,
                                                      "Captured HTTP denial/error", response.headers, None)
                     if _native_dispatch is not None and 300 <= response.status_code < 400:
@@ -457,10 +487,10 @@ class DurableCapture:
                     record.setdefault("body_captured", False)
                     cause = next((error for error in exception_chain(exc) if isinstance(error, urllib.error.HTTPError)), None)
                     status = cause.code if cause is not None else None
-                    retry = (
-                        cause.headers.get("Retry-After")
-                        if isinstance(cause, urllib.error.HTTPError) and cause.headers
-                        else None
+                    retry = next(
+                        (value for key, value in (cause.headers.items() if cause is not None and cause.headers else [])
+                         if key.lower() == "retry-after"),
+                        None,
                     )
                     if status is not None:
                         record["status_code"] = status
@@ -499,7 +529,8 @@ class DurableCapture:
         finally:
             record["finished_at"] = utc()
             record["state"] = (
-                "failed" if "error_type" in record else record.get("state", "redirect_captured")
+                "failed" if "error_type" in record and not record.get("detail_outcome")
+                else record.get("state", "redirect_captured")
             )
             save(record_path, record)
         if redirect is not None:
@@ -532,6 +563,7 @@ class DurableCapture:
                 timeout_seconds=kwargs.get("timeout_seconds"),
                 _depth=_depth + 1,
                 _is_robots=_is_robots,
+                _redirects=(*_redirects, record),
             )
             if not _is_robots:
                 self.complete_redirect_probe(host)

@@ -45,6 +45,7 @@ class AvatureAdapter(JobAdapter):
 
         jobs: list[JobRecord] = []
         seen_keys: set[str] = set()
+        advertised_total = None
         for page in range(max_pages):
             page_url = _url_with_query(
                 listing_url,
@@ -53,7 +54,24 @@ class AvatureAdapter(JobAdapter):
                     "jobOffset": page * page_size,
                 },
             )
-            page_jobs = self.parse_listing_html(self.fetch_text(page_url))
+            page_html = self.fetch_text(page_url)
+            if self.source.id == "unops_avature":
+                # Read the public total independently of parsed vacancy cards.
+                # A full final page is terminal too; fetching another page used
+                # to disagree with the independent inventory verifier.
+                from jobagg.pipelines.inventory_recovery_contracts import UNOPSPage
+                from jobagg.pipelines.http_checkpoint import HostIneligible
+                import time
+                public = UNOPSPage()
+                public.feed(page_html)
+                if len(public.totals) != 1:
+                    raise ValueError("UNOPS visible total missing or inconsistent")
+                total = next(iter(public.totals))
+                if advertised_total is not None and advertised_total != total:
+                    raise HostIneligible("UNOPS inventory total changed during enumeration; restart next cycle",
+                                         category="cooldown", eligible_at=time.time() + 900)
+                advertised_total = total
+            page_jobs = self.parse_listing_html(page_html)
             if not page_jobs:
                 break
             page_new = 0
@@ -68,6 +86,8 @@ class AvatureAdapter(JobAdapter):
                 seen_keys.add(key)
                 jobs.append(job)
                 page_new += 1
+            if advertised_total is not None and len(jobs) >= advertised_total:
+                break
             if page_new == 0 or len(page_jobs) < page_size:
                 break
         return jobs

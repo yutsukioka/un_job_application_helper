@@ -1,0 +1,9 @@
+{
+  "source_url": "https://vacancies.osce.org/jobs/senior-interpreter-political-assistant-g6-4972",
+  "observed_at": "2026-09-19T05:34:36.373925+00:00",
+  "status": 200,
+  "body_bytes": 93426,
+  "body_sha256": "1c08e293e200efc22538156e6ae55d7f08153f5ef28154cc75749a62dc90d928",
+  "scope": "Previously captured public vacancy HTML retained as an offline identity/detail-binding regression fixture; no cookies or authentication headers.",
+  "source_artifact_note": "Original raw capture retained in a machine-local September 19 audit; the compressed public body is included beside this provenance file."
+}

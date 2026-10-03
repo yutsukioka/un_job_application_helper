@@ -952,19 +952,21 @@ sources:
         - https://talent.osce.org/
       output_slug: osce
       listing_url: https://vacancies.osce.org/jobs/search/
-      listing_min_budget_seconds: 180
+      listing_min_budget_seconds: 120
       browser_render:
         transport: chromium_cdp_native_v1
+        listing_only: true
         data_route: osce_job_results_v1
         csrf: osce_tss_token_v1
+        navigation: osce_server_pages_v1
         url_patterns:
           - '^https://vacancies\.osce\.org/jobs/search/$'
           - '^https://vacancies\.osce\.org/jobs/[^/?#]+-\d+$'
         ready_selector: '.number_of_results'
         detail_ready_selector: 'h1'
-        timeout_seconds: 300
+        timeout_seconds: 180
         inventory: osce_full_search_v1
-        # Listing identity/scope comes from DOM controls, independent of CSS.
+        # Native listings read server documents; details use guarded HTTP.
         load_stylesheets: false
       parser: public_links
       job_link_selector_hint: /jobs/

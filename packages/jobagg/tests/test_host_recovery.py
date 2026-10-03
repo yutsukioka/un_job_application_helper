@@ -82,6 +82,9 @@ def test_robots_success_cannot_close_recovery():
     (ConnectionResetError("reset"), "transient_transport"),
     (socket.gaierror(socket.EAI_AGAIN, "retry DNS"), "transient_transport"),
     (ssl.SSLCertVerificationError("certificate"), "tls_validation"),
+    (ssl.CertificateError("hostname mismatch"), "tls_validation"),
+    (ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "EOF occurred in violation of protocol"), "transient_transport"),
+    (ssl.SSLError("unknown TLS problem"), "tls_validation"),
     (SSRFProtectionError("allowlist"), "local_policy"),
     (OSError(28, "disk full"), "local_failure"),
     (ValueError("parse"), "local_failure"),
@@ -94,6 +97,39 @@ def test_typed_exception_classification(exception, expected):
     wrapped = HTTPError("outer")
     wrapped.__cause__ = urllib.error.URLError(exception)
     assert classify_failure(wrapped) == expected
+
+
+def test_eof_cannot_hide_certificate_verification_failure():
+    error = ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "connection closed")
+    error.__cause__ = ssl.SSLCertVerificationError("certificate hostname mismatch")
+    assert classify_failure(error) == "tls_validation"
+
+
+def test_eof_checkpoint_uses_bounded_recovery_and_preserves_certificate_hold(tmp_path, monkeypatch):
+    monkeypatch.setattr("jobagg.pipelines.http_checkpoint.time.sleep", lambda _: None)
+    monkeypatch.setattr(time, "time", lambda: 10000)
+    def eof(url, **kwargs):
+        raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "peer closed connection")
+    capture = make_capture(tmp_path, "eof", eof)
+    with pytest.raises(ssl.SSLEOFError):
+        capture.request("https://one.example/job")
+    state = json.loads(state_path(tmp_path).read_text())
+    assert state["stopped"] is False
+    assert state["failure_category"] == "transient_transport"
+    assert state["recovery"]["phase"] == "cooldown"
+    assert state["recovery"]["eligible_at"] >= 11800
+    assert not host_eligibility(state, 10001)["allowed"]
+
+    def certificate(url, **kwargs):
+        raise ssl.SSLCertVerificationError("hostname mismatch")
+    monkeypatch.setattr(time, "time", lambda: state["recovery"]["eligible_at"])
+    capture = make_capture(tmp_path, "certificate", certificate)
+    with pytest.raises(ssl.SSLCertVerificationError):
+        capture.request("https://one.example/job")
+    held = json.loads(state_path(tmp_path).read_text())
+    assert held["stopped"] is True
+    assert held["failure_category"] == "tls_validation"
+    assert host_eligibility(held, 999999)["category"] == "review"
 
 
 def make_capture(tmp_path, name, transport, *, robots=False):

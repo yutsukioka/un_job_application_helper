@@ -168,7 +168,8 @@ def test_independent_verification_binds_every_page_to_response(tmp_path):
         verify_captures(bundle(pages), paths)
 
 
-def test_worker_verification_requires_bound_data_receipt(tmp_path):
+@pytest.mark.parametrize("historical_navigation", [None, "osce_ui_navigation_v1"])
+def test_worker_verification_requires_bound_data_receipt(tmp_path, historical_navigation):
     from jobagg.adapters.osce_inventory import parse_bundle
     from jobagg.pipelines.inventory_checks import verify_listing
 
@@ -183,7 +184,8 @@ def test_worker_verification_requires_bound_data_receipt(tmp_path):
     rendered.write_text(html)
     receipt = {
         "url": source.extra["listing_url"],
-        "contract": source.extra["browser_render"],
+        # Historical receipts remain verifiable after current navigation changes.
+        "contract": {**source.extra["browser_render"], "navigation": historical_navigation},
         "html_path": str(rendered),
         "html_sha256": hashlib.sha256(html.encode()).hexdigest(),
     }

@@ -4,7 +4,8 @@ import time
 
 import pytest
 
-from jobagg.source_health import read_worker_health
+from jobagg.source_health import read_worker_health, worker_source_health as source_health, listing_recovery_pending
+from jobagg.pipelines.http_checkpoint import HostIneligible
 import test_remediation_worker as fixtures
 
 setup = fixtures.setup
@@ -141,3 +142,162 @@ def test_initialize_backfills_effective_host_in_legacy_source_table(setup):
     worker.initialize()
     with worker.db.connect() as conn:
         assert conn.execute("SELECT host FROM remediation_sources").fetchone()[0] == "api.example"
+
+
+def host_file(worker):
+    return worker.shared_policy.root / "hosts" / (
+        "host-" + hashlib.sha256(b"demo.example").hexdigest()[:24] + ".json")
+
+
+def initialize(worker, now):
+    worker.initialize()
+    worker.seed_listings()
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_sources SET last_list_at=?,next_list_at=?", (now - 14400, now + 10800))
+        conn.execute("UPDATE remediation_tasks SET eligible_at=?", (now - 10,))
+
+
+def health(worker, now, **kwargs):
+    source = worker.by_id["demo_workday"]
+    with worker.db.connect() as conn:
+        state = conn.execute("SELECT * FROM remediation_sources WHERE source_id=?", (source.id,)).fetchone()
+        return source_health(worker, conn, source, state, now=now, **kwargs)
+
+
+def test_stale_listing_reports_nested_probe_budget_not_top_level_floor(setup):
+    worker, _, calls, _ = setup
+    now = time.time()
+    initialize(worker, now)
+    # EU's actual failure mode: both cooldown timestamps have elapsed, but
+    # three reserved recovery probes still consume the rolling 24-hour budget.
+    first = now - 80000
+    host_file(worker).write_text(json.dumps({
+        "stopped": False, "eligible_at": now - 100, "reason": "Transport interrupted",
+        "failure_category": "transient_transport",
+        "recovery": {"schema_version": 1, "phase": "cooldown",
+                     "failure_kind": "transient_transport", "failures": 4,
+                     "eligible_at": now - 100,
+                     "probe_attempts": [first, now - 70000, now - 60000]},
+    }))
+    before = host_file(worker).read_bytes()
+    result = health(worker, now)
+    assert result["listing_stale"] and result["listing_age_seconds"] == 14400
+    assert result["listing_interval_seconds"] == 10800
+    assert result["listing"]["next_permitted_attempt_at"] == first + 86400
+    assert result["listing"]["reasons"] == ["host_cooldown", "host_probe_budget"]
+    assert result["hosts"][0]["recovery"]["recent_probe_count"] == 3
+    assert result["next_pending_attempt_at"] == first + 86400
+    assert result["eligible_pending_tasks"] == 0
+    assert host_file(worker).read_bytes() == before and calls == []
+
+
+def test_stopped_host_has_no_automatic_next_attempt_even_with_old_floor(setup):
+    worker, _, _, _ = setup
+    now = time.time()
+    initialize(worker, now)
+    host_file(worker).write_text(json.dumps({"stopped": True, "eligible_at": 1,
+        "reason": "HTTP 403", "failure_category": "access_denied"}))
+    result = health(worker, now)
+    assert result["listing_stale"]
+    assert result["listing"]["reasons"] == ["host_review_hold"]
+    assert result["listing"]["next_permitted_attempt_at"] is None
+    assert result["hosts"][0]["next_permitted_attempt_at"] is None
+    assert result["task_eligibility"]["listing"]["held_pending"] == 1
+    assert result["next_pending_attempt_at"] is None
+
+
+def test_blocked_listing_survives_future_seed_and_has_no_predicted_retry(setup):
+    worker, _, _, _ = setup
+    now = time.time()
+    initialize(worker, now)
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_tasks SET status='blocked',last_error='Inventory mismatch'")
+        conn.execute("UPDATE remediation_sources SET next_list_at=0")
+    result = health(worker, now)
+    assert result["listing"]["task_status"] == "blocked"
+    assert result["listing"]["last_error"] == "Inventory mismatch"
+    assert result["listing"]["reasons"] == ["listing_blocked"]
+    assert result["listing"]["next_permitted_attempt_at"] is None
+    assert result["task_eligibility"]["listing"]["states"] == {"blocked": 1}
+
+
+def test_source_hold_excludes_pending_listing_and_preserves_reason(setup):
+    worker, _, _, _ = setup
+    now = time.time()
+    initialize(worker, now)
+    hold = {"reason": "Review requires complete listing evidence"}
+    result = health(worker, now, source_hold=hold)
+    assert result["source_policy_hold"] == hold
+    assert result["listing"]["reasons"] == ["source_policy_hold"]
+    assert result["next_pending_attempt_at"] is None
+
+
+def test_done_listing_reports_next_seed_instead_of_immediate_dispatch(setup):
+    worker, _, _, _ = setup
+    now = time.time()
+    initialize(worker, now)
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_tasks SET status='done'")
+        conn.execute("UPDATE remediation_sources SET last_list_at=?", (now - 600,))
+    result = health(worker, now)
+    assert result["listing_stale"] is False
+    assert result["listing_inventory_complete"] is False
+    assert result["listing"]["next_permitted_attempt_at"] == now + 10800
+    assert result["listing"]["reasons"] == ["listing_schedule"]
+    assert result["next_pending_attempt_at"] is None
+    with worker.db.connection_scope() as conn:
+        conn.execute('UPDATE remediation_sources SET listing_proof=?', ('{"complete":true}',))
+    assert health(worker, now)["listing_inventory_complete"] is True
+
+
+def test_source_pacing_uses_supplied_snapshot_once_and_task_cooldown_wins(setup, monkeypatch):
+    worker, _, _, _ = setup
+    now = time.time()
+    worker.max_tasks = 1
+    worker.tick(execute=True)
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_tasks SET eligible_at=? WHERE kind='detail'", (now + 900,))
+    snapshot = [{"started_at": now - 30, "finished_at": now - 10}]
+    seen = []
+    def policy(source, kind, stamp, *, attempts=None):
+        seen.append((kind, attempts))
+        return stamp + 600 if kind == "detail" else stamp
+    monkeypatch.setattr(worker, "policy_due", policy)
+    monkeypatch.setattr(worker.shared_policy, "event_snapshot", lambda **_: (_ for _ in ()).throw(
+        AssertionError("health must not repeatedly reread global event history")))
+    result = health(worker, now, events=snapshot)
+    assert result["task_eligibility"]["detail"]["deferred_pending"] == 1
+    assert result["next_pending_attempt_at"] == now + 900
+    assert result["pending_exclusion_reasons"] == {"task_cooldown": 1, "source_pacing_or_quota": 1}
+    assert ("detail", snapshot) in seen
+
+
+def test_reviewed_recovery_requires_new_complete_listing_at_selection_and_claim(setup):
+    worker, _, calls, _ = setup
+    now = time.time()
+    initialize(worker, now)
+    with worker.db.connection_scope() as conn:
+        worker.enqueue(conn, "demo_workday", "detail", "pending", {})
+        selected = dict(conn.execute("SELECT * FROM remediation_tasks WHERE kind='detail'").fetchone())
+    host_file(worker).write_text(json.dumps({"stopped": False,
+        "reviewed_source_recovery": {"requires_listing_after": now - 1}}))
+    assert worker.choose(excluded_kinds=("listing",)) is None
+    with pytest.raises(HostIneligible, match="Fresh complete listing"):
+        worker.claim(selected)
+    result = health(worker, now)
+    assert result["task_eligibility"]["detail"]["held_pending"] == 1
+    assert result["pending_exclusion_reasons"] == {"awaiting_recovery_listing": 1}
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_sources SET last_list_at=?,listing_proof=?", (now, '{"complete":false}'))
+    assert worker.choose(excluded_kinds=("listing",)) is None
+    with worker.db.connection_scope() as conn:
+        conn.execute("UPDATE remediation_sources SET listing_proof=?", ('{"complete":true}',))
+    assert worker.choose(excluded_kinds=("listing",))["task_id"] == selected["task_id"]
+    assert health(worker, time.time())["task_eligibility"]["detail"]["eligible_pending"] == 1
+    worker.claim(selected)
+    assert calls == []
+
+
+def test_missing_listing_state_is_allowed_normally_but_held_during_reviewed_recovery():
+    assert not listing_recovery_pending(None, {})
+    assert listing_recovery_pending(None, {"reviewed_source_recovery": {"requires_listing_after": 1}})

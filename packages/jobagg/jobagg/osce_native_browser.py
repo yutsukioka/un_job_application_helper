@@ -16,7 +16,8 @@ from pathlib import Path
 import re
 import ssl
 import time
-from urllib.parse import urlsplit
+import urllib.error
+from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
 
 from jobagg.adapters.osce_inventory import Cards, SESSION, captured_scope, reconcile
@@ -25,9 +26,9 @@ from jobagg.browser_fetch import BrowserContractError, COMPOSED_HTML, COMPOSED_T
 from jobagg.browser_proxy import pinned_browser_proxy
 from jobagg.http import HttpResponse, ResponseTooLargeError
 from jobagg.html_text import render_html_text
-from jobagg.osce_fragments import DATA_ROUTE, csrf_token, validate_csrf_header, page_url, request_url, result_html, session_parts, site_name, validate_request
+from jobagg.osce_fragments import DATA_ROUTE, SERVER_NAVIGATION, UI_NAVIGATION, UI_OMITTED_ASSETS, ENDPOINT, csrf_token, validate_csrf_header, page_url, request_url, result_html, session_parts, site_name, validate_request
 from jobagg.adapters.osce_inventory import pagination_state
-from jobagg.pipelines.http_checkpoint import safe_error, safe_url
+from jobagg.pipelines.http_checkpoint import HostIneligible, safe_error, safe_url
 
 TRANSPORT = "chromium_cdp_native_v1"
 # OSCE requires no child frames, workers, forms, popups or plugins for reading.
@@ -50,9 +51,16 @@ class OSCENativeBrowser(GuardedBrowser):
         target.mkdir()
         self.failed = None
         self.omitted_resources = []
-        self.data_only = self.contract.get("data_route") == DATA_ROUTE
+        self.data_route = self.contract.get("data_route") == DATA_ROUTE
+        self.ui_navigation = (self.data_route and self.capture.phase.get("kind") == "listing"
+                              and self.contract.get("navigation") == UI_NAVIGATION)
+        self.server_pages = (self.data_route and self.capture.phase.get("kind") == "listing"
+                             and self.contract.get("navigation") == SERVER_NAVIGATION)
+        self.data_only = self.data_route and not self.ui_navigation
         self.entry_origin = (urlsplit(url).scheme, urlsplit(url).netloc)
+        self.expected_document = None
         self.expected_fragment = None
+        self.observed_fragment = None
         self.responses = {}
         self.cookie_diagnostics = {}
         self.csrf_diagnostics = {}
@@ -133,7 +141,9 @@ class OSCENativeBrowser(GuardedBrowser):
                     # readiness depends on captured markup, not UI visibility.
                     await page.locator(selector).first.wait_for(
                         state="attached" if self.data_only else "visible", timeout=self.remaining_ms())
-                    pages = (await self._collect_fragments(page, target) if self.data_only
+                    pages = (await self._collect_server_pages(page, target) if self.server_pages else
+                             await self._collect_ui_fragments(page, target) if self.ui_navigation else
+                             await self._collect_fragments(page, target) if self.data_only
                              else await self._collect(page, target)) if listing else None
                     text = (render_html_text("\n".join(p["html"] for p in pages)
                                              if pages is not None else self.responses[page.url][0].text)
@@ -190,11 +200,25 @@ class OSCENativeBrowser(GuardedBrowser):
             if self.failed:
                 await self._abort(rid)
                 return
+            resource = event.get("resourceType")
             try:
                 request = event["request"]
                 url, method = request["url"], request["method"]
-                resource = event.get("resourceType")
-                if self.data_only:
+                if self.server_pages:
+                    if resource != "Document":
+                        self.omitted_resources.append({"url": safe_url(url), "type": resource,
+                                                       "reason": "server_pages_omit_resources"})
+                        await self._abort(rid)
+                        return
+                    parsed = urlsplit(url)
+                    path = parsed.path.rstrip("/")
+                    allowed = (path == "/jobs/search" or re.fullmatch(r"/jobs/search/\d+", path)
+                               if self.expected_document is None else
+                               path == urlsplit(self.expected_document).path.rstrip("/"))
+                    if (method != "GET" or (parsed.scheme, parsed.netloc) != self.entry_origin
+                            or parsed.query or parsed.fragment or not allowed):
+                        raise BrowserContractError("OSCE server document outside same-session page route")
+                elif self.data_route:
                     if resource == "Document":
                         if (urlsplit(url).scheme, urlsplit(url).netloc) != self.entry_origin:
                             raise BrowserContractError("OSCE data document changed origin")
@@ -202,16 +226,24 @@ class OSCENativeBrowser(GuardedBrowser):
                             path = urlsplit(url).path
                             if path != "/jobs/search/" and not re.fullmatch(r"/jobs/search/\d+/?", path):
                                 raise BrowserContractError("Unexpected OSCE search navigation")
-                    elif resource in {"XHR", "Fetch"} and self.expected_fragment is not None:
+                    elif (resource in {"XHR", "Fetch"} and self.expected_fragment is not None
+                          and urlsplit(url).path == ENDPOINT):
                         validate_request(url, method, request.get("postData"), **self.expected_fragment)
                         validate_csrf_header(request.get("headers", {}), self._csrf_token)
+                        if self.ui_navigation and self.observed_fragment is not None:
+                            raise BrowserContractError("OSCE UI requested the same next page twice")
+                    elif self.ui_navigation and resource in {"Script", "Stylesheet"} and (
+                        urlsplit(url).scheme, urlsplit(url).netloc) == self.entry_origin:
+                        pass  # Required UI assets still receive full HTTP admission/capture.
                     else:
                         self.omitted_resources.append({"url": safe_url(url), "type": resource,
-                                                       "reason": "data_route_omits_ui_resources"})
+                                                       "reason": "unreviewed_ui_resource" if self.ui_navigation
+                                                       else "data_route_omits_ui_resources"})
                         await self._abort(rid)
                         return
                 omitted = resource in {"Image", "Font", "Media", "WebSocket", "Ping"} or (
-                    resource == "Stylesheet" and self.contract.get("load_stylesheets") is False)
+                    resource == "Stylesheet" and self.contract.get("load_stylesheets") is False) or (
+                    self.ui_navigation and resource == "Script" and urlsplit(url).path in UI_OMITTED_ASSETS)
                 if omitted:
                     self.omitted_resources.append({"url": safe_url(url), "type": resource, "reason": "reviewed_resource_omission"})
                     await self._abort(rid)
@@ -222,7 +254,7 @@ class OSCENativeBrowser(GuardedBrowser):
                     raise BrowserContractError("Native request requires HTTPS")
                 if method not in {"GET", "HEAD"} and not (
                     method == "POST" and (url in self.contract.get("read_only_post_urls", [])
-                    or (self.data_only and self.expected_fragment is not None and resource in {"XHR", "Fetch"}))):
+                    or (self.data_route and self.expected_fragment is not None and resource in {"XHR", "Fetch"}))):
                     raise BrowserContractError("Native request method outside read-only contract")
                 self.client.safe_policy.validate_url(url)
                 previous = event.get("redirectedRequestId")
@@ -244,7 +276,11 @@ class OSCENativeBrowser(GuardedBrowser):
                     response_event.update(reply)
                     if reply.get("responseErrorReason"):
                         reason = reply["responseErrorReason"]
-                        if "CERT" in reason.upper() or "SSL" in reason.upper():
+                        if "CERT" in reason.upper():
+                            raise ssl.SSLCertVerificationError("Native certificate validation failed: " + reason)
+                        if "SSL" in reason.upper() and "EOF" in reason.upper():
+                            raise ssl.SSLEOFError("Native TLS connection interrupted: " + reason)
+                        if "SSL" in reason.upper():
                             raise ssl.SSLError("Native TLS validation failed: " + reason)
                         raise ConnectionError("Native network failure: " + reason)
                     status = reply["responseStatusCode"]
@@ -272,6 +308,8 @@ class OSCENativeBrowser(GuardedBrowser):
                                                             # Redirects can reuse a Network id without another
                                                             # extra-info event. Never reuse the previous hop's data.
                                                             "cookie_observation": self.cookie_diagnostics.pop(event.get("networkId"), {"available": False})}
+                    if self.server_pages and 300 <= status < 400 and headers.get("location"):
+                        self.client.last_request_diagnostics["redirect_url"] = safe_url(urljoin(url, headers["location"]))
                     return HttpResponse(url, status, headers, body.decode("utf-8", errors="replace"), body)
 
                 def native_dispatch(request_url, **kwargs):
@@ -288,6 +326,12 @@ class OSCENativeBrowser(GuardedBrowser):
                 response = await asyncio.to_thread(self.capture.request, url, method=method,
                     body=request.get("postData", "").encode() or None, _native_dispatch=native_dispatch)
                 self.responses[url] = (response, str(self.capture.target / "http" / f"{self.capture.count:05d}.json"))
+                if self.ui_navigation and resource == "Document" and response.status_code == 200:
+                    # Page scripts issue their own XHRs immediately after this
+                    # response is fulfilled. Bind their token before releasing it.
+                    self._csrf_token = csrf_token(response.text)
+                if self.ui_navigation and resource in {"XHR", "Fetch"} and urlsplit(url).path == ENDPOINT:
+                    self.observed_fragment = (url, *self.responses[url])
                 # Preserve duplicate Set-Cookie headers in memory only; never
                 # export the anonymous browser session to artifacts.
                 headers = [h for h in response_event.get("responseHeaders", [])
@@ -298,6 +342,14 @@ class OSCENativeBrowser(GuardedBrowser):
                     "responseCode": response.status_code, "responseHeaders": headers,
                     "body": base64.b64encode(response.content).decode()})
             except Exception as exc:
+                if (self.ui_navigation and resource in {"Script", "Stylesheet"}
+                        and isinstance(exc, urllib.error.HTTPError) and exc.code in {404, 410}):
+                    # The durable response remains recorded. A missing optional
+                    # asset may be harmless; readiness and census checks decide.
+                    self.omitted_resources.append({"url": safe_url(url), "type": resource,
+                                                   "reason": "missing_ui_asset"})
+                    await self._abort(rid)
+                    return
                 self.failed = self.failed or exc
                 await self._abort(rid)
             finally:
@@ -322,6 +374,147 @@ class OSCENativeBrowser(GuardedBrowser):
             "available": True, "present": supplied is not None,
             "matches_document": bool(self._csrf_token and supplied == self._csrf_token),
         }
+
+    def _server_page(self, url, number):
+        """Bind one listing page to its successful native document capture."""
+        response, evidence = self.responses[url]
+        if response.status_code != 200 or response.url != url:
+            raise ValueError("OSCE server document is not its exact successful response")
+        session, index = session_parts(url)
+        if index != (None if number == 1 else number):
+            raise ValueError("OSCE server document URL page differs")
+        html = response.text
+        current, count = pagination_state(html)
+        if current != number or not 0 <= count <= 50 or (count < current and (current, count) != (1, 0)):
+            raise ValueError("OSCE server document pagination counters differ")
+        scope = captured_scope(html)
+        if scope != {"new_jobs": False, "unfiltered": True}:
+            raise ValueError("OSCE server document requires unfiltered scope")
+        totals = re.findall(
+            r'<(?:strong|span\b[^>]*class=["\'][^"\']*total_results[^"\']*["\'])[^>]*>\s*(\d+)\s*</(?:strong|span)>\s*results',
+            html, re.I)
+        if len(totals) != 1:
+            raise ValueError("OSCE server document advertised total missing or ambiguous")
+        total = int(totals[0])
+        rows = Cards(html).rows
+        ids = [row[0] for row in rows]
+        if (len(ids) != len(set(ids)) or (not rows and total) or any(not row[2] for row in rows)
+                or len(ids) > total or (count == 0 and total != 0)):
+            raise ValueError("OSCE server document identities/titles differ from total")
+        return {"number": number, "url": page_url(session, number, "://".join(self.entry_origin)),
+                "request_url": url, "capture_path": evidence,
+                "capture_sha256": hashlib.sha256(Path(evidence).read_bytes()).hexdigest(),
+                "response_sha256": hashlib.sha256(response.content).hexdigest(),
+                "navigation": SERVER_NAVIGATION, "advertised_pages": count,
+                "reported_total": total, "scope": scope, "html": html}
+
+    async def _collect_server_pages(self, page, target):
+        """Read every publisher-generated full document in one fresh session.
+
+        The publisher's own job_list.js and successful live document captures
+        establish /jobs/search/<session>/page<N>. No UI scripts, AJAX request,
+        or imported browser state are needed for these public documents.
+        """
+        first = self._server_page(page.url, 1)
+        session, _ = session_parts(first["url"])
+        count, total = first["advertised_pages"], first["reported_total"]
+        pages, seen = [], set()
+        for number in range(1, max(1, count) + 1):
+            if number > 1:
+                self.expected_document = page_url(session, number, "://".join(self.entry_origin))
+                await page.goto(self.expected_document, wait_until="domcontentloaded", timeout=self.remaining_ms())
+                self.remaining_ms()
+                value = self._server_page(page.url, number)
+            else:
+                value = first
+            ids = {row[0] for row in Cards(value["html"]).rows}
+            if session_parts(value["url"])[0] != session or seen.intersection(ids):
+                raise ValueError("OSCE server documents changed session or repeated identities")
+            if value["advertised_pages"] != count or value["reported_total"] != total:
+                # A provider may add/remove vacancies while this short walk is
+                # running. Keep the old census and restart a fresh session on
+                # the next cycle; malformed pages and repeated IDs stay strict.
+                raise HostIneligible(
+                    "OSCE inventory totals changed during enumeration; restart next cycle",
+                    category="cooldown", eligible_at=time.time() + 900,
+                )
+            seen.update(ids)
+            if len(seen) > total:
+                raise ValueError("OSCE server document ID union exceeds advertised total")
+            pages.append(value)
+            atomic_write_text(target / "inventory-pages" / f"{number}.json", json.dumps(value, sort_keys=True))
+        reconcile(pages)
+        return pages
+
+    async def _collect_ui_fragments(self, page, target):
+        """Click the publisher's own pagination and retain raw response proof.
+
+        OSCE caches previous result panels in the DOM. Only the current active
+        panel represents the displayed page; every panel must match the actual
+        captured response before it can enter the inventory bundle.
+        """
+        await page.wait_for_url(SESSION, timeout=self.remaining_ms())
+        session, index = session_parts(page.url)
+        if index not in (None, 1):
+            raise ValueError("OSCE initial page index differs")
+        actual_url = page.url
+        response, evidence = self.responses[actual_url]
+        html = response.text
+        site = site_name(html)
+        self._csrf_token = csrf_token(html)
+        _, count = pagination_state(html)
+        if not 0 <= count <= 50:
+            raise ValueError("OSCE advertised page count exceeds bound")
+        origin = "://".join(self.entry_origin)
+        pages = []
+        for number in range(1, max(1, count) + 1):
+            active = page.locator(".jResultsContent.jResultsActive")
+            await active.wait_for(state="visible", timeout=self.remaining_ms())
+            displayed = await active.evaluate("node => node.outerHTML")
+            if (pagination_state(displayed) != (number, count)
+                    or captured_scope(displayed) != captured_scope(html)
+                    or await active.locator('input[type="checkbox"]').evaluate_all(
+                        "nodes => nodes.some(node => node.checked)")
+                    or Cards(displayed).rows != Cards(html).rows):
+                raise ValueError("OSCE active UI page differs from captured response")
+            if captured_scope(html) != {"new_jobs": False, "unfiltered": True}:
+                raise ValueError("OSCE UI requires unfiltered scope")
+            displayed_session, displayed_index = session_parts(page.url)
+            if displayed_session != session or displayed_index not in (None, number):
+                raise ValueError("OSCE UI changed search session/page")
+            value = {"number": number, "url": page_url(session, number, origin),
+                     "request_url": actual_url, "capture_path": evidence,
+                     "scope": captured_scope(html), "html": html}
+            pages.append(value)
+            atomic_write_text(target / "inventory-pages" / f"{number}.json", json.dumps(value, sort_keys=True))
+            atomic_write_text(target / "inventory-pages" / f"{number}.dom.html", displayed)
+            if number == max(1, count):
+                break
+            next_page = number + 1
+            controls = active.locator('.jPagination a[aria-label="next"]')
+            visible = [control for control in await controls.all() if await control.is_visible()]
+            if not visible or any([await control.get_attribute("href") != f"#page{next_page}"
+                                   for control in visible]):
+                raise ValueError("OSCE visible Next control missing or differs from next page")
+            self.expected_fragment = {"session": session, "site": site,
+                                      "page": next_page, "origin": origin}
+            self.observed_fragment = None
+            try:
+                await visible[0].click(timeout=self.remaining_ms())
+                await page.wait_for_function("""expected => {
+                    const active = document.querySelector('.jResultsContent.jResultsActive');
+                    return active && Number(active.querySelector('#jPaginateCurrPage')?.textContent)
+                        === expected;
+                }""", arg=next_page, timeout=self.remaining_ms())
+                self.remaining_ms()
+                if self.observed_fragment is None:
+                    raise ValueError("OSCE UI navigation has no captured fragment")
+                actual_url, response, evidence = self.observed_fragment
+                html = result_html(response.text, next_page)
+            finally:
+                self.expected_fragment = None
+        reconcile(pages)
+        return pages
 
     async def _collect_fragments(self, page, target):
         await page.wait_for_url(SESSION, timeout=self.remaining_ms())

@@ -180,10 +180,14 @@ def parse_bundle(source, body):
         build_job(
             source,
             title=title,
-            external_id=key,
+            # Keep the key used by historical OSCE listings and detail parsing.
+            # The provider's numeric card ID remains separate census evidence.
+            external_id=urlsplit(url).path.rsplit("/", 1)[-1],
             source_url=url,
             apply_url=url,
-            raw={"href": url, "title": title, "external_id": key},
+            raw={"href": url, "title": title,
+                 "external_id": urlsplit(url).path.rsplit("/", 1)[-1],
+                 "provider_id": key, "parser": "browser_inventory"},
         )
         for key, url, title in rows
     ]

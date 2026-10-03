@@ -38,7 +38,7 @@ def test_five_pages_reconcile_without_a_hardcoded_count_or_session():
         + "</script>",
     )
     assert (
-        count == 13 and n == 5 and {j.external_id for j in jobs} == {str(i) for i in range(1, 14)}
+        count == 13 and n == 5 and {j.raw['provider_id'] for j in jobs} == {str(i) for i in range(1, 14)}
     )
 
 
@@ -90,7 +90,7 @@ def test_real_browser_waits_for_changed_ids_and_uses_generated_session(tmp_path,
     source = OrganizationSource("osce_custom_html", "OSCE", "static_html", start)
     jobs, total, count = parse_bundle(source, response.text)
     assert dispatched == [start]
-    assert total == 3 and count == 2 and [j.external_id for j in jobs] == ["1", "2", "3"]
+    assert total == 3 and count == 2 and [j.raw['provider_id'] for j in jobs] == ["1", "2", "3"]
     receipt = json.loads(browser.last_receipt.read_text())
     assert receipt["omitted_resources"] == [{
         "url": "https://vacancies.osce.org/styles/core.css",
