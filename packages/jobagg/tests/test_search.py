@@ -947,3 +947,37 @@ def test_saved_search_add_list_run_and_remove(tmp_path):
     )
     assert exit_code == 0
     assert json.loads(saved_path.read_text(encoding="utf-8"))["saved_searches"] == {}
+
+
+def test_collected_search_pagination_uses_stable_job_key_tiebreaker(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    for external_id in ("charlie", "alpha", "bravo"):
+        db.upsert_job(
+            build_job(
+                source,
+                title=f"Programme Officer {external_id}",
+                external_id=external_id,
+                location="Nairobi",
+                closes_at="2099-01-01T00:00:00+00:00",
+                posted_at="2026-01-01T00:00:00+00:00",
+                apply_url=f"https://jobs.unicef.org/jobs/{external_id}",
+            )
+        )
+    classify_database(db)
+
+    expected = [
+        "unicef_pageup:alpha",
+        "unicef_pageup:bravo",
+        "unicef_pageup:charlie",
+    ]
+    for sort in ("closing_date_asc", "closing_date_desc", "posted_date_desc"):
+        actual = [
+            search_collected_jobs(
+                db,
+                VacancySearchRequest(sort=sort, limit=1, offset=offset),
+                include_facets=False,
+            ).results[0]["job_key"]
+            for offset in range(3)
+        ]
+        assert actual == expected
