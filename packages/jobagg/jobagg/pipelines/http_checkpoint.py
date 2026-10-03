@@ -487,10 +487,10 @@ class DurableCapture:
                     record.setdefault("body_captured", False)
                     cause = next((error for error in exception_chain(exc) if isinstance(error, urllib.error.HTTPError)), None)
                     status = cause.code if cause is not None else None
-                    retry = (
-                        cause.headers.get("Retry-After")
-                        if isinstance(cause, urllib.error.HTTPError) and cause.headers
-                        else None
+                    retry = next(
+                        (value for key, value in (cause.headers.items() if cause is not None and cause.headers else [])
+                         if key.lower() == "retry-after"),
+                        None,
                     )
                     if status is not None:
                         record["status_code"] = status

@@ -197,7 +197,8 @@ def test_wrapped_typed_budget_deferral_is_not_a_permanent_failure(setup):
 
 
 @pytest.mark.parametrize('status,category', [(429, 'rate_limit'), *[(x, 'transient_transport') for x in (408, 500, 502, 503, 504)]])
-def test_captured_http_error_body_requeues_with_retry_after(setup, status, category):
+@pytest.mark.parametrize('retry_header', ['Retry-After', 'retry-after', 'RETRY-AFTER'])
+def test_captured_http_error_body_requeues_with_retry_after(setup, status, category, retry_header):
     worker, replies, calls, _ = setup
     worker.max_tasks = 1
     worker.tick(execute=True)  # A complete listing creates the detail task.
@@ -208,7 +209,7 @@ def test_captured_http_error_body_requeues_with_retry_after(setup, status, categ
             self.calls.append((url, kwargs))
             response = HttpResponse(
                 url, status,
-                {'Content-Type': 'text/html', 'Retry-After': '7200'},
+                {'Content-Type': 'text/html', retry_header: '7200'},
                 body.decode(), body,
             )
             # Match the real HTTP client's bounded-response exception, so the
@@ -227,6 +228,8 @@ def test_captured_http_error_body_requeues_with_retry_after(setup, status, categ
     assert capture['status_code'] == status
     assert capture['state'] == 'failed' and capture['body_captured'] is True
     assert capture['failure_category'] == category
+    assert capture['response_headers'][retry_header] == '7200'
+    assert capture['retry_after'] == '7200'
     assert gzip.decompress(Path(capture['artifact']).read_bytes()) == body
     assert capture['body_sha256'] == hashlib.sha256(body).hexdigest()
     assert not state['stopped'] and state['recovery']['failure_kind'] == category
@@ -249,7 +252,7 @@ def test_captured_http_error_body_requeues_with_retry_after(setup, status, categ
 def test_captured_error_retry_rejects_unbound_or_changed_evidence(setup, change):
     import urllib.error
     worker, _, _, _ = setup
-    test_captured_http_error_body_requeues_with_retry_after(setup, 503, "transient_transport")
+    test_captured_http_error_body_requeues_with_retry_after(setup, 503, "transient_transport", "Retry-After")
     task = task_row(worker)
     path = Path(json.loads(task["receipt"])["capture_directory"]) / "http" / "00001.json"
     meta = json.loads(path.read_text())
@@ -280,7 +283,7 @@ def test_captured_error_restart_preserves_probe_ceiling_then_recovers(setup, mon
     from jobagg.remediation_worker import Worker
     from jobagg.pipelines.host_recovery import host_eligibility
     worker, replies, calls, _ = setup
-    test_captured_http_error_body_requeues_with_retry_after(setup, 503, "transient_transport")
+    test_captured_http_error_body_requeues_with_retry_after(setup, 503, "transient_transport", "Retry-After")
     error_factory = worker.client_factory
     now = [task_row(worker)["eligible_at"] + 1]
     monkeypatch.setattr(time, "time", lambda: now[0])
