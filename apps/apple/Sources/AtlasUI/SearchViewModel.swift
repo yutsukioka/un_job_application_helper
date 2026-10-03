@@ -67,6 +67,7 @@ public final class AtlasSearchViewModel: ObservableObject {
     @Published public var sortOrder: SortOrder = .closingSoon
 
     private var client: AtlasAPIClient
+    private let endpointDefaults: UserDefaults
     private let usesPreviewData: Bool
     private var cachedSnapshot: AtlasLocalSnapshot?
     private var cachedAllJobs: [JobSearchResult] = []
@@ -75,11 +76,20 @@ public final class AtlasSearchViewModel: ObservableObject {
     private var detailWarmupTask: Task<Void, Never>?
     private static let resultPageIncrement = 200
 
-    public init(
+    public convenience init(
         client: AtlasAPIClient = AtlasAPIClient(),
         usesPreviewData: Bool = false
     ) {
+        self.init(client: client, usesPreviewData: usesPreviewData, endpointDefaults: .standard)
+    }
+
+    init(
+        client: AtlasAPIClient,
+        usesPreviewData: Bool,
+        endpointDefaults: UserDefaults
+    ) {
         self.client = client
+        self.endpointDefaults = endpointDefaults
         self.usesPreviewData = usesPreviewData
         self.results = usesPreviewData ? JobSearchResult.samples : []
         self.total = usesPreviewData ? JobSearchResult.samples.count : 0
@@ -192,30 +202,54 @@ public final class AtlasSearchViewModel: ObservableObject {
         await refresh()
     }
 
-    public func refresh() async {
+    @discardableResult
+    public func refresh() async -> Bool {
         guard !usesPreviewData else {
             applyPreviewResults()
-            return
+            return true
         }
+        if cachedSnapshot == nil || cachedAllJobs.isEmpty { _ = loadCachedSnapshot() }
+        return await refresh(
+            candidates: AtlasAPIClient.recoveryBaseURLs(cached: cachedSnapshot?.baseURL),
+            fetchHealth: { endpoint in try await AtlasAPIClient(baseURL: endpoint).health() },
+            fetchSnapshot: { client, health in try await self.fetchSnapshot(health: health, client: client) },
+            commitSnapshot: { snapshot in try AtlasLocalCache.commitSnapshot(snapshot, replacingDetailsWith: nil) },
+            warmDetails: { snapshot, client in self.startDetailCacheWarmupIfNeeded(snapshot, force: true, client: client) }
+        )
+    }
 
-        if cachedSnapshot == nil || cachedAllJobs.isEmpty {
-            _ = loadCachedSnapshot()
-        }
-
+    func refresh(
+        candidates: [URL],
+        fetchHealth: (URL) async throws -> AtlasHealthSummary,
+        fetchSnapshot: (AtlasAPIClient, AtlasHealthSummary) async throws -> AtlasLocalSnapshot,
+        commitSnapshot: (AtlasLocalSnapshot) throws -> Void,
+        warmDetails: (AtlasLocalSnapshot, AtlasAPIClient) -> Void
+    ) async -> Bool {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
-
+        let previousClient = client
         do {
-            let health = try await client.health()
-            let fetchedSnapshot = try await fetchSnapshot(health: health)
+            let (endpoint, health) = try await AtlasAPIClient.healthWithRecovery(
+                baseURL: client.baseURL, candidates: candidates
+            ) { endpoint in try await fetchHealth(endpoint) }
+            guard client.baseURL == previousClient.baseURL else { return false }
+            let recoveredClient = AtlasAPIClient(baseURL: endpoint)
+            let fetchedSnapshot = try await fetchSnapshot(recoveredClient, health)
+            try Task.checkCancellation()
+            guard client.baseURL == previousClient.baseURL else { return false }
             let snapshot = snapshotWithCurrentSavedAt(fetchedSnapshot)
-            try AtlasLocalCache.commitSnapshot(snapshot, replacingDetailsWith: nil)
+            try commitSnapshot(snapshot)
             applyCachedSnapshot(snapshot)
-            startDetailCacheWarmupIfNeeded(snapshot, force: true)
-            userMessage = "Local save refreshed"
+            warmDetails(snapshot, recoveredClient)
+            if endpoint != previousClient.baseURL {
+                userMessage = "Local save refreshed using a temporary server connection"
+            } else { userMessage = "Local save refreshed" }
+            return true
         } catch {
+            guard client.baseURL == previousClient.baseURL else { return false }
             applyOfflineFallback(error)
+            return false
         }
     }
 
@@ -507,7 +541,7 @@ public final class AtlasSearchViewModel: ObservableObject {
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
-        UserDefaults.standard.set(url.absoluteString, forKey: AtlasAPIClient.baseURLDefaultsKey)
+        endpointDefaults.set(url.absoluteString, forKey: AtlasAPIClient.baseURLDefaultsKey)
         client = nextClient
         hasLoaded = false
         await refresh()
@@ -627,7 +661,11 @@ public final class AtlasSearchViewModel: ObservableObject {
         return output
     }
 
-    private func startDetailCacheWarmupIfNeeded(_ snapshot: AtlasLocalSnapshot, force: Bool = false) {
+    private func startDetailCacheWarmupIfNeeded(
+        _ snapshot: AtlasLocalSnapshot, force: Bool = false, client snapshotClient: AtlasAPIClient? = nil
+    ) {
+        let client = snapshotClient ?? self.client
+        guard client.baseURL == snapshot.baseURL else { return }
         let allJobKeys = detailJobKeys(for: snapshot)
         refreshDetailCacheCounts(snapshot)
         let jobKeysToFetch = force ? allJobKeys : AtlasLocalCache.missingDetailJobKeys(jobKeys: allJobKeys)
@@ -635,7 +673,6 @@ public final class AtlasSearchViewModel: ObservableObject {
         guard force || !isCachingDetails else { return }
 
         detailWarmupTask?.cancel()
-        let client = self.client
         detailWarmupTask = Task(priority: .utility) { [weak self] in
             await self?.warmDetailCache(
                 jobKeysToFetch: jobKeysToFetch,
@@ -921,7 +958,7 @@ public final class AtlasSearchViewModel: ObservableObject {
         }
     }
 
-    private func fetchSnapshot(health: AtlasHealthSummary) async throws -> AtlasLocalSnapshot {
+    private func fetchSnapshot(health: AtlasHealthSummary, client: AtlasAPIClient) async throws -> AtlasLocalSnapshot {
         let openJobs = health.openJobs ?? 10_000
         let limit = max(openJobs + 250, 10_000)
         async let searchResponse = client.search(cacheSearchRequest(limit: limit))
