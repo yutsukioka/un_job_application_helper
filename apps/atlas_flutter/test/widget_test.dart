@@ -238,12 +238,20 @@ void main() {
     final transport = _OperationalTransport();
     final controller = AtlasAppController(
       initialBaseURL: Uri.parse('http://atlas.test:8765'),
+      localCacheStoreFactory:
+          ({bool Function()? privateStateProtectionActive}) async => null,
       clientFactory: (baseURL) =>
           AtlasAPIClient(baseURL: baseURL, transport: transport),
     );
     addTearDown(controller.dispose);
 
     await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
+    expect(controller.connectionStatus, 'Connected');
+    expect(controller.total, 2274);
+    expect(controller.cachedJobCount, 2274);
+    expect(transport.searchOffsets.take(12), [
+      for (var offset = 0; offset < 2274; offset += 200) offset,
+    ]);
     await tester.pumpWidget(
       MaterialApp(home: AtlasHomeShell(controller: controller)),
     );
@@ -501,6 +509,8 @@ JobSearchResult _searchResultJob(int index) {
 }
 
 final class _OperationalTransport implements AtlasTransport {
+  final searchOffsets = <int>[];
+
   @override
   Future<Object?> send(AtlasRequest request) async {
     switch (request.path) {
@@ -512,11 +522,28 @@ final class _OperationalTransport implements AtlasTransport {
           'last_sync_at': '2026-07-02T00:00:00Z',
         };
       case 'api/search':
+        final limit = request.jsonBody?['limit'] as int? ?? 50;
+        final offset = request.jsonBody?['offset'] as int? ?? 0;
+        searchOffsets.add(offset);
+        expect(limit, lessThanOrEqualTo(200));
+        final remaining = 2274 - offset;
+        final count = remaining <= 0
+            ? 0
+            : (remaining < limit ? remaining : limit);
         return {
           'total': 2274,
-          'limit': request.jsonBody?['limit'] ?? 50,
-          'offset': 0,
-          'results': <Object?>[],
+          'limit': limit,
+          'offset': offset,
+          'results': [
+            for (var index = offset; index < offset + count; index++)
+              {
+                'job_key': 'undp_oracle_hcm:$index',
+                'title': 'Programme role $index',
+                'organization': 'UNDP Oracle HCM',
+                'source_id': 'undp_oracle_hcm',
+                'status': 'open',
+              },
+          ],
           'facets': <String, Object?>{},
           'facet_labels': <String, Object?>{},
           'unclassified_count': 0,
