@@ -2006,8 +2006,11 @@ struct AtlasSettingsPanel: View {
     private func refreshLocalSave() async {
         isRefreshingLocalSave = true
         defer { isRefreshingLocalSave = false }
-        await viewModel.refresh()
-        connectionMessage = "Local save updated at \(AtlasLocalCache.formattedSavedAt(viewModel.cacheSavedAt)). Detail caching continues in the background until all cached jobs are available offline."
+        if await viewModel.refresh() {
+            connectionMessage = "Local save updated at \(AtlasLocalCache.formattedSavedAt(viewModel.cacheSavedAt)). Detail caching continues in the background until all cached jobs are available offline."
+        } else {
+            connectionMessage = viewModel.errorMessage ?? "The local save could not be refreshed."
+        }
     }
 
     private var draftBaseURL: URL? {

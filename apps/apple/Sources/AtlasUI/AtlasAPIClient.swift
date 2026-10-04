@@ -424,6 +424,7 @@ public enum AtlasAPIError: LocalizedError, Equatable {
 
 public struct AtlasAPIClient: Sendable {
     public static let baseURLDefaultsKey = "atlas.api.baseURL"
+    public static let configuredBaseURLInfoKey = "AtlasDefaultAPIBaseURL"
 
     public let baseURL: URL
 
@@ -433,16 +434,90 @@ public struct AtlasAPIClient: Sendable {
 
     public static func defaultBaseURL() -> URL {
         if let stored = UserDefaults.standard.string(forKey: baseURLDefaultsKey),
-           let url = URL(string: stored),
-           url.scheme?.hasPrefix("http") == true {
+           let url = normalizedBaseURL(from: stored) {
             return url
         }
+        return configuredDefaultBaseURL() ?? platformDefaultBaseURL()
+    }
 
+    static func configuredDefaultBaseURL(
+        infoDictionary: [String: Any]? = Bundle.main.infoDictionary
+    ) -> URL? {
+        guard let value = infoDictionary?[configuredBaseURLInfoKey] as? String else { return nil }
+        return normalizedBaseURL(from: value)
+    }
+
+    static func recoveryBaseURLs(
+        configured: URL? = configuredDefaultBaseURL(), cached: URL? = nil,
+        platform: URL = platformDefaultBaseURL()
+    ) -> [URL] {
+        var seen = Set<URL>()
+        return [configured, cached, platform].compactMap { $0 }.filter { seen.insert($0).inserted }
+    }
+
+    static func platformDefaultBaseURL() -> URL {
         #if os(iOS) && !targetEnvironment(simulator)
         return URL(string: "http://192.168.50.208:8765")!
         #else
         return URL(string: "http://127.0.0.1:8765")!
         #endif
+    }
+
+    @MainActor
+    static func healthWithRecovery(
+        baseURL: URL, candidates: [URL], fetch: (URL) async throws -> AtlasHealthSummary
+    ) async throws -> (URL, AtlasHealthSummary) {
+        func retryable(_ error: Error) -> Bool {
+            guard let error = error as? AtlasAPIError else { return false }
+            switch error {
+            case .transport: return true
+            case .httpStatus(let status, _): return [502, 503, 504].contains(status)
+            default: return false
+            }
+        }
+        do {
+            try Task.checkCancellation()
+            return (baseURL, try await fetch(baseURL))
+        } catch {
+            guard retryable(error) else { throw error }
+            let initialError = error
+            var seen: Set<URL> = [baseURL]
+            for candidate in candidates where seen.insert(candidate).inserted {
+                guard permitsRecoveryEndpoint(candidate, from: baseURL) else { continue }
+                try Task.checkCancellation()
+                do { return (candidate, try await fetch(candidate)) }
+                catch { if !retryable(error) { throw error } }
+            }
+            throw initialError
+        }
+    }
+
+    static func permitsRecoveryEndpoint(_ candidate: URL, from baseURL: URL) -> Bool {
+        ["http", "https"].contains(candidate.scheme?.lowercased() ?? "")
+            && (baseURL.scheme?.lowercased() != "https" || candidate.scheme?.lowercased() == "https")
+    }
+
+    static func transportFailure(_ error: Error, url: URL?) -> Error {
+        if error is CancellationError { return error }
+        let terminalCodes: Set<Int> = [
+            URLError.cancelled, .secureConnectionFailed, .serverCertificateHasBadDate,
+            .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
+            .serverCertificateNotYetValid, .clientCertificateRejected,
+            .clientCertificateRequired, .appTransportSecurityRequiresSecureConnection
+        ].reduce(into: []) { $0.insert($1.rawValue) }
+        var current = error as NSError
+        var seen = Set<ObjectIdentifier>()
+        for _ in 0..<8 {
+            guard seen.insert(ObjectIdentifier(current)).inserted else { return error }
+            if current.domain == NSURLErrorDomain && terminalCodes.contains(current.code) {
+                return error
+            }
+            guard let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError else {
+                return AtlasAPIError.transport(transportErrorMessage(error, url: url))
+            }
+            current = underlying
+        }
+        return error
     }
 
     public static func normalizedBaseURL(from rawValue: String) -> URL? {
@@ -600,7 +675,7 @@ public struct AtlasAPIClient: Sendable {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw AtlasAPIError.transport(transportErrorMessage(error, url: request.url))
+            throw Self.transportFailure(error, url: request.url)
         }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AtlasAPIError.invalidResponse
