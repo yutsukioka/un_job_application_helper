@@ -6,6 +6,10 @@ Its retained review, effective expired deadline and hold ID are recorded separat
 are preserved. Source health reports the reason and release requirements.
 A positive future deadline may release only the matching review's hold.
 Missing or invalid marker authority never automatically releases a hold.
+An undated refresh preserves a previously active review; an unknown deadline
+does not establish a future extension. Active retained hold evidence remains
+visible in source health when another protected task status takes precedence;
+reporting does not clear that status or its accounting.
 
 For a reviewed withdrawal, first correct the job classification through its
 authorized evidence workflow. The queue repair does not alter job rows or

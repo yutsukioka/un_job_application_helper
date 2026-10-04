@@ -1,4 +1,5 @@
 import json
+import pytest
 from datetime import UTC, datetime
 from jobagg.deadline_review import MARKER, apply_review, blocks_detail
 from jobagg.models import JobRecord
@@ -124,3 +125,29 @@ def test_future_extension_does_not_release_legacy_block_or_clear_its_evidence():
     Worker.enqueue(None, conn, 'test', 'detail', '1', {'listing': {'closes_at':'2099-01-01T00:00:00+00:00'}})
     assert dict(conn.execute('SELECT * FROM remediation_tasks').fetchone()) == before
     conn.close()
+
+
+@pytest.mark.parametrize('stored_deadline', [None, 'invalid'])
+@pytest.mark.parametrize('review_deadline', [None, 'invalid'])
+def test_undated_refresh_cannot_withdraw_active_review_or_reopen_job(tmp_path, stored_deadline, review_deadline):
+    from jobagg.db import JobDatabase
+    db = JobDatabase(tmp_path / 'jobs.sqlite3')
+    db.initialize()
+    db.upsert_job(job(datetime(2020, 1, 1, tzinfo=UTC)))
+    raw = json.loads(current()['raw_json'])
+    raw[MARKER]['deadline_utc'] = review_deadline
+    with db.connect() as conn:
+        conn.execute("UPDATE jobs SET status='expired',closes_at=?,raw_json=? WHERE job_key='test:1'",
+                     (stored_deadline, json.dumps(raw)))
+    db.upsert_job(job(None))
+    record = db.get_job('test:1')
+    assert record['status'] == 'expired' and record['deadline_state'] == 'expired'
+    assert record['raw'][MARKER]['active'] is True
+    assert 'release_reason' not in record['raw'][MARKER]
+    assert record['application_ready'] == record['trusted_current'] == 0
+
+
+def test_deadline_at_current_instant_is_not_a_positive_future_release():
+    j = job(NOW)
+    apply_review(j, current(), now=NOW)
+    assert j.status == 'expired' and j.raw[MARKER]['active'] is True

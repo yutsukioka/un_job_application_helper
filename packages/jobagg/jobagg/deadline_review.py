@@ -41,10 +41,13 @@ def apply_review(job, current, *, now=None):
         return
     now = now or datetime.now(UTC)
     deadline = instant(job.closes_at) or instant(current['closes_at']) or instant(review.get('deadline_utc'))
-    active = bool(deadline and deadline < now)
+    # An unknown deadline cannot withdraw a previously active reviewed hold.
+    active = deadline < now if deadline and deadline != now else review.get('active') is True
     review = {**review, 'active': active}
-    if not active:
-        review['release_reason'] = 'Incoming deadline is future or cannot be established'
+    if deadline and deadline > now:
+        review['release_reason'] = 'Incoming deadline is future'
+    elif active:
+        review.pop('release_reason', None)
     job.raw[MARKER] = review
     if active and job.status == 'open':
         job.status = 'expired'
@@ -99,7 +102,7 @@ def record_hold(conn, task_id, source_id, external_id, current, proposed_deadlin
 
 def matches_hold_review(hold, current):
     if hold is None:
-        return True  # Legacy holds still require the validated positive extension.
+        return False  # A current marker cannot prove which review created a legacy hold.
     review = marker_for(json.loads(current['raw_json'] or '{}'), hold['source_id'], hold['external_id'])
     prior = json.loads(hold['review_json'])
     return bool(review and all(review.get(k) == prior.get(k) for k in
@@ -117,14 +120,27 @@ def release_hold(conn, task_id, evidence):
 
 def hold_summaries(conn, source_id):
     """Read-only explanations, including legacy holds without retained proof."""
-    result = []
+    tasks = {}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remediation_deadline_holds'").fetchone():
+        for row in conn.execute(
+            "SELECT h.*,t.status AS task_status,t.eligible_at FROM remediation_deadline_holds h "
+            "LEFT JOIN remediation_tasks t ON t.task_id=h.task_id "
+            "WHERE h.source_id=? AND h.released_at IS NULL", (source_id,)
+        ):
+            hold = dict(row)
+            task = {'task_id': hold['task_id'], 'external_id': hold['external_id'],
+                    'status': hold.pop('task_status'), 'eligible_at': hold.pop('eligible_at')}
+            tasks[task['task_id']] = (task, hold)
     for task in conn.execute(
-        "SELECT task_id,external_id,eligible_at FROM remediation_tasks WHERE source_id=? AND status='past_deadline' ORDER BY task_id", (source_id,)
+        "SELECT task_id,external_id,status,eligible_at FROM remediation_tasks WHERE source_id=? AND status='past_deadline'", (source_id,)
     ):
-        hold = active_hold(conn, task['task_id'])
+        tasks.setdefault(task['task_id'], (dict(task), None))
+    result = []
+    for task, hold in (tasks[key] for key in sorted(tasks)):
         review = json.loads(hold['review_json']) if hold else {}
         result.append({
             'task_id': task['task_id'], 'external_id': task['external_id'],
+            'task_status': task['status'],
             'hold_id': hold['hold_id'] if hold else None,
             'review_id': review.get('review_id'), 'reviewed_at': review.get('reviewed_at'),
             'recorded_at': hold['recorded_at'] if hold else None,
@@ -132,7 +148,10 @@ def hold_summaries(conn, source_id):
             'retained_eligible_at': task['eligible_at'],
             'reason': 'Identity-bound past-deadline review' if hold else 'Deadline hold lacks retained review evidence; reviewed reconciliation required',
             'automatic_retry': False,
-            'release_conditions': 'A positive future deadline with the matching review, or an explicit evidenced correction bound to this hold',
+            'release_conditions': (
+                'A positive future deadline with the matching review, or an explicit evidenced correction bound to this hold; other task holds remain in force'
+                if hold else 'Separate evidenced reconciliation is required before this proofless hold can be released'
+            ),
         })
     return result
 
@@ -158,7 +177,11 @@ def validate_correction(hold, task, current, correction):
             or instant(correction.get('reviewed_at')) is None
             or not instant(review['reviewed_at']) <= instant(correction['reviewed_at']) <= datetime.now(UTC)):
         raise ValueError('Correction does not bind the held identity, review and authority')
-    if blocks_detail(current):
-        raise ValueError('Current identity-bound expired review still blocks the detail')
+    current_review = marker_for(json.loads(current['raw_json'] or '{}'), task['source_id'], task['external_id'])
+    active_unknown = bool(current_review and current_review.get('active') is True
+                          and instant(current['closes_at']) is None
+                          and instant(current_review.get('deadline_utc')) is None)
+    if blocks_detail(current) or active_unknown:
+        raise ValueError('Current identity-bound review still blocks the detail')
     return {'hold_id': hold['hold_id'], 'review_sha256': hashlib.sha256(hold['review_json'].encode()).hexdigest(),
             'correction': correction}

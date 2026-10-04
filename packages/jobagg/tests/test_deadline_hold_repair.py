@@ -191,6 +191,63 @@ def test_positive_extension_retains_hold_history_and_rejects_another_review_iden
         assert active_hold(conn, task['task_id']) is None
         after = dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (task['task_id'],)).fetchone())
         assert after == {**task, 'status': 'pending', 'payload': dump(payload)}
+    assert read_worker_health(worker.db.path)[task['source_id']]['deadline_holds'] == []
+
+
+@pytest.mark.parametrize('missing', ['row', 'table'])
+def test_positive_extension_cannot_release_proofless_legacy_hold(setup, missing):
+    worker, task, hold, calls, _ = held_task(setup)
+    with worker.db.connect() as conn:
+        if missing == 'row':
+            conn.execute('DELETE FROM remediation_deadline_holds WHERE hold_id=?', (hold['hold_id'],))
+        else:
+            conn.execute('DROP TABLE remediation_deadline_holds')
+    before_calls = list(calls)
+    before = snapshots(worker)
+    with worker.db.connect() as conn:
+        worker.enqueue(conn, task['source_id'], 'detail', task['external_id'],
+                       {'listing': {'closes_at': '2099-01-01T00:00:00+00:00'}})
+        assert dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (task['task_id'],)).fetchone()) == task
+        assert active_hold(conn, task['task_id']) is None
+    summary = read_worker_health(worker.db.path)[task['source_id']]['deadline_holds'][0]
+    assert summary['hold_id'] is None and summary['task_status'] == 'past_deadline'
+    assert summary['automatic_retry'] is False and 'reconciliation required' in summary['reason']
+    assert 'reconciliation is required' in summary['release_conditions']
+    assert snapshots(worker) == before and calls == before_calls
+
+
+@pytest.mark.parametrize('status', ['blocked', 'interrupted', 'inflight', 'dead_letter', 'done',
+                                   'unavailable_pending_inventory', 'listing_detail_conflict'])
+def test_active_hold_remains_visible_when_task_enters_protected_state(setup, status):
+    worker, task, hold, calls, _ = held_task(setup)
+    with worker.db.connect() as conn:
+        conn.execute('UPDATE remediation_tasks SET status=? WHERE task_id=?', (status, task['task_id']))
+    before = snapshots(worker)
+    before_calls = list(calls)
+    summary = read_worker_health(worker.db.path)[task['source_id']]['deadline_holds'][0]
+    assert summary['task_status'] == status and summary['hold_id'] == hold['hold_id']
+    assert summary['review_id'] == 'deadline-review-1' and summary['deadline_utc'] == hold['deadline_utc']
+    assert summary['retained_eligible_at'] == task['eligible_at'] and summary['automatic_retry'] is False
+    with worker.db.connect() as conn:
+        assert dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (task['task_id'],)).fetchone()) == {**task, 'status': status}
+        assert active_hold(conn, task['task_id']) == hold
+    assert snapshots(worker) == before and calls == before_calls
+
+
+def test_unknown_current_date_never_releases_held_task_or_implies_review_withdrawal(setup):
+    worker, task, hold, calls, tmp = held_task(setup)
+    with worker.db.connect() as conn:
+        conn.execute("UPDATE jobs SET closes_at=NULL WHERE job_key='demo_workday:R1'")
+    before = snapshots(worker)
+    before_calls = list(calls)
+    with worker.db.connect() as conn:
+        worker.enqueue(conn, task['source_id'], 'detail', task['external_id'], {'listing': {}})
+        assert dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (task['task_id'],)).fetchone()) == task
+        assert active_hold(conn, task['task_id']) == hold
+    path = correction_file(tmp, task, hold)
+    plan = repair.prepare(worker.workspace, worker.shared_lock, deadline_correction_path=path)
+    assert plan['candidates'] == [] and plan['held']
+    assert snapshots(worker) == before and calls == before_calls
 
 
 @pytest.mark.parametrize('change', ['job', 'hold'])
