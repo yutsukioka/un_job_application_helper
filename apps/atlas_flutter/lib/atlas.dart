@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'src/cache_file_replacement.dart';
@@ -914,6 +915,37 @@ final class AtlasSearchRequest {
       limit: limit,
       offset: 0,
       sort: sortOrder.apiValue,
+    );
+  }
+
+  AtlasSearchRequest serverPage({
+    required int limit,
+    required int offset,
+    required bool includeFacets,
+  }) {
+    return AtlasSearchRequest(
+      text: text,
+      status: status,
+      organizations: organizations,
+      sourceIDs: sourceIDs,
+      cities: cities,
+      countriesISO3: countriesISO3,
+      nationalInternational: nationalInternational,
+      gradeCodes: gradeCodes,
+      ccogFamilies: ccogFamilies,
+      capabilityTags: capabilityTags,
+      contractGroups: contractGroups,
+      seniorityGroups: seniorityGroups,
+      workModalities: workModalities,
+      volunteerKinds: volunteerKinds,
+      unvCategories: unvCategories,
+      unvVolunteerTypes: unvVolunteerTypes,
+      closingDateTo: closingDateTo,
+      includeLowConfidence: includeLowConfidence,
+      includeFacets: includeFacets,
+      limit: limit,
+      offset: offset,
+      sort: sort,
     );
   }
 
@@ -3448,6 +3480,7 @@ final class AtlasIOTransport implements AtlasTransport {
 }
 
 final class AtlasAPIClient {
+  static const int maxSearchPageSize = 200;
   AtlasAPIClient({Uri? baseURL, AtlasTransport? transport})
     : baseURL = baseURL ?? defaultBaseURL(),
       _transport =
@@ -3488,6 +3521,89 @@ final class AtlasAPIClient {
   }
 
   Future<AtlasSearchResponse> search(AtlasSearchRequest request) async {
+    final requestedLimit = math.max(0, request.limit);
+    final normalizedOffset = math.max(0, request.offset);
+    if (normalizedOffset > 100_000) {
+      throw const AtlasAPIException.invalidResponse();
+    }
+    final firstResponse = await _searchPage(
+      request.serverPage(
+        limit: math.min(requestedLimit, maxSearchPageSize),
+        offset: normalizedOffset,
+        includeFacets: request.includeFacets,
+      ),
+    );
+
+    if (requestedLimit == 0) {
+      return AtlasSearchResponse(
+        total: firstResponse.total,
+        limit: 0,
+        offset: normalizedOffset,
+        results: const <JobSearchResult>[],
+        facets: firstResponse.facets,
+        facetLabels: firstResponse.facetLabels,
+        unclassifiedCount: firstResponse.unclassifiedCount,
+      );
+    }
+
+    final targetCount = math.min(
+      requestedLimit,
+      math.max(0, firstResponse.total - normalizedOffset),
+    );
+    if (targetCount > 0 && firstResponse.results.isEmpty) {
+      throw const AtlasAPIException.invalidResponse();
+    }
+    final results = <JobSearchResult>[];
+    final seenJobKeys = <String>{};
+    _appendUniqueSearchResults(
+      firstResponse.results,
+      results: results,
+      seenJobKeys: seenJobKeys,
+      limit: targetCount,
+    );
+    var nextOffset = normalizedOffset + firstResponse.results.length;
+    var previousPage = firstResponse.results;
+
+    while (results.length < targetCount &&
+        previousPage.isNotEmpty &&
+        nextOffset < firstResponse.total) {
+      if (nextOffset > 100_000) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      final page = await _searchPage(
+        request.serverPage(
+          limit: math.min(maxSearchPageSize, targetCount - results.length),
+          offset: nextOffset,
+          includeFacets: false,
+        ),
+      );
+      // Offset pages may cross a publication. Do not commit a detectable
+      // mixed or truncated result as a successful logical search.
+      if (page.total != firstResponse.total || page.results.isEmpty) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      previousPage = page.results;
+      _appendUniqueSearchResults(
+        previousPage,
+        results: results,
+        seenJobKeys: seenJobKeys,
+        limit: targetCount,
+      );
+      nextOffset += previousPage.length;
+    }
+
+    return AtlasSearchResponse(
+      total: firstResponse.total,
+      limit: requestedLimit,
+      offset: normalizedOffset,
+      results: List.unmodifiable(results),
+      facets: firstResponse.facets,
+      facetLabels: firstResponse.facetLabels,
+      unclassifiedCount: firstResponse.unclassifiedCount,
+    );
+  }
+
+  Future<AtlasSearchResponse> _searchPage(AtlasSearchRequest request) async {
     final json = await _requestMap(
       AtlasRequest(
         method: 'POST',
@@ -3530,18 +3646,39 @@ final class AtlasAPIClient {
     required AtlasSearchRequest request,
     required String summary,
   }) async {
+    final serverRequest = request.serverPage(
+      limit: math.min(math.max(request.limit, 0), maxSearchPageSize),
+      offset: math.min(math.max(request.offset, 0), 100_000),
+      includeFacets: request.includeFacets,
+    );
     final json = await _requestMap(
       AtlasRequest(
         method: 'POST',
         path: 'api/saved-searches',
         jsonBody: {
           'name': name,
-          'request': request.toJson(),
+          'request': serverRequest.toJson(),
           'summary': summary,
         },
       ),
     );
     return AtlasSavedSearch.fromJson(json);
+  }
+
+  void _appendUniqueSearchResults(
+    List<JobSearchResult> page, {
+    required List<JobSearchResult> results,
+    required Set<String> seenJobKeys,
+    required int limit,
+  }) {
+    for (final job in page) {
+      if (results.length >= limit) {
+        break;
+      }
+      if (seenJobKeys.add(job.jobKey)) {
+        results.add(job);
+      }
+    }
   }
 
   Future<bool> deleteSavedSearch(String name) async {
