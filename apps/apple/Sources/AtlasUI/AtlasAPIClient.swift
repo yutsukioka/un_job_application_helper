@@ -483,15 +483,18 @@ public struct AtlasAPIClient: Sendable {
             let initialError = error
             var seen: Set<URL> = [baseURL]
             for candidate in candidates where seen.insert(candidate).inserted {
-                guard ["http", "https"].contains(candidate.scheme?.lowercased() ?? ""),
-                      baseURL.scheme?.lowercased() != "https" || candidate.scheme?.lowercased() == "https"
-                else { continue }
+                guard permitsRecoveryEndpoint(candidate, from: baseURL) else { continue }
                 try Task.checkCancellation()
                 do { return (candidate, try await fetch(candidate)) }
                 catch { if !retryable(error) { throw error } }
             }
             throw initialError
         }
+    }
+
+    static func permitsRecoveryEndpoint(_ candidate: URL, from baseURL: URL) -> Bool {
+        ["http", "https"].contains(candidate.scheme?.lowercased() ?? "")
+            && (baseURL.scheme?.lowercased() != "https" || candidate.scheme?.lowercased() == "https")
     }
 
     static func transportFailure(_ error: Error, url: URL?) -> Error {

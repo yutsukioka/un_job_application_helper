@@ -190,12 +190,24 @@ public final class AtlasSearchViewModel: ObservableObject {
     }
 
     public func loadIfNeeded() async {
+        await loadIfNeeded(loadSnapshot: { self.cachedSnapshot ?? AtlasLocalCache.loadSnapshot() })
+    }
+
+    func loadIfNeeded(
+        loadSnapshot: () -> AtlasLocalSnapshot?,
+        cachedDetailCount: ([String]) -> Int = AtlasLocalCache.cachedDetailCount,
+        missingDetailJobKeys: ([String]) -> [String] = AtlasLocalCache.missingDetailJobKeys,
+        warmDetails: (([String], [String], AtlasAPIClient) async -> Void)? = nil
+    ) async {
         guard !hasLoaded else { return }
         hasLoaded = true
-        if let snapshot = cachedSnapshot ?? AtlasLocalCache.loadSnapshot() {
-            applyCachedSnapshot(snapshot)
+        if let snapshot = loadSnapshot() {
+            applyCachedSnapshot(snapshot, cachedDetailCount: cachedDetailCount)
             if !AtlasLocalCache.isStale(snapshot) {
-                startDetailCacheWarmupIfNeeded(snapshot)
+                startDetailCacheWarmupIfNeeded(
+                    snapshot, cachedDetailCount: cachedDetailCount,
+                    missingDetailJobKeys: missingDetailJobKeys, warmDetails: warmDetails
+                )
                 return
             }
         }
@@ -623,12 +635,15 @@ public final class AtlasSearchViewModel: ObservableObject {
         return true
     }
 
-    private func applyCachedSnapshot(_ snapshot: AtlasLocalSnapshot) {
+    private func applyCachedSnapshot(
+        _ snapshot: AtlasLocalSnapshot,
+        cachedDetailCount: ([String]) -> Int = AtlasLocalCache.cachedDetailCount
+    ) {
         cachedSnapshot = snapshot
         cachedAllJobs = snapshot.searchResponse.results
         cacheSavedAt = snapshot.savedAt
         cachedJobCount = snapshot.jobCount
-        refreshDetailCacheCounts(snapshot)
+        refreshDetailCacheCounts(snapshot, cachedDetailCount: cachedDetailCount)
         serverState = .cached(snapshot.savedAt)
         applySidebarData(snapshot)
         applyLocalSearch()
@@ -639,10 +654,13 @@ public final class AtlasSearchViewModel: ObservableObject {
         recentRuns = snapshot.recentRuns
     }
 
-    private func refreshDetailCacheCounts(_ snapshot: AtlasLocalSnapshot) {
+    private func refreshDetailCacheCounts(
+        _ snapshot: AtlasLocalSnapshot,
+        cachedDetailCount countDetails: ([String]) -> Int = AtlasLocalCache.cachedDetailCount
+    ) {
         let jobKeys = detailJobKeys(for: snapshot)
         detailCacheTotal = jobKeys.count
-        cachedDetailCount = AtlasLocalCache.cachedDetailCount(jobKeys: jobKeys)
+        cachedDetailCount = countDetails(jobKeys)
         if jobKeys.isEmpty {
             detailCacheMessage = "No jobs in local save"
         } else if cachedDetailCount >= jobKeys.count {
@@ -662,23 +680,32 @@ public final class AtlasSearchViewModel: ObservableObject {
     }
 
     private func startDetailCacheWarmupIfNeeded(
-        _ snapshot: AtlasLocalSnapshot, force: Bool = false, client snapshotClient: AtlasAPIClient? = nil
+        _ snapshot: AtlasLocalSnapshot, force: Bool = false, client snapshotClient: AtlasAPIClient? = nil,
+        cachedDetailCount: ([String]) -> Int = AtlasLocalCache.cachedDetailCount,
+        missingDetailJobKeys: ([String]) -> [String] = AtlasLocalCache.missingDetailJobKeys,
+        warmDetails: (([String], [String], AtlasAPIClient) async -> Void)? = nil
     ) {
-        let client = snapshotClient ?? self.client
-        guard client.baseURL == snapshot.baseURL else { return }
+        let client = snapshotClient ?? AtlasAPIClient(baseURL: snapshot.baseURL)
+        guard client.baseURL == snapshot.baseURL,
+              AtlasAPIClient.permitsRecoveryEndpoint(client.baseURL, from: self.client.baseURL)
+        else { return }
         let allJobKeys = detailJobKeys(for: snapshot)
-        refreshDetailCacheCounts(snapshot)
-        let jobKeysToFetch = force ? allJobKeys : AtlasLocalCache.missingDetailJobKeys(jobKeys: allJobKeys)
+        refreshDetailCacheCounts(snapshot, cachedDetailCount: cachedDetailCount)
+        let jobKeysToFetch = force ? allJobKeys : missingDetailJobKeys(allJobKeys)
         guard !jobKeysToFetch.isEmpty else { return }
         guard force || !isCachingDetails else { return }
 
         detailWarmupTask?.cancel()
         detailWarmupTask = Task(priority: .utility) { [weak self] in
-            await self?.warmDetailCache(
-                jobKeysToFetch: jobKeysToFetch,
-                allJobKeys: allJobKeys,
-                client: client
-            )
+            if let warmDetails {
+                await warmDetails(jobKeysToFetch, allJobKeys, client)
+            } else {
+                await self?.warmDetailCache(
+                    jobKeysToFetch: jobKeysToFetch,
+                    allJobKeys: allJobKeys,
+                    client: client
+                )
+            }
         }
     }
 
