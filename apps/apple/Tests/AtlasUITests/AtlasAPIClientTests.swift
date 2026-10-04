@@ -234,6 +234,63 @@ final class AtlasAPIClientTests: XCTestCase {
         XCTAssertEqual(response.offset, 0)
     }
 
+    func testSearchRejectsPublicationTotalChanges() async {
+        for laterTotal in [200, 202] {
+            var offsets: [Int] = []
+            do {
+                _ = try await AtlasAPIClient.collectSearchPages(AtlasSearchRequest(limit: 10_000)) { page in
+                    offsets.append(page.offset)
+                    let ids = page.offset == 0 ? (0..<200).map { "job-\($0)" } : (laterTotal == 200 ? [] : ["job-199"])
+                    return self.paginationPage(page, total: page.offset == 0 ? 201 : laterTotal, ids: ids)
+                }
+                XCTFail("Expected changed publication to fail")
+            } catch {
+                XCTAssertEqual(error as? AtlasAPIError, .invalidResponse)
+            }
+            XCTAssertEqual(offsets, [0, 200])
+        }
+    }
+
+    func testSearchRejectsEmptyPageBeforeAdvertisedExhaustion() async {
+        for emptyFirstPage in [true, false] {
+            var offsets: [Int] = []
+            do {
+                _ = try await AtlasAPIClient.collectSearchPages(AtlasSearchRequest(limit: 10_000)) { page in
+                    offsets.append(page.offset)
+                    let ids = !emptyFirstPage && page.offset == 0 ? (0..<200).map { "job-\($0)" } : []
+                    return self.paginationPage(page, total: 201, ids: ids)
+                }
+                XCTFail("Expected premature empty page to fail")
+            } catch {
+                XCTAssertEqual(error as? AtlasAPIError, .invalidResponse)
+            }
+            XCTAssertEqual(offsets, emptyFirstPage ? [0] : [0, 200])
+        }
+    }
+
+    func testSearchPreservesDuplicatesAcrossStableRawPages() async throws {
+        var offsets: [Int] = []
+        let response = try await AtlasAPIClient.collectSearchPages(AtlasSearchRequest(limit: 202)) { page in
+            offsets.append(page.offset)
+            let ids = page.offset == 0 ? (0..<200).map { "job-\($0)" } : ["job-199", "job-200"]
+            return self.paginationPage(page, total: 202, ids: ids)
+        }
+        XCTAssertEqual(response.results.count, 201)
+        XCTAssertEqual(response.results.last?.jobKey, "job-200")
+        XCTAssertEqual(offsets, [0, 200])
+    }
+
+    private func paginationPage(_ page: AtlasSearchRequest, total: Int, ids: [String]) -> AtlasSearchResponse {
+        let rows = ids.map { id in
+            JobSearchResult(jobKey: id, title: "Role", organization: "UN", sourceID: "source",
+                            dutyStation: "", gradeCode: "", contractLabel: "", workModality: "",
+                            closingDate: nil, needsReview: false, locationConfidence: nil,
+                            gradeConfidence: nil, score: nil, scoreReasons: [], matchSummary: "", description: "")
+        }
+        return AtlasSearchResponse(total: total, limit: page.limit, offset: page.offset,
+                                   results: rows, facets: [:], facetLabels: [:], unclassifiedCount: 0)
+    }
+
     func testSearchRejectsOffsetBeyondServerBoundBeforeFetching() async {
         var fetched = false
         do {

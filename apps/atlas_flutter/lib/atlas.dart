@@ -3550,6 +3550,9 @@ final class AtlasAPIClient {
       requestedLimit,
       math.max(0, firstResponse.total - normalizedOffset),
     );
+    if (targetCount > 0 && firstResponse.results.isEmpty) {
+      throw const AtlasAPIException.invalidResponse();
+    }
     final results = <JobSearchResult>[];
     final seenJobKeys = <String>{};
     _appendUniqueSearchResults(
@@ -3574,10 +3577,12 @@ final class AtlasAPIClient {
           includeFacets: false,
         ),
       );
-      previousPage = page.results;
-      if (previousPage.isEmpty) {
-        break;
+      // Offset pages may cross a publication. Do not commit a detectable
+      // mixed or truncated result as a successful logical search.
+      if (page.total != firstResponse.total || page.results.isEmpty) {
+        throw const AtlasAPIException.invalidResponse();
       }
+      previousPage = page.results;
       _appendUniqueSearchResults(
         previousPage,
         results: results,

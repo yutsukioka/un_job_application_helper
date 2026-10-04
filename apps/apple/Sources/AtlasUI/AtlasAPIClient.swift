@@ -484,6 +484,7 @@ public struct AtlasAPIClient: Sendable {
         page.limit = min(requestedLimit, 200)
         let first = try await fetch(page)
         let target = min(requestedLimit, max(0, first.total - offset))
+        guard target == 0 || !first.results.isEmpty else { throw AtlasAPIError.invalidResponse }
         var rows: [JobSearchResult] = []
         var seen = Set<String>()
         func appendUnique(_ incoming: [JobSearchResult]) {
@@ -500,6 +501,9 @@ public struct AtlasAPIClient: Sendable {
             page.limit = min(200, target - rows.count)
             page.includeFacets = false
             let next = try await fetch(page)
+            // Offset pages may cross a publication. Fail before returning a
+            // detectable mixed or truncated logical search to the cache.
+            guard next.total == first.total, !next.results.isEmpty else { throw AtlasAPIError.invalidResponse }
             previousCount = next.results.count
             appendUnique(next.results)
             nextOffset += previousCount

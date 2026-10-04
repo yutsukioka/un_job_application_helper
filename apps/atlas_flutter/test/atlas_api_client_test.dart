@@ -453,6 +453,64 @@ void main() {
     });
 
     test(
+      'rejects a publication total change before returning mixed pages',
+      () async {
+        for (final laterTotal in [200, 202]) {
+          final transport = ScriptedSearchTransport([
+            (total: 201, ids: [for (var i = 0; i < 200; i++) 'job:$i']),
+            (
+              total: laterTotal,
+              ids: laterTotal == 200 ? <String>[] : ['job:199'],
+            ),
+          ]);
+          await expectLater(
+            AtlasAPIClient(
+              transport: transport,
+            ).search(const AtlasSearchRequest(limit: 10_000)),
+            throwsA(isA<AtlasAPIException>()),
+          );
+          expect(transport.requests.map((page) => page.jsonBody?['offset']), [
+            0,
+            200,
+          ]);
+        }
+      },
+    );
+
+    test('rejects an empty page before advertised exhaustion', () async {
+      for (final emptyFirstPage in [true, false]) {
+        final transport = ScriptedSearchTransport([
+          if (!emptyFirstPage)
+            (total: 201, ids: [for (var i = 0; i < 200; i++) 'job:$i']),
+          (total: 201, ids: <String>[]),
+        ]);
+        await expectLater(
+          AtlasAPIClient(
+            transport: transport,
+          ).search(const AtlasSearchRequest(limit: 10_000)),
+          throwsA(isA<AtlasAPIException>()),
+        );
+        expect(transport.requests, hasLength(emptyFirstPage ? 1 : 2));
+      }
+    });
+
+    test('preserves duplicate identities across stable raw pages', () async {
+      final transport = ScriptedSearchTransport([
+        (total: 202, ids: [for (var i = 0; i < 200; i++) 'job:$i']),
+        (total: 202, ids: ['job:199', 'job:200']),
+      ]);
+      final response = await AtlasAPIClient(
+        transport: transport,
+      ).search(const AtlasSearchRequest(limit: 202));
+      expect(response.results, hasLength(201));
+      expect(response.results.last.jobKey, 'job:200');
+      expect(transport.requests.map((page) => page.jsonBody?['offset']), [
+        0,
+        200,
+      ]);
+    });
+
+    test(
       'rejects an initial offset beyond the API ceiling without a request',
       () async {
         final transport = PaginatedAtlasTransport(total: 200_000);
@@ -663,6 +721,36 @@ final class PaginatedAtlasTransport implements AtlasTransport {
               'organizations': {'test_org': total},
             }
           : <String, Object?>{},
+      'facet_labels': <String, Object?>{},
+      'unclassified_count': 0,
+    };
+  }
+}
+
+class ScriptedSearchTransport implements AtlasTransport {
+  ScriptedSearchTransport(this.pages);
+
+  final List<({int total, List<String> ids})> pages;
+  final requests = <AtlasRequest>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    final page = pages[requests.length];
+    requests.add(request);
+    return {
+      'total': page.total,
+      'limit': request.jsonBody?['limit'],
+      'offset': request.jsonBody?['offset'],
+      'results': [
+        for (final id in page.ids)
+          {
+            'job_key': id,
+            'title': 'Role',
+            'source_id': 'source',
+            'status': 'open',
+          },
+      ],
+      'facets': <String, Object?>{},
       'facet_labels': <String, Object?>{},
       'unclassified_count': 0,
     };
