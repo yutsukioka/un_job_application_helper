@@ -42,7 +42,7 @@ def source_health(conn, source_id, *, now=None, hold=None, max_age=21600):
         status = "held"
     elif any(
         counts.get(key)
-        for key in ("blocked", "dead_letter", "interrupted", "listing_detail_conflict")
+        for key in ("blocked", "dead_letter", "interrupted", "listing_detail_conflict", "past_deadline")
     ):
         status = "degraded"
     elif retry_due is not None:
@@ -63,6 +63,7 @@ def source_health(conn, source_id, *, now=None, hold=None, max_age=21600):
             datetime.fromtimestamp(value, timezone.utc).isoformat() if value is not None else None
         )
 
+    from jobagg.deadline_review import hold_summaries
     return {
         "health_status": status,
         "fetch_status": status,
@@ -72,6 +73,7 @@ def source_health(conn, source_id, *, now=None, hold=None, max_age=21600):
         "retry_due_at": iso(retry_due),
         "active_hold": bool(hold),
         "task_counts": counts,
+        "deadline_holds": hold_summaries(conn, source_id),
         "coverage_status": "incomplete",
         "health_basis": "deterministic_worker_queue",
     }
@@ -279,6 +281,7 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
     interval = float(fetch_schedule_policy(source)["list_fetch_interval_minutes"]) * 60
     age = max(0, now - last) if last is not None else None
     stale = last is None or age >= interval
+    from jobagg.deadline_review import hold_summaries
     return {
         "schema_version": 1,
         "observed_at": now,
@@ -291,6 +294,7 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         "next_listing_seed_at": listing_state["next_list_at"],
         "listing": listing,
         "task_eligibility": kind_counts,
+        "deadline_holds": hold_summaries(conn, source.id),
         "eligible_pending_tasks": sum(counts["eligible_pending"] for counts in kind_counts.values()),
         "next_pending_attempt_at": min(pending_times) if pending_times else None,
         "pending_exclusion_reasons": dict(pending_reasons),

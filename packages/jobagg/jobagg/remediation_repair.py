@@ -424,7 +424,56 @@ def classify(conn, workspace, shared_lock, task):
     }
 
 
-def prepare(workspace, shared_lock):
+def deadline_corrections(path):
+    if path is None:
+        return {}, None
+    path = Path(path).absolute()
+    if path.resolve() != path or not path.is_file():
+        raise ValueError("Corrections require an existing direct review file")
+    value = json.loads(path.read_text())
+    rows = value.get("corrections")
+    if (value.get("schema_version") != 1 or value.get("kind") != "reviewed_deadline_corrections"
+            or not isinstance(rows, list) or not rows):
+        raise ValueError("Unsupported deadline correction review file")
+    indexed = {}
+    for row in rows:
+        if (not isinstance(row, dict) or not isinstance(row.get("task_id"), str)
+                or not row["task_id"] or row["task_id"] in indexed):
+            raise ValueError("Corrections require distinct explicit task identities")
+        indexed[row["task_id"]] = row
+    return indexed, reference(path)
+
+
+def classify_deadline_correction(conn, workspace, shared_lock, task, correction, review_ref):
+    from jobagg.deadline_review import active_hold, validate_correction
+    current = conn.execute(
+        "SELECT * FROM jobs WHERE source_id=? AND external_id=?",
+        (task["source_id"], task["external_id"]),
+    ).fetchone()
+    hold = active_hold(conn, task["task_id"])
+    binding = validate_correction(hold, task, current, correction)
+    _, _, listing, refs, listing_attempt = original_listing(conn, workspace, task)
+    circuit = conn.execute(
+        "SELECT 1 FROM source_circuit_breakers WHERE source_id=? AND state IN ('open','half_open')",
+        (task["source_id"],),
+    ).fetchone()
+    if circuit:
+        raise ValueError("Source database circuit remains held")
+    due, policy_refs = policy_state(workspace, shared_lock, task["source_id"],
+                                  [url for url in (listing.source_url, listing.apply_url) if url])
+    attempt = conn.execute("SELECT * FROM remediation_attempts WHERE attempt_id=?", (task["claim"],)).fetchone() if task["claim"] else None
+    return {
+        "category": "reviewed_deadline_correction",
+        "task_before": task, "task_before_sha256": digest_value(task),
+        "new_payload": task["payload"], "eligible_at_floor": max(task["eligible_at"], due),
+        "job_before_sha256": digest_value(dict(current)),
+        "attempt_before": dict(attempt) if attempt else None,
+        "listing_attempt": listing_attempt, "evidence": refs + policy_refs + [review_ref],
+        "deadline_hold_before": hold, "deadline_correction": binding,
+    }
+
+
+def prepare(workspace, shared_lock, *, deadline_correction_path=None):
     workspace, shared_lock = Path(workspace).absolute(), Path(shared_lock).absolute()
     if workspace.resolve() != workspace or shared_lock.resolve() != shared_lock:
         raise ValueError("Repair workspace/owner paths must be direct")
@@ -435,14 +484,34 @@ def prepare(workspace, shared_lock):
         or marker.get("implementation_sha256") != implementation_hash()
     ):
         raise ValueError("Repair requires current reviewed worker workspace binding")
+    corrections, correction_ref = deadline_corrections(deadline_correction_path)
     candidates, held = [], []
     with connection(workspace) as conn:
-        for row in conn.execute(
-            "SELECT * FROM remediation_tasks WHERE kind IN ('detail','listing') AND status IN ('pending','blocked') ORDER BY task_id"
-        ):
+        if correction_ref:
+            rows = []
+            for key in sorted(corrections):
+                row = conn.execute("SELECT * FROM remediation_tasks WHERE task_id=?", (key,)).fetchone()
+                if row:
+                    rows.append(row)
+                else:
+                    held.append({"task_id": key, "reason": "Correction task is absent"})
+        else:
+            rows = conn.execute(
+                "SELECT * FROM remediation_tasks WHERE kind IN ('detail','listing') AND status IN ('pending','blocked','past_deadline') ORDER BY task_id"
+            )
+        for row in rows:
             task = dict(row)
             try:
-                candidate = classify(conn, workspace, shared_lock, task)
+                if correction_ref:
+                    candidate = classify_deadline_correction(conn, workspace, shared_lock, task,
+                                                             corrections[task["task_id"]], correction_ref)
+                elif task["status"] == "past_deadline":
+                    from jobagg.deadline_review import active_hold
+                    held.append({"task_id": task["task_id"], "reason": "Deadline hold requires a matching positive future deadline or an explicit reviewed correction",
+                                 "deadline_hold": active_hold(conn, task["task_id"])})
+                    continue
+                else:
+                    candidate = classify(conn, workspace, shared_lock, task)
                 if candidate:
                     candidates.append(candidate)
             except (ValueError, KeyError, OSError) as exc:
@@ -455,6 +524,7 @@ def prepare(workspace, shared_lock):
         "shared_lock": str(shared_lock),
         "implementation_sha256": implementation_hash(),
         "workspace_marker": reference(marker_path),
+        "deadline_corrections": correction_ref,
         "candidates": candidates,
         "held": held,
         "network_requests": 0,
@@ -510,11 +580,13 @@ def apply(plan):
                     "jobs_changed": 0,
                     "network_requests": 0,
                 }
-        fresh = prepare(workspace, lock)
+        correction_ref = plan.get("deadline_corrections")
+        fresh = prepare(workspace, lock, deadline_correction_path=correction_ref["path"] if correction_ref else None)
         fresh_by_key = {x["task_before"]["task_id"]: x for x in fresh["candidates"]}
         if (
             plan["implementation_sha256"] != fresh["implementation_sha256"]
             or plan["workspace_marker"] != fresh["workspace_marker"]
+            or plan.get("deadline_corrections") != fresh.get("deadline_corrections")
         ):
             raise ValueError("Repair code/workspace binding changed")
         with connection(workspace, write=True) as conn:
@@ -530,6 +602,17 @@ def apply(plan):
                 )
                 if actual != item["task_before"]:
                     raise ValueError("Task changed before repair transaction")
+                if item["category"] == "reviewed_deadline_correction":
+                    from jobagg.deadline_review import active_hold, validate_correction
+                    current = conn.execute(
+                        "SELECT * FROM jobs WHERE source_id=? AND external_id=?",
+                        (actual["source_id"], actual["external_id"]),
+                    ).fetchone()
+                    hold = active_hold(conn, key)
+                    if (hold != item["deadline_hold_before"] or current is None
+                            or digest_value(dict(current)) != item["job_before_sha256"]):
+                        raise ValueError("Deadline hold or corrected job changed before repair transaction")
+                    validate_correction(hold, actual, current, item["deadline_correction"]["correction"])
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS remediation_queue_repairs(plan_sha256 TEXT,task_id TEXT,applied_at TEXT,before_json TEXT,after_json TEXT,PRIMARY KEY(plan_sha256,task_id))"
             )
@@ -540,6 +623,10 @@ def apply(plan):
                     "UPDATE remediation_tasks SET payload=?,status='pending',eligible_at=? WHERE task_id=?",
                     (item["new_payload"], due, key),
                 )
+                if item["category"] == "reviewed_deadline_correction":
+                    from jobagg.deadline_review import release_hold
+                    release_hold(conn, key, {"kind": "reviewed_deadline_correction", "plan_sha256": plan_sha,
+                                             **item["deadline_correction"]})
                 after = dict(
                     conn.execute(
                         "SELECT * FROM remediation_tasks WHERE task_id=?", (key,)
@@ -566,6 +653,8 @@ def main(argv=None):
     parser.add_argument("--shared-lock", type=Path)
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--plan-sha256")
+    parser.add_argument("--deadline-corrections", type=Path,
+                        help="Explicit identity/hold-bound review file; preview only its selected tasks")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -576,7 +665,7 @@ def main(argv=None):
             raise ValueError("Execute requires the exact reviewed plan path and SHA")
         result = apply(json.loads(args.plan.read_text()))
     else:
-        result = prepare(args.workspace, args.shared_lock)
+        result = prepare(args.workspace, args.shared_lock, deadline_correction_path=args.deadline_corrections)
     with args.output.open("x") as stream:
         stream.write(dump(result) + "\n")
     print(

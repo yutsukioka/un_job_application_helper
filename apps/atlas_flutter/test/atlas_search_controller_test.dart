@@ -636,6 +636,54 @@ void main() {
     );
   });
 
+  test('publication shift cannot replace retained all-jobs cache', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'atlas_pagination_cache_',
+    );
+    addTearDown(() => tempDir.delete(recursive: true));
+    final store = AtlasLocalCacheStore(
+      file: File('${tempDir.path}/atlas-local-cache.json'),
+      now: () => _cacheFixtureNow,
+    );
+    final retainedJob = JobSearchResult.fromJson(_jobJson);
+    await store.write(
+      AtlasLocalCacheSnapshot(
+        schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        savedAt: _cacheFixtureSavedAt,
+        searchRequest: const AtlasSearchRequest(text: 'Programme'),
+        searchResponse: AtlasSearchResponse(
+          total: 1,
+          limit: 50,
+          offset: 0,
+          facets: const {},
+          facetLabels: const {},
+          unclassifiedCount: 0,
+          results: [retainedJob],
+        ),
+        cachedAllJobs: [retainedJob],
+      ),
+    );
+    final transport = _PublicationShiftTransport();
+    final controller = AtlasAppController(
+      localCacheStore: store,
+      now: () => _cacheFixtureNow,
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+    );
+    addTearDown(controller.dispose);
+    await controller.loadPersistedCache();
+    await controller.refreshLocalSave();
+
+    expect(transport.cacheOffsets, [0, 200]);
+    expect(controller.results.single.jobKey, retainedJob.jobKey);
+    final persisted = (await store.read())!;
+    expect(persisted.cachedAllJobs.map((job) => job.jobKey), [
+      retainedJob.jobKey,
+    ]);
+    expect(controller.cachedJobCount, 1);
+  });
+
   test(
     'controller loads persisted cache before offline refresh fails',
     () async {
@@ -4246,3 +4294,34 @@ const _jobJson = {
     },
   },
 };
+
+final class _PublicationShiftTransport implements AtlasTransport {
+  final _ordinary = _RecordingTransport();
+  final cacheOffsets = <int>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    if (request.path != 'api/search' || request.jsonBody?['text'] != null) {
+      return _ordinary.send(request);
+    }
+    final offset = request.jsonBody!['offset'] as int;
+    cacheOffsets.add(offset);
+    return {
+      'total': offset == 0 ? 201 : 202,
+      'limit': request.jsonBody!['limit'],
+      'offset': offset,
+      'results': [
+        for (final index in offset == 0 ? List.generate(200, (i) => i) : [199])
+          {
+            'job_key': 'test:$index',
+            'title': 'Role',
+            'source_id': 'test',
+            'status': 'open',
+          },
+      ],
+      'facets': <String, Object?>{},
+      'facet_labels': <String, Object?>{},
+      'unclassified_count': 0,
+    };
+  }
+}

@@ -551,20 +551,39 @@ public struct AtlasAPIClient: Sendable {
         _ request: AtlasSearchRequest,
         fetch: (AtlasSearchRequest) async throws -> AtlasSearchResponse
     ) async throws -> AtlasSearchResponse {
+        let requestedLimit = max(0, request.limit)
+        let offset = max(0, request.offset)
+        guard offset <= 100_000 else { throw AtlasAPIError.invalidResponse }
         var page = request
-        page.limit = min(request.limit, 200)
+        page.offset = offset
+        page.limit = min(requestedLimit, 200)
         let first = try await fetch(page)
-        var rows = first.results
-        while request.limit > rows.count && !rows.isEmpty && request.offset + rows.count < first.total {
-            page.offset = request.offset + rows.count
-            guard page.offset <= 100_000 else { throw AtlasAPIError.invalidResponse }
-            page.limit = min(200, request.limit - rows.count)
+        let target = min(requestedLimit, max(0, first.total - offset))
+        guard target == 0 || !first.results.isEmpty else { throw AtlasAPIError.invalidResponse }
+        var rows: [JobSearchResult] = []
+        var seen = Set<String>()
+        func appendUnique(_ incoming: [JobSearchResult]) {
+            for job in incoming where rows.count < target {
+                if seen.insert(job.jobKey).inserted { rows.append(job) }
+            }
+        }
+        appendUnique(first.results)
+        var nextOffset = offset + first.results.count
+        var previousCount = first.results.count
+        while rows.count < target && previousCount > 0 && nextOffset < first.total {
+            guard nextOffset <= 100_000 else { throw AtlasAPIError.invalidResponse }
+            page.offset = nextOffset
+            page.limit = min(200, target - rows.count)
             page.includeFacets = false
             let next = try await fetch(page)
-            if next.results.isEmpty { break }
-            rows.append(contentsOf: next.results)
+            // Offset pages may cross a publication. Fail before returning a
+            // detectable mixed or truncated logical search to the cache.
+            guard next.total == first.total, !next.results.isEmpty else { throw AtlasAPIError.invalidResponse }
+            previousCount = next.results.count
+            appendUnique(next.results)
+            nextOffset += previousCount
         }
-        return AtlasSearchResponse(total: first.total, limit: request.limit, offset: request.offset,
+        return AtlasSearchResponse(total: first.total, limit: requestedLimit, offset: offset,
                                    results: rows, facets: first.facets, facetLabels: first.facetLabels,
                                    unclassifiedCount: first.unclassifiedCount)
     }
@@ -579,7 +598,8 @@ public struct AtlasAPIClient: Sendable {
 
     public func saveSearch(name: String, request: AtlasSearchRequest, summary: String) async throws -> AtlasSavedSearch {
         var pageRequest = request
-        pageRequest.limit = min(request.limit, 200)
+        pageRequest.limit = min(max(0, request.limit), 200)
+        pageRequest.offset = min(max(0, request.offset), 100_000)
         return try await post(
             "api/saved-searches",
             body: AtlasSavedSearchPayload(name: name, request: pageRequest, summary: summary)

@@ -898,6 +898,9 @@ class JobDatabase:
             if current is not None:
                 self._merge_existing_detail_fields(job, current)
 
+            from jobagg.deadline_review import apply_review
+            apply_review(job, current)
+
             ensure_job_hash(job)
             if job.posting_fingerprint is None:
                 job.posting_fingerprint = posting_fingerprint(job)
@@ -984,6 +987,14 @@ class JobDatabase:
                     0,
                 ),
             )
+
+            from jobagg.deadline_review import marker_for
+            review = marker_for(job.raw, job.source_id, job.external_id)
+            if review:
+                conn.execute(
+                    "UPDATE jobs SET deadline_state=?,trusted_current=0,application_ready=0 WHERE job_key=?",
+                    ("expired" if review.get("active") else "future", job_key),
+                )
 
             if event_type != "unchanged":
                 self.add_change_event(
