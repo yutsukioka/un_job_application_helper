@@ -30,6 +30,26 @@ class BrowserContractError(RuntimeError):
     pass
 
 
+def configure_browser_runtime():
+    """Find an installed bundle when release code and its venv are separate.
+
+    Explicit Playwright configuration and a source-local bundle keep priority.
+    Only the repository's known venv layout supplies a companion runtime; there
+    is no filesystem search, installation, or fallback after a launch failure.
+    Playwright still selects and validates its required browser revision.
+    """
+    if "PLAYWRIGHT_BROWSERS_PATH" in os.environ:
+        return
+    candidates = [Path(__file__).resolve().parents[3] / "private/jobagg-runtime/browsers"]
+    prefix = Path(sys.prefix)
+    if prefix.parts[-3:] == ("packages", "jobagg", ".venv"):
+        candidates.append(prefix.parents[2] / "private/jobagg-runtime/browsers")
+    for bundled in candidates:
+        if bundled.is_dir():
+            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
+            return
+
+
 COMPOSED_HTML = """() => {
   function copy(node) {
     if (node.nodeType === Node.ELEMENT_NODE && node.localName === 'slot') {
@@ -220,9 +240,7 @@ class GuardedBrowser:
         if self.client.safe_policy is None:
             raise BrowserContractError("Missing browser network policy")
         self.client.safe_policy.validate_url(url)
-        bundled = Path(__file__).resolve().parents[3] / "private/jobagg-runtime/browsers"
-        if bundled.is_dir():
-            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
+        configure_browser_runtime()
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:

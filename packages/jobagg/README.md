@@ -516,6 +516,8 @@ For implementation and review, read the [JobAgg change and review policy](docs/c
 and its evidence/enforcement map. The deployed deterministic cron workflow is
 described in [DETERMINISTIC_FETCH.md](DETERMINISTIC_FETCH.md); the CLI examples
 above describe separate entry points and do not authorize production changes.
+For release code using a separate Python environment, see
+[browser runtime discovery](docs/browser-runtime.md).
 
 ```bash
 cd packages/jobagg
