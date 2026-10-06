@@ -423,14 +423,17 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
 
     func testDescriptionsAndFailureAreNonSensitive() async {
         let harness = LifecycleHarness(status: .unlocked)
+        let lockCompleted = expectation(description: "Grace timer failure locks the runtime")
+        await harness.runtime.expectNextLock(lockCompleted)
         await harness.time.failNextSleep()
         let coordinator = harness.coordinator(
             policy: .afterGracePeriod(.seconds(5), cancelOnActive: true)
         )
 
         await coordinator.handle(.didEnterBackground)
-        let didLock = await harness.runtime.waitUntilLockCount(1)
-        XCTAssertTrue(didLock)
+        await fulfillment(of: [lockCompleted], timeout: 5)
+        let lockCount = await harness.runtime.lockCount()
+        XCTAssertEqual(lockCount, 1)
 
         let status = await coordinator.status()
         XCTAssertEqual(
@@ -687,6 +690,7 @@ private actor LifecycleRuntimeSpy: AtlasVaultLifecycleRuntimeControlling {
     private var recordedEvents: [String] = []
     private let statusGate: LifecycleGate?
     private var cancellationResults: [Bool]
+    private var nextLockExpectation: XCTestExpectation?
 
     init(
         status: AtlasVaultRuntimeStatus,
@@ -709,6 +713,12 @@ private actor LifecycleRuntimeSpy: AtlasVaultLifecycleRuntimeControlling {
     func lock() async {
         recordedEvents.append("lock")
         statusValue = .locked
+        nextLockExpectation?.fulfill()
+        nextLockExpectation = nil
+    }
+
+    func expectNextLock(_ expectation: XCTestExpectation) {
+        nextLockExpectation = expectation
     }
 
     func cancelActivationIfInProgress() async -> Bool {
