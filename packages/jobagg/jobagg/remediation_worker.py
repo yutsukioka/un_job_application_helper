@@ -59,6 +59,13 @@ from jobagg.vacancy_outcomes import (
 )
 
 VERSION = "deterministic-fetch-v1"
+# This incident repair must not reopen unrelated failures merely by resealing
+# the package. Only retry comparisons recognize this exact deployed predecessor;
+# startup integrity and every new receipt still use the full current binding.
+# Registry, robots, owner and semantic-input changes are never aliased.
+RETRY_EQUIVALENT_IMPLEMENTATIONS = (
+    "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
+)
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -427,7 +434,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     (source_request_host(source), source.id),
                 )
 
-    def retry_input_fingerprint(self, payload):
+    def retry_input_fingerprint(self, payload, *, implementation_sha256=None):
         semantic = deepcopy(payload)
         # A fresh frame path/timestamp is not a parser or URL repair.
         semantic.pop("frame_path", None)
@@ -438,7 +445,16 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 listing.pop(key, None)
             if isinstance(listing.get("raw"), dict):
                 listing["raw"].pop("_jobagg_listing_verification", None)
-        return hashlib.sha256(dump({"payload": semantic, "binding": self.binding}).encode()).hexdigest()
+        binding = self.binding if implementation_sha256 is None else {
+            **self.binding, "implementation_sha256": implementation_sha256,
+        }
+        return hashlib.sha256(dump({"payload": semantic, "binding": binding}).encode()).hexdigest()
+
+    def retry_input_matches(self, saved, payload):
+        if saved == self.retry_input_fingerprint(payload):
+            return True
+        return any(saved == self.retry_input_fingerprint(payload, implementation_sha256=prior)
+                   for prior in RETRY_EQUIVALENT_IMPLEMENTATIONS)
 
     def enqueue(self, conn, source, kind, identity, payload, *, due=None, refresh=False):
         now = time.time()
@@ -490,7 +506,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if old["status"] == "blocked" and not receipt.get("retry_input_sha256"):
                 return key
             failed_input = receipt.get("retry_input_sha256") or self.retry_input_fingerprint(json.loads(old["payload"]))
-            if failed_input == self.retry_input_fingerprint(payload):
+            if self.retry_input_matches(failed_input, payload):
                 return key
             refresh = True
         if old and kind == "document" and old["status"] == "not_required":
@@ -1485,13 +1501,13 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
 
     def incomplete_response_count(self, task):
         receipt = json.loads(task.get("receipt") or "{}")
-        if receipt.get("retry_input_sha256") != self.retry_input_fingerprint(json.loads(task["payload"])):
+        if not self.retry_input_matches(receipt.get("retry_input_sha256"), json.loads(task["payload"])):
             return 0
         return int(receipt.get("incomplete_response_count", 0))
 
     def inventory_change_count(self, task):
         receipt = json.loads(task.get("receipt") or "{}")
-        if receipt.get("retry_input_sha256") != self.retry_input_fingerprint(json.loads(task["payload"])):
+        if not self.retry_input_matches(receipt.get("retry_input_sha256"), json.loads(task["payload"])):
             return 0
         return int(receipt.get("inventory_change_count", 0))
 
