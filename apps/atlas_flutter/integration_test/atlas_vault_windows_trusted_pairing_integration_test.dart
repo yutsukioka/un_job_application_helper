@@ -279,7 +279,11 @@ Future<void> _exchangePairingRing(
             vector['expected_payloads'],
           )['unsupported_private_sentinel']!
           as String;
-  await _verifyPairingArtifactSet(runtimeArtifacts, vector);
+  await verifyAtlasVaultPairingArtifactSet(
+    runtimeArtifacts,
+    vector,
+    runtimeEnrollment: true,
+  );
   for (final kind in AtlasVaultPairingArtifactKind.values) {
     final runtimeBytes = runtimeArtifacts[kind];
     expect(runtimeBytes, isNotNull);
@@ -342,151 +346,9 @@ Future<void> _exchangePairingRing(
     );
     tampered.fillRange(0, tampered.length, 0);
   }
-  await _verifyPairingArtifactSet(consumedArtifacts, vector);
-}
-
-Future<void> _verifyPairingArtifactSet(
-  Map<AtlasVaultPairingArtifactKind, Uint8List> artifacts,
-  Map<String, Object?> vector,
-) async {
-  expect(artifacts.keys, unorderedEquals(AtlasVaultPairingArtifactKind.values));
-  final parsed = <AtlasVaultPairingArtifactKind, AtlasVaultPairingArtifact>{};
-  for (final kind in AtlasVaultPairingArtifactKind.values) {
-    final bytes = Uint8List.fromList(artifacts[kind]!);
-    final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(bytes);
-    expect(artifact.kind, kind);
-    expect(artifact.canonicalBytes(), bytes);
-    parsed[kind] = artifact;
-  }
-
-  final signedOffer = AtlasVaultSignedPairingOffer.fromJson(
-    atlasVaultObject(
-      parsed[AtlasVaultPairingArtifactKind.offer]!.payload['signed_offer'],
-    ),
+  await verifyAtlasVaultPairingArtifactSet(
+    consumedArtifacts,
+    vector,
+    runtimeEnrollment: false,
   );
-  final acceptancePayload =
-      parsed[AtlasVaultPairingArtifactKind.acceptance]!.payload;
-  final signedAcceptance = AtlasVaultSignedPairingAcceptance.fromJson(
-    atlasVaultObject(acceptancePayload['signed_acceptance']),
-  );
-  final signedRequest = AtlasVaultSignedPairingKeyRequest.fromJson(
-    atlasVaultObject(acceptancePayload['signed_key_request']),
-  );
-  final deliveryPayload =
-      parsed[AtlasVaultPairingArtifactKind.delivery]!.payload;
-  final signedDelivery = AtlasVaultSignedVaultKeyDelivery.fromJson(
-    atlasVaultObject(deliveryPayload['signed_delivery']),
-  );
-  final bootstrap = AtlasVaultPairingBootstrap.fromJson(
-    atlasVaultObject(deliveryPayload['bootstrap']),
-  );
-  final signedAcknowledgement = AtlasVaultSignedPairingAcknowledgement.fromJson(
-    atlasVaultObject(
-      parsed[AtlasVaultPairingArtifactKind.acknowledgement]!
-          .payload['signed_acknowledgement'],
-    ),
-  );
-
-  final transcript = await atlasVaultPairingTranscriptSha256(
-    signedOffer,
-    signedAcceptance,
-  );
-  final inviteeProof = Uint8List.fromList(
-    base64Decode(acceptancePayload['invitee_proof']! as String),
-  );
-  final inviterProof = Uint8List.fromList(
-    base64Decode(deliveryPayload['inviter_proof']! as String),
-  );
-  AtlasVaultDeviceIdentity? identity;
-  AtlasVaultPairingSession? session;
-  try {
-    identity = await _identityForDevice(
-      vector,
-      signedOffer.offer.inviter.descriptor.deviceId,
-    );
-    session = await verifyAtlasVaultPairingTranscript(
-      localIdentity: identity,
-      signedOffer: signedOffer,
-      signedAcceptance: signedAcceptance,
-      proofs: AtlasVaultPairingProofs(
-        inviter: inviterProof,
-        invitee: inviteeProof,
-      ),
-      currentTime: signedAcceptance.acceptance.acceptedAt,
-      replayGuard: _RuntimeRingReplayGuard(),
-    );
-    expect(_hex(transcript), signedRequest.request.transcriptSha256);
-    await verifyAtlasVaultPairingKeyRequest(
-      signedRequest,
-      transcriptSha256: transcript,
-      inviterDeviceId: signedOffer.offer.inviter.descriptor.deviceId,
-      inviteeDeviceId: signedAcceptance.acceptance.invitee.descriptor.deviceId,
-      currentTime: signedRequest.request.issuedAt,
-    );
-    final delivery = await verifyAtlasVaultSignedVaultKeyDelivery(
-      signedDelivery,
-    );
-    expect(delivery.transcriptSha256, _hex(transcript));
-    expect(
-      delivery.requestSha256,
-      await atlasVaultSha256Hex(signedRequest.canonicalBytes()),
-    );
-    expect(
-      delivery.bootstrapSha256,
-      await atlasVaultSha256Hex(bootstrap.canonicalBytes()),
-    );
-    expect(delivery.inviterDeviceId, signedRequest.request.inviterDeviceId);
-    expect(delivery.inviteeDeviceId, signedRequest.request.inviteeDeviceId);
-    expect(delivery.expiresAt, signedRequest.request.expiresAt);
-    await verifyAtlasVaultPairingAcknowledgement(
-      signedAcknowledgement,
-      delivery: signedDelivery,
-      inviterDeviceId: delivery.inviterDeviceId,
-      inviteeDeviceId: delivery.inviteeDeviceId,
-    );
-  } finally {
-    session?.destroy();
-    identity?.destroy();
-    transcript.fillRange(0, transcript.length, 0);
-    inviteeProof.fillRange(0, inviteeProof.length, 0);
-    inviterProof.fillRange(0, inviterProof.length, 0);
-  }
-}
-
-Future<AtlasVaultDeviceIdentity> _identityForDevice(
-  Map<String, Object?> vector,
-  String deviceId,
-) async {
-  for (final name in const <String>['inviter', 'invitee']) {
-    final bytes = await atlasVaultPairingIdentitySecret(vector, name);
-    AtlasVaultDeviceIdentitySecret? secret;
-    try {
-      secret = AtlasVaultDeviceIdentitySecret.fromJson(
-        atlasVaultObject(jsonDecode(utf8.decode(bytes))),
-      );
-      if (secret.deviceId == deviceId) return await secret.loadIdentity();
-    } finally {
-      secret?.destroy();
-      bytes.fillRange(0, bytes.length, 0);
-    }
-  }
-  throw StateError('runtime pairing identity is not in the fake vector');
-}
-
-String _hex(Uint8List bytes) =>
-    bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
-
-final class _RuntimeRingReplayGuard implements AtlasVaultPairingReplayGuard {
-  var _consumed = false;
-
-  @override
-  Future<AtlasVaultPairingReplayOutcome> consume({
-    required String offerId,
-    required Uint8List transcriptSha256,
-    required String expiresAt,
-  }) async {
-    if (_consumed) return AtlasVaultPairingReplayOutcome.alreadyConsumed;
-    _consumed = true;
-    return AtlasVaultPairingReplayOutcome.accepted;
-  }
 }
