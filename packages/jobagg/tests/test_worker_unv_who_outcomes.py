@@ -155,7 +155,7 @@ def test_unv_still_listed_null_allows_one_delayed_recheck_then_conflict(tmp_path
     assert sum(request == url for request, _ in calls) == 2
 
 
-def test_who_unsupported_census_coalesces_one_followup_and_preserves_review_state(tmp_path, monkeypatch):
+def test_who_incomplete_census_coalesces_one_followup_and_preserves_review_state(tmp_path, monkeypatch):
     worker, replies, calls, api, _, _, kwargs = setup_source(
         tmp_path, monkeypatch, "who_taleo", only_unavailable=True, who_ids=[WHO_ID, "2604310"])
     report = worker.tick(execute=True)
@@ -171,7 +171,7 @@ def test_who_unsupported_census_coalesces_one_followup_and_preserves_review_stat
     restarted = Worker(**kwargs)
     report = restarted.tick(execute=True)
     assert report["sources"][0]["enumeration"]["complete"] is False
-    assert report["sources"][0]["enumeration"]["method"] == "unsupported"
+    assert report["sources"][0]["enumeration"]["method"] == "who_rest_en_v1"
     assert {task["status"] for task in tasks(restarted)} == {"unavailable_pending_inventory"}
     assert {task["attempts"] for task in tasks(restarted)} == {1}
     with restarted.db.connect() as conn:
