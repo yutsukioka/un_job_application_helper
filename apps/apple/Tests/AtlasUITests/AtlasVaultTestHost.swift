@@ -1376,12 +1376,18 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
 
 actor AtlasVaultTestSuspensionGate {
     private var entered = false
+    private var entryWaiters: [CheckedContinuation<Bool, Never>] = []
     private var isOpen = false
     private var isCancelled = false
     private var continuation: CheckedContinuation<Void, Error>?
 
     func wait() async throws {
         entered = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: true)
+        }
         guard !isOpen else {
             return
         }
@@ -1411,13 +1417,13 @@ actor AtlasVaultTestSuspensionGate {
     }
 
     func waitUntilEntered() async -> Bool {
-        for _ in 0..<2_000 {
-            if entered {
-                return true
-            }
-            await Task.yield()
+        if entered {
+            return true
         }
-        return entered
+        // Scheduler yields do not guarantee that the operation reached this gate.
+        return await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
     }
 
     func open() {
