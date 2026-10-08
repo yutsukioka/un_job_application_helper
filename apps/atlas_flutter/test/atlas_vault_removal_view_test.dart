@@ -72,6 +72,7 @@ void main() {
         await registry.initialize();
         final prompt = Completer<Object?>();
         var prompts = 0;
+        var signCalls = 0;
         final controller = AtlasVaultRemovalController(
           registry: registry,
           initiator: entries[0]['device_id'] as String,
@@ -80,6 +81,7 @@ void main() {
             return prompt.future;
           },
           sign: (_) async {
+            signCalls++;
             fail('disposed removal must not sign');
           },
         );
@@ -121,7 +123,11 @@ void main() {
         );
         await tester.tap(find.byType(Checkbox));
         await tester.pump();
-        await tester.tap(find.byType(FilledButton));
+        // Retain the UI callback's future so disposal can await completion.
+        final remove =
+            tester.widget<FilledButton>(find.byType(FilledButton)).onPressed!
+                as Future<void> Function();
+        final removal = remove();
         await tester.pump();
         for (var i = 0; i < 100 && prompts == 0; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -130,8 +136,9 @@ void main() {
         expect(prompts, 1);
         await tester.pumpWidget(const SizedBox());
         prompt.complete(true);
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await removal;
         await tester.pumpAndSettle();
+        expect(signCalls, 0);
         expect((await registry.snapshot())['sequence'], 0);
         expect(tester.takeException(), isNull);
       } finally {

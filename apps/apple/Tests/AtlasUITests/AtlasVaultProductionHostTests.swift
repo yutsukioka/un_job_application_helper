@@ -2805,6 +2805,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             await captureSearch(graph.host, firstRequest)
         }
         await publishGate.waitUntilEntered()
+        await graph.publicJobs.waitForTotalCalls(1)
         let second = Task {
             await captureSearch(graph.host, secondRequest)
         }
