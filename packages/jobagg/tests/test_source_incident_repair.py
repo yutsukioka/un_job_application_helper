@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -17,9 +18,10 @@ from jobagg import source_incident_repair as repair
 from jobagg.captured_transient_repair import IOM_LISTING_URL, IFAD_LISTING_URL, UNV_SUPPORT_URL
 from jobagg.models import JobRecord
 from jobagg.pipelines.inventory_checks import verify_listing
+from jobagg.pipelines.http_checkpoint import HostIneligible
 from jobagg.pipelines.sync_source import load_sources
 from jobagg.pipelines.worker_policy import SharedPolicy
-from jobagg.remediation_worker import dump, implementation_hash, sha, task_key
+from jobagg.remediation_worker import Worker, dump, implementation_hash, sha, task_key
 
 
 WHO_BODY = b"""<form id="ftlform" action="unavailablerequisition.ftl"><input name="ftlpageid" value="unavaibleRequisitionPage"><div id="requisitionUnavailableInterface"></div></form><script>api.fillInterface('requisitionUnavailableInterface', ['The job description you are trying to view is no longer available.']);</script>"""
@@ -515,6 +517,95 @@ def test_explicit_mixed_actions_preserve_history_schedule_and_idempotency(case):
         assert c.execute("SELECT count(*) FROM source_incident_repairs").fetchone()[0] == 6
     assert repair.apply(plan)["status"] == "already_applied"
     assert case.protected() == protected
+
+
+@pytest.mark.parametrize("source", ["iom_oracle_hcm", "ifad_peoplesoft"])
+def test_listing_repair_preserves_future_source_eligibility(case, source, monkeypatch):
+    case.incident(source)
+    due = time.time() + 7200
+    with case.db() as conn:
+        conn.execute("UPDATE remediation_sources SET next_list_at=? WHERE source_id=?", (due, source))
+    protected = case.protected()
+    plan = case.plan()
+    assert plan["items"][0]["task_after"]["eligible_at"] == due
+    repair.apply(plan)
+    assert case.protected() == protected
+    # Exercise actual worker selection/claim gates against the repaired fixture DB.
+    worker = object.__new__(Worker)
+    worker._database_local = SimpleNamespace(database=SimpleNamespace(connect=case.db, connection_scope=case.db))
+    worker.by_id = {s.id: s for s in load_sources(case.registry)}
+    worker.shared_policy = case.policy
+    worker._eligible_peaks = (0, 0)
+    monkeypatch.setattr(time, "time", lambda: due - 1)
+    assert worker.choose() is None
+    with pytest.raises(HostIneligible, match="eligibility"):
+        worker.claim(plan["items"][0]["task_after"])
+    monkeypatch.setattr(time, "time", lambda: due)
+    assert worker.choose()["task_id"] == plan["items"][0]["task_before"]["task_id"]
+    assert case.protected() == protected
+
+
+@pytest.mark.parametrize("offset", [-60, 0])
+def test_elapsed_listing_schedule_does_not_delay_repair(case, monkeypatch, offset):
+    case.incident("iom_oracle_hcm")
+    now = time.time()
+    with case.db() as conn:
+        conn.execute("UPDATE remediation_sources SET next_list_at=?", (now + offset,))
+    monkeypatch.setattr(time, "time", lambda: now)
+    plan = case.plan()
+    assert plan["items"][0]["task_after"]["eligible_at"] == now
+
+
+@pytest.mark.parametrize("later_gate", ["task", "host"])
+def test_listing_schedule_does_not_lower_later_task_or_host_gate(case, later_gate):
+    case.incident("iom_oracle_hcm")
+    now = time.time()
+    with case.db() as conn:
+        conn.execute("UPDATE remediation_sources SET next_list_at=?", (now + 300,))
+        if later_gate == "task":
+            conn.execute("UPDATE remediation_tasks SET eligible_at=?", (now + 900,))
+    if later_gate == "host":
+        host = "fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com"
+        path = case.policy.root / "hosts" / ("host-" + hashlib.sha256(host.encode()).hexdigest()[:24] + ".json")
+        write(path, {"stopped": False, "eligible_at": now + 900})
+    plan = case.plan()
+    assert plan["items"][0]["task_after"]["eligible_at"] == now + 900
+
+
+@pytest.mark.parametrize("invalid", [None, -1, float("inf"), "missing_row"])
+def test_listing_repair_requires_valid_current_source_schedule(case, invalid):
+    case.incident("ifad_peoplesoft")
+    with case.db() as conn:
+        if invalid == "missing_row":
+            conn.execute("DELETE FROM remediation_sources")
+        else:
+            conn.execute("UPDATE remediation_sources SET next_list_at=?", (invalid,))
+    before = case.protected()
+    with pytest.raises(ValueError):
+        case.plan()
+    assert case.protected() == before
+
+
+def test_source_schedule_change_after_preview_refuses_apply(case):
+    case.incident("ifad_peoplesoft")
+    plan = case.plan()
+    with case.db() as conn:
+        conn.execute("UPDATE remediation_sources SET next_list_at=next_list_at+3600")
+    before = case.protected()
+    with pytest.raises(ValueError, match="state changed since preview"):
+        repair.apply(plan)
+    assert case.protected() == before
+    with case.db() as conn:
+        assert conn.execute("SELECT status FROM remediation_tasks").fetchone()[0] == "blocked"
+
+
+def test_listing_schedule_floor_does_not_apply_to_unv_detail(case):
+    case.incident("unv_uvp", "103", action="retry_captured_transient")
+    case.census(["103"])
+    with case.db() as conn:
+        conn.execute("UPDATE remediation_sources SET next_list_at=?", (time.time() + 10000,))
+    plan = case.plan()
+    assert plan["items"][0]["task_after"]["eligible_at"] == plan["as_of"]
 
 
 def test_preview_old_seal_is_read_only_and_never_executable(case):

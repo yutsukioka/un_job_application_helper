@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from jobagg.captured_transient_repair import validate_captured_transient
 from jobagg.deadline_review import active_hold, blocks_detail
 from jobagg.pipelines.host_recovery import host_eligibility
+from jobagg.pipelines.http_checkpoint import finite_epoch
 from jobagg.pipelines.inventory_checks import verify_listing
 from jobagg.pipelines.live_publication import GATE_NAME
 from jobagg.pipelines.sync_source import load_sources
@@ -618,6 +619,9 @@ def collect(conn, context, selections, as_of, check):
             require(eligibility["category"] != "review", "Host requires review")
             due = max(due, eligibility["eligible_at"])
         if action == "retry_captured_transient":
+            if task["kind"] == "listing":
+                require(len(source_state) == 1, "Listing repair requires its current source schedule")
+                due = max(due, finite_epoch(source_state[0]["next_list_at"]))
             after["eligible_at"] = max(task["eligible_at"], due, as_of)
         else:
             updated = {

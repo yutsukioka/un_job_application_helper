@@ -31,6 +31,9 @@ def incident(source):
     return identity, body, {
         "state": "response_captured", "status_code": 200, "method": "GET",
         "phase": {"kind": "detail", "job_id": identity}, "url": url, "response_url": url,
+        "external_id": identity,
+        "request_url_sha256": hashlib.sha256(url.encode()).hexdigest(),
+        "response_url_sha256": hashlib.sha256(url.encode()).hexdigest(),
         "source_binding": {"source_id": source, "ats_family": "unv" if unv else "taleo"},
         "body_captured": True, "body_bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest(),
         "response_headers": {"Content-Type": ("application/json" if unv else "text/html") + "; charset=utf-8"},
@@ -48,6 +51,18 @@ def test_exact_captured_outcome_is_typed_without_closure_or_detail_credit(source
     assert result["category"] == category and result["detector"] == detector
     assert result["closure_inferred"] is result["detail_complete"] is False
     assert result["external_id"] == identity and result["body_sha256"] == meta["body_sha256"]
+
+
+@pytest.mark.parametrize("source", ["unv_uvp", "who_taleo"])
+@pytest.mark.parametrize("field", ["external_id", "request_url_sha256", "response_url_sha256"])
+@pytest.mark.parametrize("value", [None, "contradictory"])
+def test_recorded_identity_and_url_hashes_must_agree(source, field, value):
+    identity, body, meta = incident(source)
+    if value is None:
+        meta.pop(field)
+    else:
+        meta[field] = value
+    assert classify_unavailable(source, identity, meta, body) is None
 
 
 @pytest.mark.parametrize("source", ["unv_uvp", "who_taleo"])
@@ -88,6 +103,10 @@ def test_new_contracts_reject_unbound_or_ambiguous_capture(source, damage):
     elif damage == "missing_start": meta.pop("started_at")
     elif damage == "naive_time": meta["started_at"] = "2026-10-07T00:00:01"
     elif damage == "reversed_time": meta["started_at"] = "2026-10-08T00:00:01+00:00"
+    # Route cases carry internally consistent hashes so they still exercise the
+    # source/identity route guards rather than the new contradiction guard.
+    for field, url_field in (("request_url_sha256", "url"), ("response_url_sha256", "response_url")):
+        meta[field] = hashlib.sha256(meta[url_field].encode()).hexdigest()
     assert classify_unavailable(source, identity, meta, body, redirects=redirects) is None
 
 
@@ -124,6 +143,8 @@ def test_who_active_template_excludes_inactive_markers_and_mixed_identity(damage
     elif damage == "login": body += b'<input type="password" name="password">'
     elif damage == "outside_form": body = body.replace(b'<input type="hidden"', b'</form><input type="hidden"')
     meta.update(body_bytes=len(body), body_sha256=hashlib.sha256(body).hexdigest())
+    meta["request_url_sha256"] = hashlib.sha256(meta["url"].encode()).hexdigest()
+    meta["response_url_sha256"] = hashlib.sha256(meta["response_url"].encode()).hexdigest()
     assert classify_unavailable("who_taleo", identity, meta, body) is None
 
 

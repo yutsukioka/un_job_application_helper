@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from jobagg.http import HttpResponse
+from jobagg import remediation_worker as runtime
 from jobagg.remediation_worker import Worker
 from test_remediation_worker import FixtureClient
 from test_unv_who_captured_outcomes import FIXTURES, UNV_ID, UNV_URL, WHO_ID, WHO_URL, incident
@@ -191,6 +192,45 @@ def test_unv_wrong_native_identity_keeps_integrity_pressure(tmp_path, monkeypatc
     assert report["concurrency"]["vacancies_unavailable"] == 0
     with worker.db.connect() as conn:
         assert conn.execute("SELECT count(*) FROM remediation_observations").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("source", ["unv_uvp", "who_taleo"])
+@pytest.mark.parametrize("field", ["external_id", "request_url_sha256", "response_url_sha256"])
+def test_contradictory_capture_cannot_enter_unavailable_lifecycle(source, field, tmp_path, monkeypatch):
+    worker, replies, _, _, url, unavailable, _ = setup_source(tmp_path, monkeypatch, source)
+    worker.tick(execute=True)
+    accepted = tasks(worker)[0]
+    key = source + ":" + accepted["external_id"]
+    before = archived_state(worker, key)
+    with worker.db.connect() as conn:
+        conn.execute("UPDATE remediation_tasks SET status='pending',eligible_at=0 WHERE kind='detail'")
+    replies[url] = unavailable
+    classify = runtime.captured_unavailable
+
+    def corrupt_capture(source_id, identity, paths):
+        paths = list(paths)
+        for path in paths:
+            meta = json.loads(path.read_text())
+            if meta.get("phase", {}).get("kind") == "detail":
+                meta[field] = "contradictory"
+                path.write_text(json.dumps(meta))
+        return classify(source_id, identity, paths)
+
+    monkeypatch.setattr(runtime, "captured_unavailable", corrupt_capture)
+    if field == "request_url_sha256":
+        # The existing measurement guard also refuses an acceptance report when
+        # its independently recorded request hash contradicts capture metadata.
+        with pytest.raises(ValueError, match="Concurrency measurement/capture identity mismatch"):
+            worker.tick(execute=True)
+        assert not (worker.workspace / "ticks" / f"{worker.tick_id}.json").exists()
+    else:
+        report = worker.tick(execute=True)
+        assert report["concurrency"]["vacancies_unavailable"] == 0
+    task = tasks(worker)[0]
+    assert task["status"] in {"blocked", "pending"}
+    assert "vacancy_unavailable" not in json.loads(task["receipt"])
+    assert task["attempts"] == accepted["attempts"] + 1
+    assert archived_state(worker, key) == before
 
 
 def test_who_ambiguous_portal_keeps_three_response_limit(tmp_path, monkeypatch):

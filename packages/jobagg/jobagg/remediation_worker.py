@@ -66,6 +66,10 @@ VERSION = "deterministic-fetch-v1"
 RETRY_EQUIVALENT_IMPLEMENTATIONS = (
     "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
 )
+# Applicability seal for this one reviewed successor. Only this literal is
+# normalized when checking scope, avoiding a self-referential hash. The full
+# implementation fingerprint below still includes every byte of every module.
+RETRY_SUCCESSOR_SCOPE_SHA256 = "395e9f53aad2f4284b7382e34ff369aa60170475198d84f51d9a2c12c0ee27d3"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -200,6 +204,35 @@ def implementation_hash():
             {str(path.relative_to(root)): sha(path) for path in sorted(root.rglob("*.py"))}
         ).encode()
     ).hexdigest()
+
+
+def _retry_compatibility_manifests():
+    """Derive full and scope manifests from the same complete byte snapshot."""
+    root = Path(__file__).resolve().parent
+    full, scope = {}, {}
+    declaration = ('RETRY_SUCCESSOR_SCOPE_SHA256 = "' + RETRY_SUCCESSOR_SCOPE_SHA256 + '"').encode()
+    found = False
+    for path in sorted(root.rglob("*.py")):
+        name = str(path.relative_to(root))
+        content = path.read_bytes()
+        full[name] = hashlib.sha256(content).hexdigest()
+        if name == "remediation_worker.py":
+            if content.count(declaration) != 1:
+                return None
+            content = content.replace(declaration, b'RETRY_SUCCESSOR_SCOPE_SHA256 = "<reviewed-successor>"')
+            found = True
+        scope[name] = hashlib.sha256(content).hexdigest()
+    return (full, scope) if found else None
+
+
+def reviewed_retry_successor():
+    manifests = _retry_compatibility_manifests()
+    if manifests is None:
+        return None
+    full, scope = manifests
+    if hashlib.sha256(dump(scope).encode()).hexdigest() != RETRY_SUCCESSOR_SCOPE_SHA256:
+        return None
+    return hashlib.sha256(dump(full).encode()).hexdigest()
 
 
 def write_json(path, value):
@@ -337,6 +370,7 @@ class Worker:
             "implementation_sha256": implementation_hash(),
             "shared_lock": str(self.shared_lock),
         }
+        self._retry_compatible_successor = reviewed_retry_successor()
         self.tick_id = None
 
     @property
@@ -453,6 +487,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
     def retry_input_matches(self, saved, payload):
         if saved == self.retry_input_fingerprint(payload):
             return True
+        successor = getattr(self, "_retry_compatible_successor", None)
+        if successor is None or self.binding["implementation_sha256"] != successor:
+            return False
         return any(saved == self.retry_input_fingerprint(payload, implementation_sha256=prior)
                    for prior in RETRY_EQUIVALENT_IMPLEMENTATIONS)
 

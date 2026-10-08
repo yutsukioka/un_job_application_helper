@@ -293,6 +293,11 @@ def classify_unavailable(source_id, external_id, metadata, body, *, redirects=()
                              if key.lower() == "content-type"), "")
         expected_type = "application/json" if source_id == "unv_uvp" else "text/html"
         if (redirects or metadata.get("status_code") != 200 or metadata.get("method") != "GET"
+                or metadata.get("external_id") != str(external_id)
+                or not isinstance(original_url, str)
+                or not isinstance(metadata.get("response_url"), str)
+                or metadata.get("request_url_sha256") != hashlib.sha256(original_url.encode()).hexdigest()
+                or metadata.get("response_url_sha256") != hashlib.sha256(metadata["response_url"].encode()).hexdigest()
                 or binding.get("source_id") != source_id
                 or binding.get("ats_family") != ("unv" if source_id == "unv_uvp" else "taleo")
                 or type(metadata.get("body_bytes")) is not int or metadata["body_bytes"] != len(body)

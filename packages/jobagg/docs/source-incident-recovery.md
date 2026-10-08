@@ -25,12 +25,28 @@ while inventory proof is missing.
 
 Changing the full package fingerprint formerly made otherwise identical typed
 failures eligible again and reset semantic retry counts. Retry comparison now
-also recognizes the exact predecessor fingerprint above. This applies only to
-retry decisions and counters: startup integrity, current receipts, registry,
+also recognizes the exact predecessor fingerprint above **only for the reviewed
+successor code snapshot**. A complete package manifest checks that scope, with
+only the scope constant's own literal normalized to avoid a self-referential
+hash. The full, unnormalized successor fingerprint is derived from the same byte
+snapshot and must match the current worker binding. Every other byte and module
+path participates; edits, additions, removals and renames disable the alias in a
+later release. Startup integrity still hashes all Python bytes, including the
+scope literal. No module is excluded from the implementation fingerprint.
+
+This applies only to retry decisions and counters: startup integrity, current receipts, registry,
 robots, owner, version and semantic payload still use their exact bindings.
 Arbitrary older implementations are not accepted. Future parser changes must
-review whether this predecessor remains semantically equivalent; do not expand
-the alias list as a general workaround.
+review whether this predecessor remains semantically equivalent and explicitly
+renew the successor scope after freezing the reviewed code. Runtime never
+automatically regenerates or blesses a scope seal. Do not expand the alias list
+as a general workaround.
+
+UNV/WHO capture classification also requires the top-level captured external ID
+and both request/response URL SHA256 values to match the exact identity and URL
+strings. Missing or contradictory metadata retains failure handling rather than
+entering the unavailable lifecycle. Legacy UNV captures retain their separate
+original-task/attempt proof requirement.
 
 ## Read-only preview
 
@@ -106,7 +122,10 @@ accepting a partial census. This pre-existing enforcement gap remains explicit.
 6. Confirm the expected result: three tasks pending, eight UNV tasks not observed
    and eight WHO tasks unavailable pending inventory; no description replacement
    and no closure inference. Pending eligibility retains existing task, host,
-   source, pacing, quota, Retry-After and recovery gates. The utility issues zero
+   source, pacing, quota, Retry-After and recovery gates. Listing repairs also
+   retain the selected source's current `next_list_at` as an eligibility floor;
+   changing that source state after preview invalidates the plan. This floor
+   does not delay an independently eligible detail retry. The utility issues zero
    requests and grants no budget increase. Existing durable claims check those
    gates again when normal work resumes.
 7. Any provider validation or dispatch needs its own approved exact task scope,
