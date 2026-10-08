@@ -53,6 +53,13 @@ of 100 or more remain incomplete. The provider's empty-search ceiling is 100;
 matching 100 rows cannot establish a census. Zero requires explicit matching
 zero counts and an empty native grid/form, never a generic empty page.
 
+IFAD marked declarations are checked and consumed explicitly: unknown names or
+missing terminators make the proof incomplete. Recognized marked sections and
+IE conditionals retain their existing handling; normal declarations, comments,
+and literal declaration-like text in scripts or attributes remain valid. This
+does not depend on `HTMLParser` raising an exception, which differs between
+Python patch releases (the original guard failed on CI's Python 3.12.15).
+
 Both contracts bind source/family, listing phase, exact HTTPS request/response
 scope, URL and request-body hashes, successful captured status, ordered aware
 timestamps, body length/hash and metadata hashes. Duplicate JSON members and
@@ -126,7 +133,8 @@ and text/attempt preservation, publisher re-verification and refusal to upgrade
 old incomplete proofs. An IFAD parser-to-publication regression retains prior
 grade/text in both destinations when a captured blank-grade revision arrives.
 Retry regressions exercise both deployed predecessor generations and changed
-package/configuration/payload negatives.
+package/configuration/payload negatives. Declaration regressions must pass on
+both the local Python 3.11 runtime and CI's Python 3.12.15 runtime.
 
 Before any separately authorized activation: freeze/review the exact diff and
 full package fingerprint; use the real owner lock and maintenance/publication

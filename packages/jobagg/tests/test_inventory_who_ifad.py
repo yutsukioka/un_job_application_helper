@@ -542,7 +542,21 @@ def test_ifad_missing_attribute_value_returns_incomplete_not_exception(tmp_path,
 
 
 @pytest.mark.parametrize(
-    "declaration,complete", [("<![foo]>", False), ("<![if IE]><![endif]>", True)]
+    "declaration,complete",
+    [
+        ("<![foo]>", False),
+        ("<![unknown[content]]>", False),
+        ("<![123]>", False),
+        ("<![if IE", False),
+        ("<![CDATA[unfinished", False),
+        ("<![if IE]><![endif]>", True),
+        ("<![IF (gte IE 9)&(lt IE 11)]><![ELSE]><![ENDIF]>", True),
+        ("<![CDATA[ignored <p> >]]>", True),
+        ("<!DOCTYPE html>", True),
+        ("<!-- literal <![foo]> -->", True),
+        ('<script>const marker = "<![foo]>";</script>', True),
+        ('<span title="<![foo]>"></span>', True),
+    ],
 )
 def test_ifad_declarations_do_not_escape_verification_or_break_valid_markup(
     tmp_path, declaration, complete

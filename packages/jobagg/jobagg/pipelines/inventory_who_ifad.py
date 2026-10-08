@@ -270,6 +270,24 @@ class _Board(HTMLParser):
         self.stack = [self.root]
         self.nodes = []
 
+    def parse_html_declaration(self, i):
+        if self.rawdata.startswith("<![", i):
+            # Newer HTMLParser versions treat unknown marked sections as bogus
+            # comments instead of raising. Validate and consume the supported
+            # sections ourselves so a census has the same proof on every runtime.
+            section = re.compile(r"<!\[([a-zA-Z][-_.a-zA-Z0-9]*)\s*").match(self.rawdata, i)
+            require(section is not None, "IFAD census contains malformed declared markup")
+            kind = section[1].lower()
+            if kind in {"temp", "cdata", "ignore", "include", "rcdata"}:
+                end = re.compile(r"]\s*]\s*>").search(self.rawdata, section.end())
+            elif kind in {"if", "else", "endif"}:
+                end = re.compile(r"]\s*>").search(self.rawdata, section.end())
+            else:
+                end = None
+            require(end is not None, "IFAD census contains malformed declared markup")
+            return end.end()
+        return super().parse_html_declaration(i)
+
     def handle_starttag(self, tag, attrs):
         require(len(self.nodes) < 20000 and len(self.stack) < 128, "IFAD DOM exceeds read bound")
         valued = {
@@ -395,8 +413,7 @@ def _ifad(source, jobs, captures, result):
     try:
         board.feed(html)
     except AssertionError as exc:
-        # HTMLParser rejects unknown marked declarations with AssertionError.
-        # Malformed provider markup cannot certify absence or fail the task.
+        # Retain a defensive boundary for other stdlib parser assertions.
         raise ValueError("IFAD census contains malformed declared markup") from exc
     form = board.one("HRS_CG_SEARCH_FL")
     require(
