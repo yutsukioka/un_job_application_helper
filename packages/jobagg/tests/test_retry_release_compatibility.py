@@ -18,6 +18,13 @@ PREDECESSOR = RETRY_EQUIVALENT_IMPLEMENTATIONS[0]
 setup = fixtures.setup
 
 
+@pytest.fixture(autouse=True, params=RETRY_EQUIVALENT_IMPLEMENTATIONS)
+def deployed_predecessor(request, monkeypatch):
+    # Both legacy receipts and receipts produced after the incident rollout
+    # must retain their retry budgets through this inventory-only successor.
+    monkeypatch.setitem(globals(), "PREDECESSOR", request.param)
+
+
 def comparison_worker():
     worker = object.__new__(Worker)
     worker.binding = {

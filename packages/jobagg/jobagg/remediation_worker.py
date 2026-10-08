@@ -59,17 +59,18 @@ from jobagg.vacancy_outcomes import (
 )
 
 VERSION = "deterministic-fetch-v1"
-# This incident repair must not reopen unrelated failures merely by resealing
-# the package. Only retry comparisons recognize this exact deployed predecessor;
+# Inventory verification must not reopen failures merely by resealing the
+# package. Only retry comparisons recognize these two deployed predecessors;
 # startup integrity and every new receipt still use the full current binding.
 # Registry, robots, owner and semantic-input changes are never aliased.
 RETRY_EQUIVALENT_IMPLEMENTATIONS = (
     "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
+    "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
 )
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "395e9f53aad2f4284b7382e34ff369aa60170475198d84f51d9a2c12c0ee27d3"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "a09586112d880ace0dd2372fe47a0d272a88e16832727e19105b3d93899fd77d"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
