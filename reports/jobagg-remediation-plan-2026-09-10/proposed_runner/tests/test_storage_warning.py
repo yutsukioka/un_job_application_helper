@@ -43,3 +43,37 @@ def test_preview_computes_warning_without_creating_any_receipts(tmp_path):
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
     obs.record_storage_health(config, 100000000000, 900, persist=False)
     assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
+
+
+def test_maintenance_capacity_probe_keeps_real_mount_and_identity_guards(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    import pytest
+
+    mount = tmp_path / 'volume'
+    mount.mkdir()
+    sentinel = mount / 'identity'
+    sentinel.write_bytes(b'fixture-volume')
+    config = {
+        'attempt_state_dir': tmp_path / 'attempts',
+        'state_dir': mount / 'state',
+        'shared_lock_path': mount / 'owner.lock',
+        'storage_guard': {
+            'mount_root': str(mount), 'sentinel_path': str(sentinel),
+            'sentinel_sha256': hashlib.sha256(sentinel.read_bytes()).hexdigest(),
+            'min_free_bytes': 100,
+        },
+    }
+    monkeypatch.setattr(obs.os.path, 'ismount', lambda _: True)
+    monkeypatch.setattr(obs.os, 'statvfs', lambda _: SimpleNamespace(f_bavail=10, f_frsize=1))
+    with pytest.raises(ValueError, match='below static reserve'):
+        obs.storage_check(config)
+    probe = obs.storage_check(config, require_reserve=False)
+    assert probe['ready'] is False and probe['available_bytes'] == 10
+    assert not config['attempt_state_dir'].exists()
+    sentinel.write_bytes(b'wrong-volume')
+    with pytest.raises(ValueError, match='identity'):
+        obs.storage_check(config, require_reserve=False)
+    monkeypatch.setattr(obs.os.path, 'ismount', lambda _: False)
+    with pytest.raises(ValueError, match='not mounted'):
+        obs.storage_check(config, require_reserve=False)

@@ -4,6 +4,7 @@ import fcntl
 import gzip
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 
 import pytest
@@ -274,6 +275,7 @@ def test_durable_intent_replays_after_partial_unlink(tmp_path, monkeypatch):
         first = retention.prune_completed(root, max_groups=1, execute=True,
                                           owner_fd=owner.fileno(), shared_lock=lock)
         assert first["deadline_deferred"]
+        assert first["deleted_bytes"] == len(b"new export 1")
         assert json.loads((generations[0] / retention.RECEIPT).read_text())["phase"] == "intent"
         monkeypatch.setattr(retention, "_sync_dir", original)
         second = retention.prune_completed(root, max_groups=1, execute=True,
@@ -383,3 +385,183 @@ def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
     assert result["protected_run_checkpoints"]["monthly_12_months"] == 2
     assert result["skipped_protected"]["run_snapshot"] == 4
     assert result["eligible_by_kind"]["run_snapshot"]["groups"] == 4
+
+
+def execute_retention(root, **kwargs):
+    lock = root / "remediation" / "manual-fetch-owner.lock"
+    with lock.open("a+") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        return retention.prune_completed(
+            root, execute=True, owner_fd=owner.fileno(), shared_lock=lock, **kwargs
+        )
+
+
+def defer_generation_validation(root, generation, monkeypatch):
+    # Finish the older run so the generation is the next candidate.
+    execute_retention(root, max_groups=1)
+    original = retention._digest
+    backup = generation / "before_exports" / "all_jobs_current.json"
+
+    def interrupt(path, **kwargs):
+        if path == backup:
+            raise TimeoutError("interrupted part-way through the next full file hash")
+        return original(path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention, "_digest", interrupt)
+        result = execute_retention(root, max_groups=1)
+    assert result["deadline_deferred"]
+    assert not (generation / retention.RECEIPT).exists()
+    return result
+
+
+def test_full_file_validation_survives_budget_deferral(tmp_path, monkeypatch):
+    root, _, generations = make_populated_root(tmp_path)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    backup = generation / "before_exports" / "all_jobs_current.json"
+    export_bytes, backup_bytes = export.stat().st_size, backup.stat().st_size
+    first = defer_generation_validation(root, generation, monkeypatch)
+    saved = json.loads((generation / retention.VALIDATION).read_text())
+    assert set(saved["verified"]) == {"exports-v2/all_jobs_current.json"}
+    assert first["hashed_bytes"] == export_bytes
+    assert first["validation_pending_bytes"] == backup_bytes
+    assert first["deleted_bytes"] == 0
+    assert export.exists() and backup.exists()
+    original = retention._digest
+    read_files = []
+
+    def observe(path, **kwargs):
+        if path in (export, backup):
+            read_files.append(path)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(retention, "_digest", observe)
+    second = execute_retention(root, max_groups=1)
+    assert read_files == [backup]
+    assert second["selected"][0]["resuming_validation"]
+    assert second["hashed_bytes"] == backup_bytes
+    assert second["reused_verified_bytes"] == export_bytes
+    assert second["verified_files"] == 1
+    assert second["deleted_bytes"] == export_bytes + backup_bytes
+    assert second["validation_pending_bytes"] == 0
+    assert second["removed_groups"] == 1
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_validation_rehashes_changed_file_with_restored_mtime(tmp_path, monkeypatch, replacement):
+    root, _, generations = make_populated_root(tmp_path)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    defer_generation_validation(root, generation, monkeypatch)
+    before = export.stat()
+    corrupted = b"x" * before.st_size
+    if replacement:
+        candidate = export.with_suffix(".replacement")
+        candidate.write_bytes(corrupted)
+        os.replace(candidate, export)
+    else:
+        export.write_bytes(corrupted)
+    os.utime(export, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert export.stat().st_mtime_ns == before.st_mtime_ns
+    assert retention._identity(export.stat()) != retention._identity(before)
+    with pytest.raises(ValueError, match="source bytes differ"):
+        execute_retention(root, max_groups=1)
+    assert not (generation / retention.RECEIPT).exists()
+    assert export.read_bytes() == corrupted
+    assert (generation / "before_exports" / "all_jobs_current.json").exists()
+
+
+@pytest.mark.parametrize("when", ["after_hash", "later_file", "after_intent"])
+def test_validation_rechecks_identity_before_cache_intent_and_unlink(tmp_path, monkeypatch, when):
+    root, _, generations = make_populated_root(tmp_path)
+    execute_retention(root, max_groups=1)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    backup = generation / "before_exports" / "all_jobs_current.json"
+    original_digest, original_seal = retention._digest, retention._seal_json
+
+    def mutate():
+        before = export.stat()
+        export.write_bytes(b"x" * before.st_size)
+        os.utime(export, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    def digest_then_mutate(path, **kwargs):
+        value = original_digest(path, **kwargs)
+        if (when == "after_hash" and path == export) or (
+            when == "later_file" and path == backup
+        ):
+            mutate()
+        return value
+
+    def seal_then_mutate(path, value):
+        original_seal(path, value)
+        if when == "after_intent" and path == generation / retention.RECEIPT:
+            mutate()
+
+    monkeypatch.setattr(retention, "_digest", digest_then_mutate)
+    monkeypatch.setattr(retention, "_seal_json", seal_then_mutate)
+    with pytest.raises(ValueError, match="source changed before unlink"):
+        execute_retention(root, max_groups=1)
+    assert (generation / retention.RECEIPT).exists() is (when == "after_intent")
+    assert export.exists() and backup.exists()
+
+
+def test_partial_individual_hash_is_not_checkpointed(tmp_path, monkeypatch):
+    root, _, generations = make_populated_root(tmp_path)
+    execute_retention(root, max_groups=1)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    export.write_bytes(b"x" * (3 * 1024 * 1024))
+    checkpoint_path = generation / "export-checkpoints.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint["entries"][str(root / "output" / export.name)]["new"] = {
+        "sha256": digest(export), "size": export.stat().st_size,
+    }
+    write_json(checkpoint_path, checkpoint)
+    write_json(generation / "exports.json", {
+        str(root / "output" / export.name): {"sha256": digest(export)}
+    })
+    original = retention._digest
+
+    def partial_hash(path, **kwargs):
+        if path != export:
+            return original(path, **kwargs)
+        clock = iter([0.0, 0.5, 2.0])
+        with monkeypatch.context() as patch:
+            patch.setattr(retention.time, "monotonic", lambda: next(clock))
+            return original(path, **{**kwargs, "deadline_at": 1.0})
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention, "_digest", partial_hash)
+        first = execute_retention(root, max_groups=1)
+    assert first["deadline_deferred"]
+    assert first["hashed_bytes"] == 0
+    assert not (generation / retention.VALIDATION).exists()
+    assert not (generation / retention.RECEIPT).exists()
+    assert execute_retention(root, max_groups=1)["removed_groups"] == 1
+
+
+def test_failed_validation_checkpoint_keeps_previous_progress_and_all_sources(tmp_path, monkeypatch):
+    root, _, generations = make_populated_root(tmp_path)
+    generation = generations[0]
+    defer_generation_validation(root, generation, monkeypatch)
+    cache = generation / retention.VALIDATION
+    before = cache.read_bytes()
+    original = retention.os.replace
+
+    def fail_cache_replace(source, destination):
+        if destination == cache:
+            raise OSError("simulated ENOSPC while replacing validation journal")
+        return original(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention.os, "replace", fail_cache_replace)
+        with pytest.raises(OSError, match="ENOSPC"):
+            execute_retention(root, max_groups=1)
+    assert cache.read_bytes() == before
+    assert not list(generation.glob(".storage-retention-*"))
+    assert not (generation / retention.RECEIPT).exists()
+    assert (generation / "exports-v2" / "all_jobs_current.json").exists()
+    assert (generation / "before_exports" / "all_jobs_current.json").exists()
+    assert execute_retention(root, max_groups=1)["removed_groups"] == 1

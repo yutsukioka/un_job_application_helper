@@ -41,8 +41,8 @@ def test_storage_retention_config_is_disabled_by_default_and_bounded(fixture):
 
 
 @pytest.mark.parametrize("policy", [
-    {"enabled": 1}, {"max_seconds": 0}, {"max_seconds": 21},
-    {"max_seconds": True}, {"max_groups": 0}, {"max_groups": 3},
+    {"enabled": 1}, {"max_seconds": 0}, {"max_seconds": 121},
+    {"max_seconds": True}, {"max_groups": 0}, {"max_groups": 9},
     {"max_groups": True}, {"keep_completed": 1}, {"keep_completed": True},
     {"unknown": 1},
 ])
@@ -65,7 +65,7 @@ def _mock_tick(monkeypatch, tmp_path, *, enabled=True, prune=None, unresolved=Fa
         },
     }
     health = []
-    monkeypatch.setattr(runner.OBSERVABILITY, "storage_check", lambda _: {"ready": True})
+    monkeypatch.setattr(runner.OBSERVABILITY, "storage_check", lambda _, **_kw: {"ready": True})
     monkeypatch.setattr(runner.OBSERVABILITY, "condition_fingerprint", lambda *_: "condition")
     monkeypatch.setattr(runner.OBSERVABILITY, "failure_hold", lambda *_: None)
     monkeypatch.setattr(runner.OBSERVABILITY, "record_failure", lambda _c, _fingerprint, result: health.append(dict(result)))
@@ -187,3 +187,142 @@ def test_retention_error_is_visible_in_persistent_health_without_failure_hold(tm
     assert health["last_retention_status"] == "error"
     assert health["last_retention_reason"] == "ValueError: bad receipt"
     assert health["last_retention_event_at"] == value["finished_at"]
+
+
+def test_explicit_larger_maintenance_budget_remains_bounded(fixture):
+    fixture.configure(storage_retention={
+        "enabled": True, "max_seconds": 120, "max_groups": 8,
+    })
+    config, _ = runner.load_config(fixture.config_path)
+    assert config["storage_retention"]["max_seconds"] == 120
+    assert config["storage_retention"]["max_groups"] == 8
+
+
+def _under_reserve(monkeypatch, *, freed=False):
+    calls = []
+
+    def check(_config, *, require_reserve=True):
+        calls.append(require_reserve)
+        if require_reserve and not freed:
+            raise ValueError("Configured storage free space is below static reserve")
+        return {"ready": bool(require_reserve and freed), "available_bytes": 1}
+
+    monkeypatch.setattr(runner.OBSERVABILITY, "storage_check", check)
+    return calls
+
+
+def test_low_reserve_runs_only_retention_under_owner_then_retries_next_tick(monkeypatch, tmp_path):
+    calls = []
+
+    def prune(_root, **kwargs):
+        with config["shared_lock_path"].open("r") as probe:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        calls.append(True)
+        return {"deadline_deferred": True, "removed_groups": 0}
+
+    config, health = _mock_tick(monkeypatch, tmp_path, prune=prune)
+    checks = _under_reserve(monkeypatch)
+    monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("fetch under reserve"))
+    monkeypatch.setattr(runner.OBSERVABILITY, "failure_hold", lambda *_: pytest.fail("maintenance must not be held by prior fetch failures"))
+    for _ in range(2):
+        result = runner.tick(config, [])
+        assert result["status"] == "process_failure"
+        assert result["phase"] == "storage_maintenance"
+        assert result["storage_retention"]["status"] == "deferred"
+    assert calls == [True, True]
+    assert checks == [False, False, True] * 2
+    assert health == []  # A capacity deferral creates no unchanged-fetch-failure hold.
+
+
+def test_reclaimed_reserve_is_rechecked_before_work_and_maintenance_is_not_doubled(monkeypatch, tmp_path):
+    order = []
+
+    def prune(_root, **_kwargs):
+        order.append("prune")
+        return {"deadline_deferred": False, "removed_groups": 1}
+
+    config, _ = _mock_tick(monkeypatch, tmp_path, prune=prune)
+    checks = _under_reserve(monkeypatch, freed=True)
+    monkeypatch.setattr(runner, "locked_tick", lambda *_: order.append("work") or {"status": "complete"})
+    result = runner.tick(config, [])
+    assert order == ["prune", "work"]
+    assert checks == [False, False, True]
+    assert result["storage_retention"]["status"] == "complete"
+
+
+@pytest.mark.parametrize("gate", ["maintenance", "unresolved", "owner"])
+def test_low_reserve_preserves_maintenance_publication_and_owner_gates(monkeypatch, tmp_path, gate):
+    config, _ = _mock_tick(monkeypatch, tmp_path, unresolved=gate == "unresolved",
+                          prune=lambda *_a, **_k: pytest.fail("protected cleanup"))
+    _under_reserve(monkeypatch)
+    monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("protected worker"))
+    if gate == "maintenance":
+        config["maintenance_file"].write_text("operator pause")
+        assert runner.tick(config, [])["status"] == "maintenance_paused"
+    elif gate == "unresolved":
+        result = runner.tick(config, [])
+        assert result["storage_retention"]["reason"] == "unresolved_publication"
+        assert result["unresolved_publication"] is True
+    else:
+        with config["shared_lock_path"].open("w") as owner:
+            fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert runner.tick(config, [])["status"] == "lock_busy"
+
+
+def test_low_reserve_does_not_admit_work_after_retention_integrity_error(monkeypatch, tmp_path):
+    def prune(*_a, **_kw):
+        raise ValueError("modified protected evidence")
+
+    config, _ = _mock_tick(monkeypatch, tmp_path, prune=prune)
+    _under_reserve(monkeypatch, freed=True)
+    monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("integrity error must stop work"))
+    result = runner.tick(config, [])
+    assert result["status"] == "process_failure"
+    assert result["storage_retention"]["status"] == "error"
+
+
+def test_bad_mount_or_identity_still_blocks_before_any_lock_creation(monkeypatch, tmp_path):
+    config, _ = _mock_tick(monkeypatch, tmp_path,
+                          prune=lambda *_a, **_k: pytest.fail("invalid mount cleanup"))
+
+    def invalid(*_a, **_kw):
+        raise ValueError("Storage sentinel identity is absent or changed")
+
+    monkeypatch.setattr(runner.OBSERVABILITY, "storage_check", invalid)
+    with pytest.raises(ValueError, match="sentinel"):
+        runner.tick(config, [])
+    assert not config["shared_lock_path"].exists()
+
+
+def test_load_config_only_defers_reserve_for_explicit_enabled_maintenance(monkeypatch, fixture):
+    fixture.configure(storage_retention={"enabled": True})
+    checks = _under_reserve(monkeypatch)
+    with pytest.raises(ValueError, match="reserve"):
+        runner.load_config(fixture.config_path)
+    runner.load_config(fixture.config_path, allow_storage_maintenance=True)
+    fixture.configure(storage_retention={"enabled": False})
+    with pytest.raises(ValueError, match="reserve"):
+        runner.load_config(fixture.config_path, allow_storage_maintenance=True)
+    assert checks == [True, False, True]
+
+
+def test_retention_gate_scan_error_preserves_successful_publication(monkeypatch, tmp_path):
+    config, health = _mock_tick(monkeypatch, tmp_path,
+                               prune=lambda *_a, **_k: pytest.fail("uncertain gate"))
+    scans = 0
+
+    def unresolved(_root):
+        nonlocal scans
+        scans += 1
+        if scans == 1:
+            return []  # Normal work admission succeeds.
+        raise ValueError("malformed old publication receipt")
+
+    monkeypatch.setattr(runner, "unresolved_publications", unresolved)
+    result = runner.tick(config, [])
+    assert result["status"] == "complete"
+    assert result["publication_status"] == "published"
+    assert result["storage_retention"]["status"] == "error"
+    assert "malformed" in result["storage_retention"]["reason"]
+    assert health == [{"status": "complete", "publication_status": "published"}]

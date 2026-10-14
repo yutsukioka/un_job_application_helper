@@ -54,8 +54,13 @@ def _journal(plan):
     "during_export_target_copy", "before_export_target_seal", "after_export_target_seal",
     "after_export_verified_checkpoint", "after_export_replace",
 ])
-def test_each_crash_boundary_recovers_without_losing_original(export_case, monkeypatch, stage):
+@pytest.mark.parametrize("copy_mode", ["native", "stream"])
+def test_each_crash_boundary_recovers_without_losing_original(
+    export_case, monkeypatch, stage, copy_mode
+):
     plan, item, target, old = export_case
+    if copy_mode == "stream":
+        monkeypatch.setattr(publication, "_clone_file", lambda *_: False)
 
     def fail(point, key):
         if point == stage:

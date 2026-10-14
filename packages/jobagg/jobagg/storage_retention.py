@@ -24,6 +24,7 @@ import time
 
 
 RECEIPT = "storage-retention.json"
+VALIDATION = "storage-retention-validation.json"
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _GENERATION = re.compile(r"[0-9a-f]{32}\Z")
 _EXPORT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*_(?:current|history)\.(?:csv|json)\Z")
@@ -78,15 +79,17 @@ def _safe_file(path):
     before = _regular(path)
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     opened = os.fstat(descriptor)
-    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-        opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns
-    ):
+    if _identity(before) != _identity(opened):
         os.close(descriptor)
         raise ValueError(f"Storage retention file changed during open: {path}")
     return descriptor, before
 
 
-def _digest(path, *, deadline_at=None):
+def _identity(info):
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def _digest(path, *, deadline_at=None, include_identity=False):
     _check_deadline(deadline_at)
     descriptor, before = _safe_file(path)
     digest = hashlib.sha256()
@@ -96,11 +99,12 @@ def _digest(path, *, deadline_at=None):
             digest.update(block)
         after = os.fstat(stream.fileno())
     latest = _regular(path)
-    def signature(value):
-        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
-    if signature(before) != signature(after) or signature(after) != signature(latest):
+    if _identity(before) != _identity(after) or _identity(after) != _identity(latest):
         raise ValueError(f"Storage retention file changed during hashing: {path}")
-    return {"sha256": digest.hexdigest(), "size": after.st_size}
+    result = {"sha256": digest.hexdigest(), "size": after.st_size}
+    if include_identity:
+        result["identity"] = _identity(after)
+    return result
 
 
 def _json(path):
@@ -448,7 +452,7 @@ def _generation_group(generation, *, deadline_at=None):
     }
 
 
-def _validate_selected(group, *, deadline_at=None):
+def _validate_selected(group, *, deadline_at=None, controls=None):
     if group["kind"] != "generation_exports":
         return
     plan_path = group["path"] / "plan.json"
@@ -463,16 +467,21 @@ def _validate_selected(group, *, deadline_at=None):
         if (
             plan.get("generation_id") != group["id"]
             or not _same_path(plan.get("generation_root"), group["path"])
-            or _digest(plan_path, deadline_at=deadline_at)["sha256"] != result.get("plan_sha256")
+            or (controls[str(plan_path)] if controls is not None else
+                _digest(plan_path, deadline_at=deadline_at))["sha256"] != result.get("plan_sha256")
         ):
             raise ValueError(f"Storage retention selected generation plan differs: {group['path']}")
 
 
-def _verify_controls(group, saved=None, *, deadline_at=None):
+def _verify_controls(group, saved=None, *, deadline_at=None, identities=None):
     controls = {}
     for path in group["controls"]:
         _check_deadline(deadline_at)
-        controls[str(path)] = _digest(path, deadline_at=deadline_at)
+        verified = _digest(path, deadline_at=deadline_at, include_identity=True)
+        identity = verified.pop("identity")
+        controls[str(path)] = verified
+        if identities is not None:
+            identities[str(path)] = identity
     if saved is not None and controls != saved:
         raise ValueError(f"Storage retention control receipt changed: {group['path']}")
     return controls
@@ -490,31 +499,135 @@ def _validate_receipt(group, receipt):
         raise ValueError(f"Storage retention receipt differs: {group['path']}")
 
 
-def _retire(group, *, deadline_at=None):
+def _validation_progress(group, controls):
+    """Load local verification evidence, never authority to delete a file.
+
+    Like the retirement intent, this journal is trusted owner-written local
+    state. It binds full hashes to unchanged filesystem identities; it is not
+    a defense against an actor able to forge both local journals and metadata.
+    An unfinished individual hash is deliberately never checkpointed.
+    """
+    path = group["path"] / VALIDATION
+    expected = {
+        "schema_version": 1, "kind": group["kind"], "group_id": group["id"],
+        "group_path": str(group["path"]), "files": group["files"], "controls": controls,
+    }
+    if not path.exists() and not path.is_symlink():
+        return {**expected, "verified": {}}
+    saved = _json(path)
+    if any(saved.get(key) != value for key, value in expected.items() if key != "controls"):
+        raise ValueError(f"Storage retention validation binding differs: {path}")
+    saved_controls = saved.get("controls")
+    if not isinstance(saved_controls, dict) or not saved_controls or any(
+        not isinstance(name, str) or not isinstance(proof, dict)
+        or set(proof) != {"sha256", "size"}
+        or not isinstance(proof.get("sha256"), str) or not _SHA.fullmatch(proof["sha256"])
+        or type(proof.get("size")) is not int or proof["size"] < 0
+        for name, proof in saved_controls.items()
+    ):
+        raise ValueError(f"Storage retention validation binding differs: {path}")
+    verified = saved.get("verified")
+    declared = {item["path"]: item for item in group["files"]}
+    if not isinstance(verified, dict) or not set(verified) <= set(declared):
+        raise ValueError(f"Storage retention validation files differ: {path}")
+    for relative, proof in verified.items():
+        identity = proof.get("identity") if isinstance(proof, dict) else None
+        item = declared[relative]
+        if (
+            not isinstance(proof, dict)
+            or set(proof) != {"sha256", "size", "identity"}
+            or proof.get("sha256") != item["sha256"]
+            or proof.get("size") != item["size"]
+            or not isinstance(identity, list) or len(identity) != 5
+            or any(type(value) is not int for value in identity)
+            or identity[2] != item["size"]
+        ):
+            raise ValueError(f"Storage retention validation proof differs: {path}")
+    if saved_controls != controls:
+        # Cold archival/restoration can legitimately replace a hot plan control
+        # with its archive manifest. This cache grants no unlink authority:
+        # discard every proof, validate the current plan and fully hash again.
+        # A real intent's controls remain strict in _retire before this call.
+        return {**expected, "verified": {}}
+    return saved
+
+
+def _save_validation(group, progress):
+    path = group["path"] / VALIDATION
+    if path.exists() or path.is_symlink():
+        _regular(path)
+        _replace_json(path, progress)
+    else:
+        _seal_json(path, progress)
+
+
+def _unchanged(path, identity):
+    if _identity(_regular(path)) != identity:
+        raise ValueError(f"Storage retention source changed before unlink: {path}")
+
+
+def _retire(group, *, deadline_at=None, metrics=None):
     receipt_path = group["path"] / RECEIPT
     _check_deadline(deadline_at)
-    _validate_selected(group, deadline_at=deadline_at)
-    _check_deadline(deadline_at)
-    signatures = None
+    identities = {}
+    controls = _verify_controls(group, deadline_at=deadline_at, identities=identities)
+    receipt = None
     if receipt_path.exists() or receipt_path.is_symlink():
         receipt = _json(receipt_path)
         _validate_receipt(group, receipt)
-        _verify_controls(group, receipt["controls"], deadline_at=deadline_at)
-    else:
-        controls = _verify_controls(group, deadline_at=deadline_at)
-        signatures = {}
-        for item in group["files"]:
-            _check_deadline(deadline_at)
-            path = _inside(group["path"], item["path"])
-            if _digest(path, deadline_at=deadline_at) != {
-                "sha256": item["sha256"], "size": item["size"]
-            }:
-                raise ValueError(f"Storage retention source bytes differ: {path}")
-            stat_value = _regular(path)
-            signatures[item["path"]] = (
-                stat_value.st_dev, stat_value.st_ino, stat_value.st_size,
-                stat_value.st_mtime_ns, stat_value.st_ctime_ns,
-            )
+        if receipt["controls"] != controls:
+            raise ValueError(f"Storage retention control receipt changed: {group['path']}")
+    progress = _validation_progress(group, controls)
+    # A hot plan's full hash was checked above. Previously verified controls
+    # imply the same selected-plan validation, avoiding repeated large parsing.
+    # Cold object contents are independent of the manifest and must be checked.
+    cold = group["path"] / "storage-cold-archive.json"
+    if not progress["verified"] or cold.exists() or cold.is_symlink():
+        _validate_selected(group, deadline_at=deadline_at, controls=controls)
+    for item in group["files"]:
+        _check_deadline(deadline_at)
+        path = _inside(group["path"], item["path"])
+        if not path.exists() and not path.is_symlink():
+            if receipt is not None:
+                if metrics is not None:
+                    metrics["validation_pending_bytes"] -= item["size"]
+                continue  # Only a real durable intent authorizes absence.
+            raise ValueError(f"Storage retention source missing before intent: {path}")
+        if receipt is not None and receipt["phase"] == "complete":
+            raise ValueError(f"Storage retention completed receipt has a live file: {path}")
+        verified = progress["verified"].get(item["path"])
+        if verified is not None and _identity(_regular(path)) == verified["identity"]:
+            if metrics is not None:
+                metrics["reused_verified_bytes"] += item["size"]
+                metrics["validation_pending_bytes"] -= item["size"]
+            continue
+        verified = _digest(path, deadline_at=deadline_at, include_identity=True)
+        if {key: verified[key] for key in ("sha256", "size")} != {
+            "sha256": item["sha256"], "size": item["size"]
+        }:
+            raise ValueError(f"Storage retention source bytes differ: {path}")
+        # Bind the cached identity to the bytes actually read, closing the
+        # hash-to-stat gap even if a non-owner modifies the file unexpectedly.
+        _unchanged(path, verified["identity"])
+        progress["verified"][item["path"]] = verified
+        _save_validation(group, progress)
+        if metrics is not None:
+            metrics["hashed_bytes"] += item["size"]
+            metrics["verified_files"] += 1
+            metrics["validation_pending_bytes"] -= item["size"]
+    _check_deadline(deadline_at)
+    # Earlier verified files may have changed while a later file was read.
+    # Recheck the entire group and controls before granting unlink authority.
+    for path, identity in identities.items():
+        _check_deadline(deadline_at)
+        _unchanged(Path(path), identity)
+    for item in group["files"]:
+        _check_deadline(deadline_at)
+        path = _inside(group["path"], item["path"])
+        if receipt is not None and not path.exists() and not path.is_symlink():
+            continue
+        _unchanged(path, progress["verified"][item["path"]]["identity"])
+    if receipt is None:
         receipt = {
             "schema_version": 1, "kind": group["kind"], "group_id": group["id"],
             "phase": "intent", "files": group["files"], "controls": controls,
@@ -526,24 +639,13 @@ def _retire(group, *, deadline_at=None):
         _check_deadline(deadline_at)
         path = _inside(group["path"], item["path"])
         if not path.exists() and not path.is_symlink():
-            # An absent file is allowed only after the durable intent exists.
             continue
-        if receipt["phase"] == "complete":
-            raise ValueError(f"Storage retention completed receipt has a live file: {path}")
-        if signatures is not None:
-            current = _regular(path)
-            if (
-                current.st_dev, current.st_ino, current.st_size,
-                current.st_mtime_ns, current.st_ctime_ns,
-            ) != signatures[item["path"]]:
-                raise ValueError(f"Storage retention source changed before unlink: {path}")
-        elif _digest(path, deadline_at=deadline_at) != {
-            "sha256": item["sha256"], "size": item["size"]
-        }:
-            raise ValueError(f"Storage retention source changed before unlink: {path}")
+        _unchanged(path, progress["verified"][item["path"]]["identity"])
         path.unlink()
-        _sync_dir(path.parent)
         deleted += item["size"]
+        if metrics is not None:
+            metrics["deleted_bytes"] += item["size"]
+        _sync_dir(path.parent)
     if receipt["phase"] != "complete":
         _replace_json(receipt_path, {**receipt, "phase": "complete"})
     return deleted
@@ -581,6 +683,9 @@ def prune_completed(
     deterministic dispatcher, publication state, and live output directories.
     Preview does no hashing of large derivative files and never writes. Execute
     requires the same held exclusive owner as the dispatcher/publisher.
+    Execute checkpoints full-file validation across calls, with exact file
+    identities. A hash interrupted within one file restarts on the next call;
+    the maintenance budget must accommodate the largest individual file.
     Exact publication snapshots retain the newest two, the latest completed
     one per UTC day for 30 days, and the latest per UTC month for 12 months.
     """
@@ -717,16 +822,21 @@ def prune_completed(
             skipped_protected[group["kind"]] += 1
             continue
         candidates.append(group)
-    # Replay intents first, then alternate classes so a bounded cycle can make
-    # progress on both the run and generation backlogs.
+    # Replay intents first, then resume eligible validation. Unlike an intent,
+    # validation progress never overrides newly applicable protection above.
     pending = sorted(
-        (group for group in candidates if (group["path"] / RECEIPT).exists()),
-        key=lambda group: (group["time"], group["id"]),
+        (group for group in candidates if any(
+            (group["path"] / name).exists() or (group["path"] / name).is_symlink()
+            for name in (RECEIPT, VALIDATION)
+        )),
+        key=lambda group: (not (group["path"] / RECEIPT).exists(),
+                           group["time"], group["id"]),
     )
+    pending_ids = {(group["kind"], group["id"]) for group in pending}
     queues = {
         kind: sorted(
             (group for group in candidates if group["kind"] == kind
-             and not (group["path"] / RECEIPT).exists()),
+             and (group["kind"], group["id"]) not in pending_ids),
             key=lambda group: (group["time"], group["id"]),
         )
         for kind in ("run_snapshot", "generation_exports")
@@ -745,6 +855,7 @@ def prune_completed(
         "path": str(group["path"]), "files": len(group["files"]),
         "estimated_bytes": sum(item["size"] for item in group["files"]),
         "replaying_intent": (group["path"] / RECEIPT).exists(),
+        "resuming_validation": (group["path"] / VALIDATION).exists(),
     } for group in selected]
     summary = {
         "schema_version": 1, "mode": "execute" if execute else "preview",
@@ -768,7 +879,13 @@ def prune_completed(
         ),
         "selected": described,
         "selected_estimated_bytes": sum(item["estimated_bytes"] for item in described),
+        # Bytes in the selected groups still lacking a reusable full-file proof
+        # during this pass (including any group not reached before its deadline).
+        "validation_pending_bytes": sum(item["estimated_bytes"] for item in described),
         "deleted_bytes": 0,
+        "hashed_bytes": 0,
+        "reused_verified_bytes": 0,
+        "verified_files": 0,
         "removed_groups": 0,
         "deadline_deferred": False,
     }
@@ -776,7 +893,7 @@ def prune_completed(
         for group in selected:
             try:
                 _check_deadline(deadline_at)
-                summary["deleted_bytes"] += _retire(group, deadline_at=deadline_at)
+                _retire(group, deadline_at=deadline_at, metrics=summary)
                 summary["removed_groups"] += 1
             except TimeoutError:
                 summary["deadline_deferred"] = True
