@@ -71,7 +71,7 @@ def file_condition(path, *, contents=False):
     return result
 
 
-def storage_check(config):
+def storage_check(config, *, require_reserve=True):
     guard = config.get("storage_guard")
     if not guard:
         return {"configured": False, "ready": True}
@@ -128,12 +128,12 @@ def storage_check(config):
     storage_health = record_storage_health(
         config, available, reserve, persist=config.get("_record_storage_health", False)
     )
-    if available < reserve:
+    if available < reserve and require_reserve:
         raise ValueError("Configured storage free space is below static reserve")
     # Nonexistent mounted volume never gets created and no data path falls back.
     return {
         "configured": True,
-        "ready": True,
+        "ready": available >= reserve,
         "mount_root": str(mount),
         "sentinel_sha256": guard["sentinel_sha256"],
         "device": mount.stat().st_dev,

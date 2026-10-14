@@ -14,14 +14,20 @@ from jobagg.vacancy_outcomes import IncompleteDetailResponse
 import test_remediation_worker as fixtures
 
 
-PREDECESSOR = RETRY_EQUIVALENT_IMPLEMENTATIONS[0]
+REVIEWED_PREDECESSORS = (
+    "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
+    "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
+    "7ec4f5b4d37797599eed3ae04af4c18992dd8a2d7e3c01db742e6d3a8c34362b",
+)
+PREDECESSOR = REVIEWED_PREDECESSORS[0]
 setup = fixtures.setup
 
 
-@pytest.fixture(autouse=True, params=RETRY_EQUIVALENT_IMPLEMENTATIONS)
+@pytest.fixture(autouse=True, params=REVIEWED_PREDECESSORS)
 def deployed_predecessor(request, monkeypatch):
-    # Both legacy receipts and receipts produced after the incident rollout
-    # must retain their retry budgets through this inventory-only successor.
+    # Legacy, incident-rollout and merged inventory-verifier receipts retain
+    # their retry budgets through this combined inventory/storage successor.
+    assert request.param in RETRY_EQUIVALENT_IMPLEMENTATIONS
     monkeypatch.setitem(globals(), "PREDECESSOR", request.param)
 
 

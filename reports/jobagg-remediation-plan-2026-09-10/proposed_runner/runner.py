@@ -481,7 +481,7 @@ def resolve(base, value):
     return Path(os.path.abspath(base / value))
 
 
-def load_config(path, *, record_storage_health=False):
+def load_config(path, *, record_storage_health=False, allow_storage_maintenance=False):
     config = read_json(path)
     config["_record_storage_health"] = record_storage_health
     config["_config_sha256"] = digest(path)
@@ -606,11 +606,11 @@ def load_config(path, *, record_storage_health=False):
     require(type(retention["enabled"]) is bool, "Invalid storage_retention.enabled")
     require(
         type(retention["max_seconds"]) in (int, float)
-        and 0 < retention["max_seconds"] <= 20,
+        and 0 < retention["max_seconds"] <= 120,
         "Invalid storage_retention.max_seconds",
     )
     require(
-        type(retention["max_groups"]) is int and 1 <= retention["max_groups"] <= 2,
+        type(retention["max_groups"]) is int and 1 <= retention["max_groups"] <= 8,
         "Invalid storage_retention.max_groups",
     )
     require(
@@ -641,7 +641,9 @@ def load_config(path, *, record_storage_health=False):
                 type(guard.get(key, 0)) is int and guard.get(key, 0) >= 0,
                 "Invalid storage " + key,
             )
-    OBSERVABILITY.storage_check(config)
+    OBSERVABILITY.storage_check(
+        config, require_reserve=not (allow_storage_maintenance and retention["enabled"])
+    )
     manifest_bytes = config["source_manifest_path"].read_bytes()
     manifest = json.loads(manifest_bytes)
     require(isinstance(manifest, dict), "manifest root must be an object")
@@ -932,9 +934,41 @@ def recover_stale_runs(config, descriptor, allow_publication_recovery=False):
     return recovered
 
 
+def maintain_storage(config, descriptor):
+    """One bounded retention pass; never release publication or maintenance gates."""
+    try:
+        if config.get("maintenance_file") and config["maintenance_file"].exists():
+            return {"status": "skipped", "reason": "maintenance_paused"}
+        if unresolved_publications(config["state_dir"] / "runs"):
+            return {"status": "skipped", "reason": "unresolved_publication"}
+        retention = config["storage_retention"]
+        summary = retention_helper(config).prune_completed(
+            config["state_dir"].parent,
+            keep_completed=retention["keep_completed"],
+            max_groups=retention["max_groups"],
+            execute=True,
+            owner_fd=descriptor,
+            shared_lock=config["shared_lock_path"],
+            deadline_at=time.monotonic() + retention["max_seconds"],
+        )
+        return {
+            "status": "deferred" if summary["deadline_deferred"] else "complete",
+            "summary": summary,
+        }
+    except TimeoutError as exc:
+        return {"status": "deferred", "reason": str(exc)}
+    except Exception as exc:
+        return {"status": "error", "reason": type(exc).__name__ + ": " + str(exc)}
+
+
 def tick(config, expected, recover_publication=False):
-    # Guard before creating a lock/runtime directory, including after config load.
-    OBSERVABILITY.storage_check(config)
+    # Identity/mount/path checks still precede every guarded-volume write. Only
+    # enabled retention may enter under the reserve, and it cannot launch work.
+    retention = config.get("storage_retention", {})
+    if retention.get("enabled"):
+        OBSERVABILITY.storage_check(config, require_reserve=False)
+    else:
+        OBSERVABILITY.storage_check(config)
     lock_path = config["shared_lock_path"]
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -952,9 +986,38 @@ def tick(config, expected, recover_publication=False):
                 "maintenance_file": str(config["maintenance_file"]),
                 "reason": "operator maintenance file is present; no work dispatched",
             }
+        prior_retention = None
+        if retention.get("enabled"):
+            # Recheck after acquiring the owner: the first free-space sample may
+            # race a prior publisher. A failed reserve is maintenance-only until
+            # a fresh, fully guarded check admits the ordinary worker path.
+            storage = OBSERVABILITY.storage_check(config, require_reserve=False)
+            if not storage["ready"]:
+                prior_retention = maintain_storage(config, descriptor)
+                try:
+                    OBSERVABILITY.storage_check(config)
+                except Exception as exc:
+                    return {
+                        "status": "process_failure",
+                        "phase": "storage_maintenance",
+                        "reasons": [type(exc).__name__ + ": " + str(exc)],
+                        "storage_retention": prior_retention,
+                        "unresolved_publication": bool(
+                            unresolved_publications(config["state_dir"] / "runs")
+                        ),
+                    }
+                if prior_retention["status"] in {"error", "skipped"}:
+                    return {
+                        "status": "process_failure",
+                        "phase": "storage_maintenance",
+                        "reasons": ["Storage maintenance did not safely complete"],
+                        "storage_retention": prior_retention,
+                    }
         condition = OBSERVABILITY.condition_fingerprint(config, Path(__file__))
         held = OBSERVABILITY.failure_hold(config, condition)
         if held:
+            if prior_retention is not None:
+                held["storage_retention"] = prior_retention
             return held
         try:
             recovered = recover_stale_runs(
@@ -978,42 +1041,13 @@ def tick(config, expected, recover_publication=False):
                 ),
             }
         OBSERVABILITY.record_failure(config, condition, result)
-        retention = config.get("storage_retention", {})
         if retention.get("enabled"):
-            # Run only after the worker/publisher is terminal. The shared owner
-            # stays held until this bounded maintenance attempt finishes.
-            try:
-                if config.get("maintenance_file") and config["maintenance_file"].exists():
-                    result["storage_retention"] = {
-                        "status": "skipped", "reason": "maintenance_paused",
-                    }
-                elif unresolved_publications(config["state_dir"] / "runs"):
-                    result["storage_retention"] = {
-                        "status": "skipped", "reason": "unresolved_publication",
-                    }
-                else:
-                    deadline = time.monotonic() + retention["max_seconds"]
-                    summary = retention_helper(config).prune_completed(
-                        config["state_dir"].parent,
-                        keep_completed=retention["keep_completed"],
-                        max_groups=retention["max_groups"],
-                        execute=True,
-                        owner_fd=descriptor,
-                        shared_lock=config["shared_lock_path"],
-                        deadline_at=deadline,
-                    )
-                    result["storage_retention"] = {
-                        "status": "deferred" if summary["deadline_deferred"] else "complete",
-                        "summary": summary,
-                    }
-            except TimeoutError as exc:
-                result["storage_retention"] = {
-                    "status": "deferred", "reason": str(exc),
-                }
-            except Exception as exc:
-                result["storage_retention"] = {
-                    "status": "error", "reason": type(exc).__name__ + ": " + str(exc),
-                }
+            # Exactly one maintenance budget per invocation, before work only
+            # when needed to regain the reserve, otherwise after terminal work.
+            result["storage_retention"] = (
+                prior_retention if prior_retention is not None
+                else maintain_storage(config, descriptor)
+            )
         return result
     finally:
         os.close(descriptor)
@@ -1931,7 +1965,10 @@ def main(argv=None):
             os.umask(0o077)
             raw = read_json(config_path)
             attempt, intent = OBSERVABILITY.start_attempt(config_path, raw)
-        config, expected = load_config(config_path, record_storage_health=args.execute)
+        config, expected = load_config(
+            config_path, record_storage_health=args.execute,
+            allow_storage_maintenance=args.execute,
+        )
         if not args.execute:
             result = {
                 "status": "dry_run",
