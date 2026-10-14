@@ -49,6 +49,14 @@ reserve failed, the configuration check prevented even a cleanup-only attempt.
    existing mount/identity/maintenance/publication gates. Require a fresh hard
    reserve check before any worker. Preserve fetch holds and use only one
    maintenance budget per invocation.
+4. Explicitly reseal the reviewed retry-compatibility declaration over the full
+   package. Preserve the existing predecessor and recognize the deployed
+   `874b79156f420418cb31a08669ccd8cdb3e46218` package fingerprint
+   `985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b`.
+   The storage-only changes must preserve blocked/dead-letter tasks, charged
+   attempts and retry counters. Registry, robots, owner and semantic-input
+   changes retain their existing independent checks; arbitrary later package
+   changes still invalidate compatibility.
 
 Synthetic fixtures cover copy isolation, native/fallback interruption recovery,
 readback corruption, capacity/permission failures, deadline/resume and evidence
@@ -59,7 +67,7 @@ must fit the configured budget. Other-platform streaming has no clone savings.
 
 ## Activation and bounded validation
 
-This PR does not deploy code, reseal a workspace, change cron or reset task holds.
+This PR does not deploy code, reseal a live workspace, change cron or reset task holds.
 An activation must follow the existing exact implementation-binding procedure
 and keep the previous coherent release/configuration available for rollback.
 It must preserve worker/live databases, source evidence and unresolved journals.
