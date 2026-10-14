@@ -1,6 +1,7 @@
 """Synthetic public structures; no sessions, private archives or provider requests."""
 
 from copy import deepcopy
+from functools import partial
 import gzip
 import hashlib
 import json
@@ -149,6 +150,12 @@ def ifad(tmp_path, count=11):
         for n in range(count)
     ]
     return source, jobs, [capture(tmp_path, source, html)]
+
+
+def truncated_ifad(tmp_path, count=11):
+    args = ifad(tmp_path, count=count)
+    mutate_body(args[2][0], lambda html: html + "<div")
+    return args
 
 
 @pytest.mark.parametrize("factory", [who, ifad])
@@ -359,7 +366,15 @@ def test_ifad_unrelated_script_counts_do_not_certify_zero(tmp_path):
     assert not verify_listing(source, [], paths)["complete"]
 
 
-@pytest.mark.parametrize("factory,complete", [(ifad, True), (who, False)])
+@pytest.mark.parametrize(
+    "factory,complete",
+    [
+        (ifad, True),
+        (who, False),
+        (truncated_ifad, False),
+        pytest.param(partial(truncated_ifad, count=0), False, id="truncated-zero"),
+    ],
+)
 @pytest.mark.parametrize("status", ["pending", "unavailable_pending_inventory", "blocked"])
 def test_worker_absence_requires_complete_census_and_preserves_text_history(
     tmp_path, monkeypatch, request, factory, complete, status
@@ -376,8 +391,14 @@ def test_worker_absence_requires_complete_census_and_preserves_text_history(
     http.mkdir(parents=True)
     source, jobs, _ = factory(http, **({"returned": 62} if factory is who else {}))
     worker.by_id[source.id] = source
-    old = deepcopy(jobs[0])
-    old.external_id = "9999999"
+    old = JobRecord(
+        source_id=source.id,
+        org_id=source.id,
+        ats_family=source.ats_family,
+        external_id="9999999",
+        title="Historical officer",
+        apply_url=source.base_url,
+    )
     old.description = "Retained complete historical duties and qualifications. " * 30
     worker.db.upsert_job(old)
     before = worker.db.get_job(old.identity_key())
@@ -423,7 +444,15 @@ def test_worker_absence_requires_complete_census_and_preserves_text_history(
 from test_remediation_worker import setup as worker_setup  # noqa: E402,F401
 
 
-@pytest.mark.parametrize("factory,complete", [(ifad, True), (who, False)])
+@pytest.mark.parametrize(
+    "factory,complete",
+    [
+        (ifad, True),
+        (who, False),
+        (truncated_ifad, False),
+        pytest.param(partial(truncated_ifad, count=0), False, id="truncated-zero"),
+    ],
+)
 @pytest.mark.parametrize("prior_proof_complete", [True, False])
 def test_publication_rechecks_native_census_and_cannot_upgrade_old_incomplete_receipt(
     tmp_path, factory, complete, prior_proof_complete
@@ -431,7 +460,8 @@ def test_publication_rechecks_native_census_and_cannot_upgrade_old_incomplete_re
     from dataclasses import asdict
     from datetime import datetime, timezone
     from jobagg.db import JobDatabase
-    from jobagg.pipelines.live_inventory import plan_frames
+    from jobagg.pipelines.live_inventory import apply_frames, plan_frames
+    from jobagg.pipelines.live_publication import _JOURNAL
 
     http = tmp_path / "capture" / "http"
     http.mkdir(parents=True)
@@ -455,6 +485,27 @@ def test_publication_rechecks_native_census_and_cannot_upgrade_old_incomplete_re
     ]
     for db in (worker, target, live):
         db.initialize()
+    old = JobRecord(
+        source_id=source.id,
+        org_id=source.id,
+        ats_family=source.ats_family,
+        external_id="9999999",
+        title="Historical officer",
+        apply_url=source.base_url,
+        description="Retained complete historical duties and qualifications. " * 30,
+    )
+    before = {}
+    for db in (target, live):
+        db.upsert_job(old)
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET source_listed_current=1,trusted_current=1 WHERE job_key=?",
+                (old.identity_key(),),
+            )
+            conn.execute(
+                f"CREATE TABLE {_JOURNAL}(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)"
+            )
+        before[db.path] = db.get_job(old.identity_key())
     with worker.connect() as conn:
         conn.executescript("""CREATE TABLE remediation_sources(source_id TEXT,last_list_at REAL,listing_ids TEXT,listing_proof TEXT);
         CREATE TABLE remediation_tasks(source_id TEXT,kind TEXT,status TEXT,receipt TEXT);""")
@@ -488,6 +539,104 @@ def test_publication_rechecks_native_census_and_cannot_upgrade_old_incomplete_re
         )
     assert not rejected and len(frames) == 1
     assert frames[0]["inventory_complete"] is (complete and prior_proof_complete)
+    # A saved proof produced by the old buggy verifier cannot authorize absence
+    # in either publication destination after current verification rejects it.
+    for db, destination in zip((target, live), frames[0]["destinations"]):
+        with db.connect() as conn:
+            apply_frames(conn, [(frames[0], destination)], "fixture-generation")
+            published = conn.execute("SELECT * FROM live_listing_frames").fetchone()
+            assert bool(published["inventory_complete"]) is (complete and prior_proof_complete)
+        current = db.get_job(old.identity_key())
+        assert current["source_listed_current"] == int(not (complete and prior_proof_complete))
+        assert current["trusted_current"] == int(not (complete and prior_proof_complete))
+        for field in ("description", "first_seen_at", "status"):
+            assert current[field] == before[db.path][field]
+
+
+@pytest.mark.parametrize("count", [11, 0])
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "<div", '<div title="unfinished', "<!-- unfinished", "<script>unfinished",
+        "<style>unfinished", "<script>", "<", "</", "</div", "<!", "<?unfinished",
+        "<!DOCTYPE html", " &amp<div",
+    ],
+)
+def test_ifad_unfinished_markup_never_certifies_census(tmp_path, count, suffix):
+    from jobagg.adapters.base import AdapterContext
+    from jobagg.adapters.peoplesoft import PeopleSoftAdapter
+
+    source, _, paths = ifad(tmp_path, count=count)
+    mutate_body(paths[0], lambda html: html + suffix)
+    meta = json.loads(paths[0].read_text())
+    html = gzip.decompress(Path(meta["artifact"]).read_bytes()).decode()
+    jobs = PeopleSoftAdapter(AdapterContext(source, None)).parse_listing_html(html)
+    assert len(jobs) == count
+    proof = verify_listing(source, jobs, paths)
+    assert not proof["complete"] and not proof.get("verified_zero", False)
+    assert proof["reasons"] == ["IFAD census ends with unfinished markup"]
+
+
+@pytest.mark.parametrize("count", [11, 0])
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "\n", " &", " &amp", " &#65", " &amp;", " &lt;div", "1 < 2", " & 1 < 2",
+        "<div></div>", "<!-- complete -->", '<script>const x = "<div";</script>',
+        "<style>/* <div */</style>", '<span title="<div"></span>',
+        "<![if IE]><![endif]>",
+    ],
+)
+def test_ifad_valid_trailing_text_and_markup_remain_complete(tmp_path, count, suffix):
+    args = ifad(tmp_path, count=count)
+    mutate_body(args[2][0], lambda html: html + suffix)
+    proof = verify_listing(*args)
+    assert proof["complete"] and proof["verified_zero"] is (count == 0)
+
+
+@pytest.mark.parametrize("surface", ["metadata", "who_body"])
+@pytest.mark.parametrize("damage", ["malformed", "decoder_exhaustion"])
+def test_json_decoder_failures_are_structured_incomplete(tmp_path, surface, damage):
+    args = who(tmp_path)
+    path = args[2][0]
+    # Build the string directly so encoding the fixture cannot hit recursion.
+    value = "[" * 10000 + "0" + "]" * 10000 if damage == "decoder_exhaustion" else "[}"
+
+    def transform(text):
+        return text[:-1] + ',"unused":' + value + "}"
+
+    if surface == "metadata":
+        path.write_text(transform(path.read_text()))
+        assert path.stat().st_size < 256 * 1024
+    else:
+        mutate_body(path, transform)
+    proof = verify_listing(*args)
+    assert not proof["complete"] and not proof.get("verified_zero", False)
+    assert proof["reasons"] == [
+        "Census JSON exceeds decoder nesting limit"
+        if damage == "decoder_exhaustion" else "Census JSON is malformed"
+    ]
+
+
+@pytest.mark.parametrize("factory", [who, ifad])
+@pytest.mark.parametrize("damage", ["missing_metadata", "missing_body", "directory", "gzip", "deflate"])
+def test_capture_io_diagnostics_do_not_include_paths_or_exception_text(tmp_path, factory, damage):
+    source, jobs, paths = factory(tmp_path)
+    meta = json.loads(paths[0].read_text())
+    artifact = Path(meta["artifact"])
+    if damage == "missing_metadata":
+        paths[0] = tmp_path / "synthetic-private-marker-missing.json"
+    elif damage == "missing_body":
+        artifact.unlink()
+    elif damage == "directory":
+        paths[0] = tmp_path
+    elif damage == "gzip":
+        artifact.write_bytes(b"\x1f\x8b")
+    else:
+        artifact.write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\x07")
+    proof = verify_listing(source, jobs, paths)
+    assert not proof["complete"]
+    assert proof["reasons"] == ["Census capture could not be read or decompressed"]
 
 
 @pytest.mark.parametrize("factory", [who, ifad])

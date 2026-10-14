@@ -40,7 +40,7 @@ def _signature(url):
 def _metadata(path):
     path = Path(path)
     require(path.stat().st_size <= 256 * 1024, "Census metadata exceeds read bound")
-    meta = json.loads(path.read_bytes(), object_pairs_hook=_object)
+    meta = _json(path.read_bytes())
     require(isinstance(meta, dict), "Census metadata is not an object")
     return meta
 
@@ -51,6 +51,15 @@ def _object(pairs):
         require(key not in result, "Duplicate census JSON member")
         result[key] = value
     return result
+
+
+def _json(data):
+    try:
+        return json.loads(data, object_pairs_hook=_object)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Census JSON is malformed") from exc
+    except RecursionError as exc:
+        raise ValueError("Census JSON exceeds decoder nesting limit") from exc
 
 
 def _body(source, path, meta, endpoint, method, result, request=None):
@@ -168,9 +177,7 @@ def _who(source, jobs, captures, result):
         require(total is None or pages * size < total, "WHO page follows terminal census")
         request = deepcopy(template)
         request["pageNo"] = pages + 1
-        payload = json.loads(
-            _body(source, path, meta, endpoint, "POST", result, request), object_pairs_hook=_object
-        )
+        payload = _json(_body(source, path, meta, endpoint, "POST", result, request))
         require(
             isinstance(payload, dict) and payload.get("careerSectionUnAvailable") is False,
             "WHO career section is unavailable or ambiguous",
@@ -269,6 +276,15 @@ class _Board(HTMLParser):
         self.root = _Node("root", {}, closed=True)
         self.stack = [self.root]
         self.nodes = []
+
+    def finish(self):
+        # close() can silently turn an unfinished tag/comment into text. Inspect
+        # the pending input first; benign buffered text/entities contain no '<'.
+        require(
+            self.cdata_elem is None and "<" not in self.rawdata,
+            "IFAD census ends with unfinished markup",
+        )
+        self.close()
 
     def parse_html_declaration(self, i):
         if self.rawdata.startswith("<![", i):
@@ -412,6 +428,7 @@ def _ifad(source, jobs, captures, result):
     board = _Board()
     try:
         board.feed(html)
+        board.finish()
     except AssertionError as exc:
         # Retain a defensive boundary for other stdlib parser assertions.
         raise ValueError("IFAD census contains malformed declared markup") from exc
@@ -526,7 +543,10 @@ def verify_who_ifad_listing(source, jobs, capture_paths):
             ).encode()
         ).hexdigest()
         (_who if source.id == "who_taleo" else _ifad)(source, jobs, captures, result)
-    except (ValueError, KeyError, TypeError, OSError, OverflowError, EOFError, zlib.error) as exc:
+    except (OSError, EOFError, zlib.error):
+        result["complete"] = False
+        result["reasons"].append("Census capture could not be read or decompressed")
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:
         result["complete"] = False
         result["reasons"].append(str(exc))
     return result

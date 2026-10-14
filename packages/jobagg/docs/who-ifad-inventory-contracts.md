@@ -60,11 +60,25 @@ and literal declaration-like text in scripts or attributes remain valid. This
 does not depend on `HTMLParser` raising an exception, which differs between
 Python patch releases (the original guard failed on CI's Python 3.12.15).
 
+Before closing the HTML parser, reject buffered unfinished markup and an open
+script/style raw-text state. `HTMLParser.close()` alone can silently consume
+truncated tokens. Trailing text/entities, complete markup and literal less-than
+text remain valid. This is lexical EOF validation; it does not impose mandatory
+end tags on every optional HTML container. The native form/grid closure checks
+still apply. The 12 October review reproduced false complete and verified-zero
+proofs with unfinished tags, attributes, comments and script text at the earlier
+candidate; positive and zero-row regressions now exercise those cases.
+
 Both contracts bind source/family, listing phase, exact HTTPS request/response
 scope, URL and request-body hashes, successful captured status, ordered aware
 timestamps, body length/hash and metadata hashes. Duplicate JSON members and
 ambiguous identity attributes fail closed. Counts, source diagnostics and
 parser success alone do not certify completeness.
+
+Metadata and WHO response JSON decode failures, including decoder recursion
+exhaustion, return structured incomplete proofs with fixed reasons. Filesystem
+and gzip/decompression failures likewise use a path-free diagnostic. Semantic
+validation reasons and intentional internal capture provenance remain intact.
 
 Reads are capped at 64 metadata files of 256 KiB each, 4 MiB compressed and
 expanded per response, 16 MiB expanded in total, 20,000 IFAD DOM nodes and
@@ -135,6 +149,12 @@ grade/text in both destinations when a captured blank-grade revision arrives.
 Retry regressions exercise both deployed predecessor generations and changed
 package/configuration/payload negatives. Declaration regressions must pass on
 both the local Python 3.11 runtime and CI's Python 3.12.15 runtime.
+EOF regressions run on both runtimes and check retained task status, attempts
+and text, plus actual absence/presence publication in both isolated destinations
+even when a saved legacy proof incorrectly claims completeness. Decoder tests
+use malformed JSON and 10,000 nested arrays within the metadata byte limit;
+unlike the original 1,500-level Python 3.11 reproducer, this reaches the decoder
+limit on both tested runtimes. Capture I/O tests require fixed path-free reasons.
 
 Before any separately authorized activation: freeze/review the exact diff and
 full package fingerprint; use the real owner lock and maintenance/publication
