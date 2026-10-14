@@ -14,10 +14,21 @@ from jobagg.vacancy_outcomes import IncompleteDetailResponse
 import test_remediation_worker as fixtures
 
 
-PREDECESSOR = RETRY_EQUIVALENT_IMPLEMENTATIONS[0]
-STORAGE_PREDECESSOR = "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b"
-REVIEWED_PREDECESSORS = (PREDECESSOR, STORAGE_PREDECESSOR)
+REVIEWED_PREDECESSORS = (
+    "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
+    "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
+    "7ec4f5b4d37797599eed3ae04af4c18992dd8a2d7e3c01db742e6d3a8c34362b",
+)
+PREDECESSOR = REVIEWED_PREDECESSORS[0]
 setup = fixtures.setup
+
+
+@pytest.fixture(autouse=True, params=REVIEWED_PREDECESSORS)
+def deployed_predecessor(request, monkeypatch):
+    # Legacy, incident-rollout and merged inventory-verifier receipts retain
+    # their retry budgets through this combined inventory/storage successor.
+    assert request.param in RETRY_EQUIVALENT_IMPLEMENTATIONS
+    monkeypatch.setitem(globals(), "PREDECESSOR", request.param)
 
 
 def comparison_worker():
@@ -30,16 +41,14 @@ def comparison_worker():
     return worker
 
 
-def old_digest(worker, payload, predecessor=PREDECESSOR):
-    return worker.retry_input_fingerprint(payload, implementation_sha256=predecessor)
+def old_digest(worker, payload):
+    return worker.retry_input_fingerprint(payload, implementation_sha256=PREDECESSOR)
 
 
-@pytest.mark.parametrize("predecessor", REVIEWED_PREDECESSORS)
-def test_only_exact_reviewed_predecessor_is_retry_equivalent(predecessor):
+def test_only_exact_reviewed_predecessor_is_retry_equivalent():
     worker = comparison_worker()
     payload = {"listing": {"source_url": "https://example.org/job/1", "title": "Analyst"}}
-    assert predecessor in RETRY_EQUIVALENT_IMPLEMENTATIONS
-    saved = old_digest(worker, payload, predecessor)
+    saved = old_digest(worker, payload)
     assert saved != worker.retry_input_fingerprint(payload)
     assert worker.retry_input_matches(saved, payload)
     assert not worker.retry_input_matches(None, payload)
@@ -154,36 +163,32 @@ def test_later_reseal_reopens_predecessor_failure_without_resetting_history(setu
 
 
 @pytest.mark.parametrize("field", ["version", "registry_sha256", "robots_sha256", "shared_lock"])
-@pytest.mark.parametrize("predecessor", REVIEWED_PREDECESSORS)
-def test_retry_equivalence_does_not_alias_other_binding_changes(field, predecessor):
+def test_retry_equivalence_does_not_alias_other_binding_changes(field):
     worker = comparison_worker()
     payload = {"listing": {"source_url": "https://example.org/job/1"}}
-    saved = old_digest(worker, payload, predecessor)
+    saved = old_digest(worker, payload)
     worker.binding[field] = "changed-" + field
     assert not worker.retry_input_matches(saved, payload)
 
 
 @pytest.mark.parametrize("field", ["source_url", "title", "external_id"])
-@pytest.mark.parametrize("predecessor", REVIEWED_PREDECESSORS)
-def test_actual_semantic_input_change_is_not_aliased(field, predecessor):
+def test_actual_semantic_input_change_is_not_aliased(field):
     worker = comparison_worker()
     payload = {"listing": {"source_url": "https://example.org/job/1", "title": "Role", "external_id": "1"}}
-    saved = old_digest(worker, payload, predecessor)
+    saved = old_digest(worker, payload)
     payload["listing"][field] = "changed"
     assert not worker.retry_input_matches(saved, payload)
 
 
 @pytest.mark.parametrize("status", ["blocked", "dead_letter"])
-@pytest.mark.parametrize("predecessor", REVIEWED_PREDECESSORS)
-def test_reseal_and_new_frame_preserve_entire_unselected_task_and_policy(setup, status, predecessor):
+def test_reseal_and_new_frame_preserve_entire_unselected_task_and_policy(setup, status):
     worker, _, calls, _ = setup
     worker.max_tasks = 1
     worker.tick(execute=True)
     with worker.db.connection_scope() as conn:
         task = dict(conn.execute("SELECT * FROM remediation_tasks WHERE kind='detail'").fetchone())
         payload = json.loads(task["payload"])
-        receipt = {"retry_input_sha256": old_digest(worker, payload, predecessor),
-                   "incomplete_response_count": 3}
+        receipt = {"retry_input_sha256": old_digest(worker, payload), "incomplete_response_count": 3}
         conn.execute("UPDATE remediation_tasks SET status=?,receipt=?,last_error=?,attempts=7,eligible_at=12345 WHERE task_id=?",
                      (status, dump(receipt), "Retained failure", task["task_id"]))
         before = dict(conn.execute("SELECT * FROM remediation_tasks WHERE task_id=?", (task["task_id"],)).fetchone())
@@ -209,11 +214,10 @@ def test_reseal_and_new_frame_preserve_entire_unselected_task_and_policy(setup, 
     ("detail", "incomplete_response_count", IncompleteDetailResponse("No native identity")),
     ("listing", "inventory_change_count", IDBInventoryChanged("Changed total")),
 ])
-@pytest.mark.parametrize("predecessor", REVIEWED_PREDECESSORS)
-def test_reseal_retains_semantic_counts_and_exhaustion(tmp_path, kind, counter, error, predecessor):
+def test_reseal_retains_semantic_counts_and_exhaustion(tmp_path, kind, counter, error):
     worker = comparison_worker()
     payload = {"listing": {"source_url": "https://example.org/job/1"}} if kind == "detail" else {}
-    receipt = {"retry_input_sha256": old_digest(worker, payload, predecessor), counter: 2}
+    receipt = {"retry_input_sha256": old_digest(worker, payload), counter: 2}
     task = {"payload": dump(payload), "receipt": dump(receipt), "kind": kind}
     reader = worker.incomplete_response_count if kind == "detail" else worker.inventory_change_count
     assert reader(task) == 2

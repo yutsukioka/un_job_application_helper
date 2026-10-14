@@ -58,6 +58,17 @@ reserve failed, the configuration check prevented even a cleanup-only attempt.
    changes retain their existing independent checks; arbitrary later package
    changes still invalidate compatibility.
 
+The combined branch also retains the WHO/IFAD captured-inventory verifier repair
+from merged PR #136 (`33edfb9cae5cefa932a29b1b4cbe3ab4cb608a72`) unchanged.
+Its 142-module package fingerprint
+`7ec4f5b4d37797599eed3ae04af4c18992dd8a2d7e3c01db742e6d3a8c34362b`
+is an additional exact retry predecessor for the storage-only delta from that
+master revision. A fresh explicit compatibility seal covers the entire combined
+package; neither parent branch's seal is reused. Every compatibility regression
+is exercised against all three reviewed predecessors, including rejection of
+later unreviewed changes. This declaration does not assert that PR #136 was
+deployed or authorize deployment or hold release.
+
 Synthetic fixtures cover copy isolation, native/fallback interruption recovery,
 readback corruption, capacity/permission failures, deadline/resume and evidence
 mutation, protected generations/checkpoints, owner contention and low-space
