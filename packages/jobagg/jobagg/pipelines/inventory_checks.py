@@ -55,14 +55,14 @@ def source_capability(source: OrganizationSource) -> dict:
             gaps = []
         else:
             gaps.append("Latest-jobs feed is a subset of the full public board.")
-    if source.id in {"unicef_pageup", "fao_taleo", "unv_uvp", "unops_avature", "worldbank_csod", "icddrb_custom_html", "itcilo_custom_html"}:
+    if source.id in {"who_taleo", "ifad_peoplesoft", "unicef_pageup", "fao_taleo", "unv_uvp", "unops_avature", "worldbank_csod", "icddrb_custom_html", "itcilo_custom_html"}:
         gaps = []
     return {
         "source_id": source.id,
         "enabled": source.enabled,
         "transport": mode,
         "full_detail_contract": detail,
-        "enumeration_contract": ("osce_full_search_v1" if source.id == "osce_custom_html" and source.extra.get("browser_render", {}).get("inventory") == "osce_full_search_v1" else None) or {"worldbank_csod": "csod_pages_v1", "icddrb_custom_html": "icddrb_custom_html_tables_v1", "itcilo_custom_html": "itcilo_custom_html_tables_v1", "unicef_pageup": "unicef_pageup_v1", "fao_taleo": "fao_taleo_locales_v1", "unv_uvp": "unv_search_pages_v1", "unops_avature": "unops_public_pages_v1"}.get(source.id) or ("idb_public_search_api_v1" if source.id == "idb_successfactors" and source.extra.get("public_search_api") else "idb_fullboard_dom_v1" if source.id == "idb_successfactors" and source.extra.get("public_all_jobs_url") else {"workday": "workday_cxs_v1", "oracle_hcm": "oracle_ce_v1",
+        "enumeration_contract": ("osce_full_search_v1" if source.id == "osce_custom_html" and source.extra.get("browser_render", {}).get("inventory") == "osce_full_search_v1" else None) or {"who_taleo": "who_rest_en_v1", "ifad_peoplesoft": "ifad_public_grid_v1", "worldbank_csod": "csod_pages_v1", "icddrb_custom_html": "icddrb_custom_html_tables_v1", "itcilo_custom_html": "itcilo_custom_html_tables_v1", "unicef_pageup": "unicef_pageup_v1", "fao_taleo": "fao_taleo_locales_v1", "unv_uvp": "unv_search_pages_v1", "unops_avature": "unops_public_pages_v1"}.get(source.id) or ("idb_public_search_api_v1" if source.id == "idb_successfactors" and source.extra.get("public_search_api") else "idb_fullboard_dom_v1" if source.id == "idb_successfactors" and source.extra.get("public_all_jobs_url") else {"workday": "workday_cxs_v1", "oracle_hcm": "oracle_ce_v1",
                                  "smartrecruiters": "smartrecruiters_postings_v1"}.get(family, "unsupported")),
         "limitations": gaps,
         "independent_whole_public_text_verification": "not_implemented",
@@ -84,6 +84,9 @@ def verify_listing(source, jobs, capture_paths) -> dict:
     interval. It does not assert that a publisher exposes every vacancy there.
     """
     family = source.adapter or source.ats_family
+    if source.id in {"who_taleo", "ifad_peoplesoft"}:
+        from jobagg.pipelines.inventory_who_ifad import verify_who_ifad_listing
+        return verify_who_ifad_listing(source, jobs, capture_paths)
     if source.id in {"icddrb_custom_html", "itcilo_custom_html"}:
         from jobagg.pipelines.inventory_four_source import verify_table_listing
         return verify_table_listing(source, jobs, capture_paths)
