@@ -8,8 +8,11 @@ Windows temporary-directory file-lock failure.
 
 Flutter 3.44.4 mounts its final `View` after the test callback returns, then runs
 user teardowns before `binding.postTest` disposes the focus manager.
-`registerAtlasViewCleanup` therefore unmounts the view in a user teardown and
-pumps pending focus work while the manager is alive. It is registered before
+`registerAtlasViewCleanup` therefore replaces the final `View` with a `RawView`
+in a user teardown and pumps pending focus work while the manager is alive.
+`RawView` retains the implicit render target for native pointer packets without
+the `View` focus observer or `FocusScope`. The helper asserts their absence,
+the retained render target, and no pending framework exception. It is registered before
 the existing resource teardown, so resources close first under reverse teardown
 ordering. The migration stages, persistence assertions, process coordination,
 and `leaveForFreshProcess` behavior are unchanged.
@@ -50,6 +53,15 @@ From `apps/atlas_flutter`, run the committed host regression with:
 flutter test test/atlas_view_focus_lifecycle_test.dart
 ```
 
+The separate `test/atlas_view_pointer_lifecycle_test.dart` sends mouse hover,
+down and up packets through `handlePointerEventForSource` with `source: device`
+after the helper teardown. It verifies that the tester still owns the device
+dispatcher and that device propagation has not been changed. Replacing the
+helper with its earlier empty-`ViewCollection` implementation exits 1 at
+`LiveTestWidgetsFlutterBinding.handlePointerEvent`'s `renderViews.firstWhere`,
+with `Bad state: No element`. The `RawView` helper passes the same test. No
+dispatcher is disabled and no exception is caught or ignored.
+
 For the integration-binding host probe, a temporary Dart test outside
 `integration_test/` imports `package:integration_test/integration_test.dart` and
 `integration_test/atlas_vault_windows_focus_lifecycle_test.dart`. Its asynchronous
@@ -60,8 +72,13 @@ Run that wrapper with `flutter test` and
 Flutter's tool-collected reporting mode. This exercises the integration
 binding on the host tester; it does not run a native Windows executable.
 
-Static analysis passed and all five changed Dart files passed formatting.
-The full host suite finished with **1,034 passes, 7 skips, 4 failures**. Its only
+The pointer regression, focus regression and preinitialized integration-binding
+host probe pass together: **3 tests, exit 0**. Both cleanup-omitted focus controls
+still fail with the original disposed-manager stack. This is host validation;
+native Windows validation remains required.
+
+Before the `RawView` correction, the full host suite finished with
+**1,034 passes, 7 skips, 4 failures**. Its only
 failures were unchanged tab goldens, reproduced standalone with identical
 12/8/8/4-pixel differences; the tab test, golden assets and application Dart
 sources match base revision `4aa8b8f0`. The seven skips were five search parity
@@ -91,6 +108,15 @@ revised host probe with launcher preinitialization passes, and cleanup-disabled
 controls for both host bindings still fail with the original disposed-manager
 stack.
 
-Native Windows validation of the revised bootstrap, the native negative
+The subsequent candidate `770ffc04` passed native bootstrap in
+[Windows persistence job 116386224608](https://github.com/yutsukioka/un_job_application_helper/actions/runs/38724295762/job/116386224608)
+but failed the helper's no-exception assertion at **2026-10-15 11:04:49 UTC**
+with `Bad state: No element`. Storage and private-state prepare/verify passed;
+migration recovery was again not reached. That log reports only the assertion
+stack because `takeException` consumed the framework exception. The separate
+pointer control reproduces a concrete matching failure mechanism with the full
+`renderViews.firstWhere` stack; the next native run must confirm the correction.
+
+Native Windows validation of the `RawView` correction, the native negative
 control, and full migration persistence stages remain pending. Host reproduction
-and clean static analysis do not substitute for candidate-revision CI results.
+does not substitute for candidate-revision CI results.
