@@ -17,12 +17,19 @@ and `leaveForFreshProcess` behavior are unchanged.
 ## Deterministic reproduction
 
 The shared regression parks focus on the root in an asynchronous user teardown
-and pumps that setup work. Its binding then delivers a focused `ViewFocusEvent`
-through `handleViewFocusChanged` **after** `super.postTest`. The suite drains the
-queued event work and asserts that the body ran and exactly one event was
-injected. It neither catches asynchronous exceptions nor replaces error
-handlers. Focus preparation must not occur inside synchronous `postTest`: its
-own pending microtask could otherwise produce a misleading failure.
+and pumps that setup work. Its suite teardown then delivers a focused
+`ViewFocusEvent` through `handleViewFocusChanged` **after** the framework's actual
+`postTest`. Before injection it asserts that the body ran, `inTest` is false,
+and the focus manager has been replaced. It injects exactly one event and drains
+the queued work before the integration binding's final reporter. It neither
+catches asynchronous exceptions nor replaces error handlers. Focus preparation
+must not occur inside synchronous `postTest`: its own pending microtask could
+otherwise produce a misleading failure.
+
+The native fixture reuses `IntegrationTestWidgetsFlutterBinding.ensureInitialized()`.
+Flutter 3.44.4's native launcher initializes that binding before invoking the
+fixture's `main`, so constructing a custom binding there is invalid. Suite
+teardown provides the required lifecycle position with the existing binding.
 
 Observed on macOS with Flutter **3.44.4**, framework
 `ad70ec4617166f1c38e5d2bfd388af71fda14f06`, Dart **3.12.2**:
@@ -44,9 +51,11 @@ flutter test test/atlas_view_focus_lifecycle_test.dart
 ```
 
 For the integration-binding host probe, a temporary Dart test outside
-`integration_test/` imports
-`integration_test/atlas_vault_windows_focus_lifecycle_test.dart` and calls its
-`main()`. Run that wrapper with `flutter test` and
+`integration_test/` imports `package:integration_test/integration_test.dart` and
+`integration_test/atlas_vault_windows_focus_lifecycle_test.dart`. Its asynchronous
+`main` calls `IntegrationTestWidgetsFlutterBinding.ensureInitialized()` before
+`await Future(native.main)`, matching the native launcher's initialization order.
+Run that wrapper with `flutter test` and
 `--dart-define=INTEGRATION_TEST_SHOULD_REPORT_RESULTS_TO_NATIVE=false`, matching
 Flutter's tool-collected reporting mode. This exercises the integration
 binding on the host tester; it does not run a native Windows executable.
@@ -73,7 +82,15 @@ recovery process pairs, including migration-finalization-waiter. It runs on
 schedule or manual dispatch; PR coverage uses
 `scripts/ci/atlasvault_windows.ps1` through the cross-platform security workflow.
 
-Native Windows execution, the native negative control, and the full migration
-persistence stages have **not yet been run for this change**. Host reproduction
-and clean static analysis establish the lifecycle fix's local behavior; they
-do not substitute for those candidate-revision CI results.
+The initial candidate `7760b0ec` reached the native fixture in
+[Windows persistence job 116379920903](https://github.com/yutsukioka/un_job_application_helper/actions/runs/38722404220/job/116379920903),
+where the original custom binding failed to initialize because the launcher had
+already created one. Storage and private-state prepare/verify passed; migration
+recovery stages were not reached. The fixture now reuses that binding. The
+revised host probe with launcher preinitialization passes, and cleanup-disabled
+controls for both host bindings still fail with the original disposed-manager
+stack.
+
+Native Windows validation of the revised bootstrap, the native negative
+control, and full migration persistence stages remain pending. Host reproduction
+and clean static analysis do not substitute for candidate-revision CI results.
