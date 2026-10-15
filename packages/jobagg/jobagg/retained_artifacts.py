@@ -90,6 +90,12 @@ def open_artifact(path):
         with path.open("rb") as stream:
             yield stream
         return
+    from jobagg import publication_artifacts
+
+    if publication_artifacts.sidecar(path).exists():
+        with publication_artifacts.open_artifact(path) as stream:
+            yield stream
+        return
     receipt, blob = _receipt(path)
     # Validate before allowing a recovery copy to consume any bytes.
     _verify_blob(blob, {k: receipt[k] for k in ("sha256", "size")})
@@ -98,6 +104,10 @@ def open_artifact(path):
 
 
 def archived_fingerprint(path):
+    from jobagg import publication_artifacts
+
+    if publication_artifacts.sidecar(path).exists():
+        return publication_artifacts.fingerprint(path)
     if not tombstone(path).exists():
         return None
     with open_artifact(path) as stream:
@@ -183,6 +193,11 @@ def candidates(state_dir, output_dir, *, retain_days=7, now=None, max_files=100)
     verified = {}
     for root in sorted((state_dir / "generations").iterdir()):
         if root.is_symlink() or not root.is_dir() or root.name == gate.get("generation_id"):
+            continue
+        history = storage_retention._terminal_history_state(root)
+        if history == "retired_terminal":
+            continue
+        if history == "retirement_pending":
             continue
         result_path = root / "result.json"
         if not result_path.exists():

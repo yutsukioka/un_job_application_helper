@@ -48,6 +48,9 @@ try {
     & flutter build windows --debug
     Assert-LastExitCode "Windows Debug build"
 
+    & flutter test integration_test\atlas_vault_windows_focus_lifecycle_test.dart -d windows
+    Assert-LastExitCode "Native Windows post-test focus lifecycle"
+
     & flutter build windows --release
     Assert-LastExitCode "Windows Release build"
 }

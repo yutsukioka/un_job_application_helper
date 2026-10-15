@@ -108,17 +108,27 @@ def test_retention_runs_under_owner_after_terminal_health_record(monkeypatch, tm
     assert result["storage_retention"]["status"] == "complete"
 
 
-def test_retention_disabled_or_unresolved_never_calls_helper(monkeypatch, tmp_path):
+def test_retention_disabled_never_calls_helper(monkeypatch, tmp_path):
     def forbidden(*_args, **_kwargs):
         raise AssertionError("retention helper was called")
 
     config, _ = _mock_tick(monkeypatch, tmp_path, enabled=False, prune=forbidden)
     assert "storage_retention" not in runner.tick(config, [])
-    config, _ = _mock_tick(monkeypatch, tmp_path, unresolved=True, prune=forbidden)
+
+
+def test_unresolved_allows_independent_cleanup_without_worker_or_recovery(monkeypatch, tmp_path):
+    calls = []
+    config, _ = _mock_tick(monkeypatch, tmp_path, unresolved=True,
+                          prune=lambda *_a, **_k: calls.append("prune") or
+                          {"deadline_deferred": False, "removed_groups": 1})
+    for name in ("locked_tick", "recover_stale_runs", "resume_publication"):
+        monkeypatch.setattr(runner, name, lambda *_a, **_k: pytest.fail("maintenance dispatched work"))
     result = runner.tick(config, [])
-    assert result["storage_retention"] == {
-        "status": "skipped", "reason": "unresolved_publication",
-    }
+    assert calls == ["prune"]
+    assert result["status"] == "publication_held"
+    assert result["worker_dispatched"] is False
+    assert result["publisher_dispatched"] is False
+    assert result["storage_retention"]["status"] == "complete"
 
 
 def test_retention_skips_maintenance_pause_after_work(monkeypatch, tmp_path):
@@ -254,7 +264,9 @@ def test_reclaimed_reserve_is_rechecked_before_work_and_maintenance_is_not_doubl
 @pytest.mark.parametrize("gate", ["maintenance", "unresolved", "owner"])
 def test_low_reserve_preserves_maintenance_publication_and_owner_gates(monkeypatch, tmp_path, gate):
     config, _ = _mock_tick(monkeypatch, tmp_path, unresolved=gate == "unresolved",
-                          prune=lambda *_a, **_k: pytest.fail("protected cleanup"))
+                          prune=(lambda *_a, **_k: {"deadline_deferred": False, "removed_groups": 0})
+                          if gate == "unresolved" else
+                          lambda *_a, **_k: pytest.fail("protected cleanup"))
     _under_reserve(monkeypatch)
     monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("protected worker"))
     if gate == "maintenance":
@@ -262,7 +274,8 @@ def test_low_reserve_preserves_maintenance_publication_and_owner_gates(monkeypat
         assert runner.tick(config, [])["status"] == "maintenance_paused"
     elif gate == "unresolved":
         result = runner.tick(config, [])
-        assert result["storage_retention"]["reason"] == "unresolved_publication"
+        assert result["status"] == "publication_held"
+        assert result["storage_retention"]["status"] == "complete"
         assert result["unresolved_publication"] is True
     else:
         with config["shared_lock_path"].open("w") as owner:
@@ -307,12 +320,12 @@ def test_load_config_only_defers_reserve_for_explicit_enabled_maintenance(monkey
     assert checks == [True, False, True]
 
 
-def test_retention_gate_scan_error_preserves_successful_publication(monkeypatch, tmp_path):
+def test_retention_gate_scan_error_blocks_unverified_new_work(monkeypatch, tmp_path):
     config, health = _mock_tick(monkeypatch, tmp_path,
                                prune=lambda *_a, **_k: pytest.fail("uncertain gate"))
     scans = 0
 
-    def unresolved(_root):
+    def unresolved(_root, _config=None):
         nonlocal scans
         scans += 1
         if scans == 1:
@@ -321,8 +334,50 @@ def test_retention_gate_scan_error_preserves_successful_publication(monkeypatch,
 
     monkeypatch.setattr(runner, "unresolved_publications", unresolved)
     result = runner.tick(config, [])
-    assert result["status"] == "complete"
-    assert result["publication_status"] == "published"
+    assert result["status"] == "process_failure"
+    assert "malformed" in result["reasons"][0]
     assert result["storage_retention"]["status"] == "error"
     assert "malformed" in result["storage_retention"]["reason"]
-    assert health == [{"status": "complete", "publication_status": "published"}]
+    assert health[0]["status"] == "process_failure"
+
+
+@pytest.mark.parametrize("max_groups, projection_count, history_count", [(3, 1, 1), (8, 2, 5), (3, 0, 0)])
+def test_activated_maintenance_shares_group_deadline_and_protection(
+        monkeypatch, tmp_path, max_groups, projection_count, history_count):
+    calls = []
+    protection = {"runs": {"unresolved-a"}, "generations": {"current", "previous"}}
+    config, _ = _mock_tick(monkeypatch, tmp_path)
+    config["history_policy"] = {"enabled": True, "selected_runs": ["incident-a"]}
+    config["storage_cycle"] = {"scratch_dir": str(tmp_path / "work")}
+    config["storage_retention"].update(max_groups=max_groups, selected_runs=["incident-b"])
+    budget = object()
+
+    def projections(_root, **kw):
+        calls.append(("projection", kw))
+        assert kw["selected_runs"] == ["incident-a", "incident-b"]
+        assert kw["budget"] is budget
+        assert kw["max_groups"] == max(1, max_groups // 3)
+        return {"selected": [{}] * projection_count}
+
+    def history(_root, **kw):
+        calls.append(("history", kw))
+        assert kw["policy"]["selected_runs"] == ["incident-a", "incident-b"]
+        assert kw["max_groups"] == max_groups - projection_count - 1
+        return {"selected": [{}] * history_count, "protected": protection}
+
+    def copies(_root, **kw):
+        calls.append(("copies", kw))
+        assert kw["protection"] is protection
+        assert kw["selected_runs"] == ["incident-a", "incident-b"]
+        assert kw["selected_generations"] == []
+        assert kw["max_groups"] == max_groups - projection_count - history_count
+        return {"deadline_deferred": False}
+
+    monkeypatch.setattr(runner, "package_helper", lambda *_: SimpleNamespace(
+        retire_published_projections=projections, maintain_history=history))
+    monkeypatch.setattr(runner, "retention_helper", lambda *_: SimpleNamespace(prune_completed=copies))
+    result = runner.maintain_storage(config, 123, budget)
+    assert result["status"] == "complete", result
+    assert [item[0] for item in calls] == ["projection", "history", "copies"]
+    assert len({item[1]["deadline_at"] for item in calls}) == 1
+    assert all(item[1]["owner_fd"] == 123 for item in calls)

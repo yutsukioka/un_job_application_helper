@@ -268,7 +268,7 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
     status = task["status"]
     if status == "pending":
         listing = admission_for(task, due=task["eligible_at"])
-    elif status in {"blocked", "interrupted", "inflight", "unavailable_pending_inventory", "listing_detail_conflict"}:
+    elif status in {"blocked", "interrupted", "inflight", "storage_held", "unavailable_pending_inventory", "listing_detail_conflict"}:
         host, _ = host_info(task)
         listing = {"host": host, "eligible": False, "next_permitted_attempt_at": None,
                    "reasons": ["listing_" + status, *source_reasons]}

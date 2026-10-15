@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
+from contextlib import nullcontext
 from pathlib import Path
 
 from jobagg.db import JobDatabase
-
 
 EXPORT_FIELDS = [
     "source_id",
@@ -129,6 +129,7 @@ def export_jobs(
     trusted_current_only: bool = False,
     application_ready_only: bool = False,
     history_only: bool = False,
+    output_stream=None,
 ) -> None:
     if output_format not in {"json", "csv"}:
         raise ValueError(f"Unsupported export format: {output_format}")
@@ -145,20 +146,28 @@ def export_jobs(
         # Exactly the existing json.dumps(list(rows), indent=2) encoding,
         # while retaining only one database row at a time.
         encoder = json.JSONEncoder(indent=2, ensure_ascii=True)
-        with path.open("w", encoding="utf-8") as handle:
+        with (nullcontext(output_stream) if output_stream is not None else path.open("w", encoding="utf-8")) as handle:
             handle.write("[")
+            boundary = getattr(handle, "record_boundary", lambda: None)
+            boundary()
             first = True
             for row in rows:
                 handle.write("\n  " if first else ",\n  ")
                 for chunk in encoder.iterencode(row):
                     handle.write(chunk.replace("\n", "\n  "))
                 handle.flush()
+                boundary()
                 first = False
             handle.write("]" if first else "\n]")
+            boundary()
         return
     if output_format == "csv":
-        with path.open("w", newline="", encoding="utf-8") as handle:
+        with (nullcontext(output_stream) if output_stream is not None else path.open("w", newline="", encoding="utf-8")) as handle:
             writer = csv.DictWriter(handle, fieldnames=EXPORT_FIELDS, extrasaction="ignore")
+            boundary = getattr(handle, "record_boundary", lambda: None)
             writer.writeheader()
-            writer.writerows(rows)
+            boundary()
+            for row in rows:
+                writer.writerow(row)
+                boundary()
         return

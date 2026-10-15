@@ -362,7 +362,7 @@ def test_generation_with_verified_cold_plan_remains_eligible(tmp_path):
     assert (generation / "storage-cold-archive.json").exists()
 
 
-def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
+def test_calendar_dates_do_not_allocate_automatic_full_copies(tmp_path):
     root = make_root(tmp_path)
     dates = [
         "2025-08-01T01:00:00+00:00",  # older than the 12-month monthly window
@@ -379,12 +379,22 @@ def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
         root, max_groups=10, as_of=datetime(2026, 9, 28, 12, tzinfo=UTC)
     )
     selected = {item["id"] for item in result["selected"]}
-    assert selected == {runs[index].name for index in (0, 1, 3, 5)}
+    assert selected == {run.name for run in runs[:-2]}
     assert result["protected_run_checkpoints"]["newest_two_or_more"] == 2
-    assert result["protected_run_checkpoints"]["daily_30_days"] == 3
-    assert result["protected_run_checkpoints"]["monthly_12_months"] == 2
-    assert result["skipped_protected"]["run_snapshot"] == 4
-    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == 4
+    assert result["protected_run_checkpoints"]["selected_evidence"] == 0
+    assert result["skipped_protected"]["run_snapshot"] == 2
+    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == 6
+
+
+def test_selected_incident_evidence_has_explicit_byte_ceiling(tmp_path):
+    root, runs, generations = make_populated_root(tmp_path)
+    result = retention.prune_completed(root, selected_runs=[runs[0].name],
+                                       selected_generations=[generations[0].name])
+    assert result["eligible_groups"] == 0
+    assert result["selected_evidence_bytes"] > 0
+    with pytest.raises(ValueError, match="byte ceiling"):
+        retention.prune_completed(root, selected_runs=[runs[0].name],
+                                  selected_evidence_bytes_limit=1)
 
 
 def execute_retention(root, **kwargs):

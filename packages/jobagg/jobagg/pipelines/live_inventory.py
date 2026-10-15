@@ -16,6 +16,9 @@ from jobagg.pipelines.inventory_checks import verify_listing
 
 
 def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None):
+    import time
+    from contextlib import closing
+
     from jobagg.pipelines.live_publication import (
         _capture,
         _digest,
@@ -25,8 +28,6 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
         _ro,
         _sha,
     )
-    from contextlib import closing
-    import time
 
     frames, rejected = [], []
     if not worker.execute(
@@ -170,15 +171,19 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
     return frames, rejected
 
 
-def apply_frames(conn, frames, generation, *, changed_keys=()):
+def apply_frames(conn, frames, generation, *, changed_keys=(), deferred_receipts=None):
     from jobagg.pipelines.live_publication import _JOURNAL, _dump, _now, _receipt_exists
 
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS live_listing_frames(source_id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,frame_sha256 TEXT NOT NULL,inventory_complete INTEGER NOT NULL,observed_count INTEGER NOT NULL,proof_json TEXT NOT NULL,generation_id TEXT NOT NULL)"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS live_listing_inventory(source_id TEXT NOT NULL,external_id TEXT NOT NULL,worker_job_key TEXT NOT NULL,canonical_job_key TEXT,title TEXT NOT NULL,apply_url TEXT NOT NULL,observed_at TEXT NOT NULL,observed_in_latest_listing INTEGER,inventory_complete INTEGER NOT NULL,published_detail INTEGER NOT NULL,listing_json TEXT NOT NULL,generation_id TEXT NOT NULL,PRIMARY KEY(source_id,external_id))"""
-    )
+    # Activated publication has already created and fenced these tables. Avoid
+    # even no-op DDL inside that admitted transaction; runtime DDL stays denied.
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_listing_frames'").fetchone():
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS live_listing_frames(source_id TEXT PRIMARY KEY,observed_at TEXT NOT NULL,frame_sha256 TEXT NOT NULL,inventory_complete INTEGER NOT NULL,observed_count INTEGER NOT NULL,proof_json TEXT NOT NULL,generation_id TEXT NOT NULL)"""
+        )
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_listing_inventory'").fetchone():
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS live_listing_inventory(source_id TEXT NOT NULL,external_id TEXT NOT NULL,worker_job_key TEXT NOT NULL,canonical_job_key TEXT,title TEXT NOT NULL,apply_url TEXT NOT NULL,observed_at TEXT NOT NULL,observed_in_latest_listing INTEGER,inventory_complete INTEGER NOT NULL,published_detail INTEGER NOT NULL,listing_json TEXT NOT NULL,generation_id TEXT NOT NULL,PRIMARY KEY(source_id,external_id))"""
+        )
     for frame, destination in frames:
         if _receipt_exists(conn, frame["publication_key"]):
             continue
@@ -266,7 +271,8 @@ def apply_frames(conn, frames, generation, *, changed_keys=()):
                 generation,
             ),
         )
-        conn.execute(
-            f"INSERT INTO {_JOURNAL} VALUES(?,?,?,?)",
-            (frame["publication_key"], generation, "source:" + frame["source_id"], _now()),
-        )
+        receipt = (frame["publication_key"], generation, "source:" + frame["source_id"], _now())
+        if deferred_receipts is None:
+            conn.execute(f"INSERT INTO {_JOURNAL} VALUES(?,?,?,?)", receipt)
+        else:
+            deferred_receipts.append(receipt)

@@ -10,6 +10,11 @@ ATS family in `config/organizations.yaml`, the sync pipeline resolves that famil
 to an adapter, and normalized job records are persisted into SQLite with stable
 content hashes for change detection.
 
+The deterministic dispatcher has an opt-in
+[fixed active storage budget](docs/fixed-storage-budget.md), with bounded
+publication, retained semantic history and resumable storage deferrals. Its
+activation requirements and cooperative-enforcement limits are documented there.
+
 ## Quick Start
 
 ```bash

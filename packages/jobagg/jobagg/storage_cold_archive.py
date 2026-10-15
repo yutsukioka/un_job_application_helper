@@ -13,25 +13,46 @@ Restoration writes the original bytes back to their original paths.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from datetime import datetime
 import fcntl
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import tempfile
 import time
-
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
 
 MANIFEST = "storage-cold-archive.json"
 EXPORT_RETENTION_RECEIPT = "storage-retention.json"
 _GENERATION = re.compile(r"[0-9a-f]{32}\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _CHUNK = 1024 * 1024
+_HISTORY_HELPER = None
+
+
+def _terminal_history_state(path):
+    global _HISTORY_HELPER
+    if not any((path / name).exists() or (path / name).is_symlink() for name in (
+        "terminal-history-retirement.intent.json", "terminal-history-retirement.json"
+    )):
+        return "legacy_active"
+    if _HISTORY_HELPER is None:
+        source = Path(__file__).with_name("terminal_history.py")
+        spec = importlib.util.spec_from_file_location("jobagg_terminal_history_cold", source)
+        module = importlib.util.module_from_spec(spec)
+        before = _digest(source)
+        code = source.read_bytes()
+        if hashlib.sha256(code).hexdigest() != before[0] or _digest(source) != before:
+            raise ValueError("Terminal history helper changed during read")
+        # Reviewed sibling module, bound by the package implementation hash.
+        exec(compile(code, str(source), "exec"), module.__dict__)  # noqa: S102  # nosec B102
+        _HISTORY_HELPER = module
+    return _HISTORY_HELPER.classify_history(path)["disposition"]
 
 
 def _check_deadline(deadline_at: float | None) -> None:
@@ -307,6 +328,11 @@ def _bound_generations(dispatcher_state_dir: str | Path, publication_state_dir: 
             continue
         if run.is_symlink() or not run.is_dir():
             raise ValueError("Dispatcher runs directory has an unexpected entry")
+        history = _terminal_history_state(run)
+        if history == "retired_terminal":
+            continue
+        # Pending run retirement still pins its ordinary historical edges.
+        # It does not block unrelated completed generation maintenance.
         path = run / "publication_generation_binding.json"
         if path.exists() or path.is_symlink():
             binding = _json(path)
@@ -364,13 +390,21 @@ def preview_archive(state_dir: str | Path, output_dir: str | Path, *, dispatcher
     )
     if any(path.is_symlink() or not path.is_dir() or not _GENERATION.fullmatch(path.name) for path in all_generations):
         raise ValueError("Publication generations directory has an unexpected entry")
-    completed = {path.name: item for path in all_generations if (item := _completed(path)) is not None}
+    history_states = {path.name: _terminal_history_state(path) for path in all_generations}
+    retired = {name for name, state in history_states.items() if state == "retired_terminal"}
+    pending_history = {name for name, state in history_states.items() if state == "retirement_pending"}
+    completed = {path.name: item for path in all_generations
+                 if path.name not in retired | pending_history and (item := _completed(path)) is not None}
     newest = {
         name for name, _ in sorted(completed.items(), key=lambda item: item[1]["completed_at"], reverse=True)[:2]
     }
-    protected = newest | {gate["generation_id"]} | bound
+    protected = newest | {gate["generation_id"]} | bound | pending_history
     entries = []
     for generation in all_generations:
+        if generation.name in retired | pending_history:
+            entries.append({"generation_id": generation.name, "reason": history_states[generation.name],
+                            "files": 0, "hot_bytes": 0})
+            continue
         item = completed.get(generation.name)
         export_intent = _export_retention_intent(generation)
         if export_intent:

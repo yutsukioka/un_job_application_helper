@@ -235,6 +235,8 @@ def update_health(directory, value):
             if value.get("finished_at"):
                 health["last_attempt_finished_at"] = value["finished_at"]
             health["last_reasons"] = result.get("reasons", [])[:5]
+            if isinstance(result.get("storage_budget"), dict):
+                health["storage_budget"] = result["storage_budget"]
             retention = result.get("storage_retention")
             if isinstance(retention, dict):
                 health["last_retention_status"] = retention.get("status")
@@ -270,7 +272,7 @@ def update_health(directory, value):
             bool(health.get("last_publication_complete_at"))
             and not health.get("unresolved_publication", False)
             and health.get("last_attempt_status")
-            not in {"process_failure", "unchanged_failure_hold"}
+            not in {"process_failure", "unchanged_failure_hold", "storage_deferred", "accepted_work_pending", "publication_held"}
         )
         health["operational_ready"] = (
             health.get("last_attempt_status") in {"complete", "incomplete"}
@@ -388,6 +390,8 @@ def failure_hold(config, fingerprint):
 
 
 def record_failure(config, fingerprint, result):
+    if result.get("status") in {"storage_deferred", "accepted_work_pending", "publication_held"}:
+        return
     path = config["attempt_state_dir"] / "failure_condition.json"
     previous = json.loads(path.read_text()) if path.exists() else {}
     if result["status"] != "process_failure":

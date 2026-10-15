@@ -29,8 +29,8 @@ def cache_before_intent(root, target, monkeypatch):
     """Stop a real execution after it durably saves its first file proof."""
     original = retention._save_validation
 
-    def save_then_defer(group, progress):
-        original(group, progress)
+    def save_then_defer(group, progress, budget=None):
+        original(group, progress, budget)
         if group["path"] == target:
             raise TimeoutError("test stops after durable validation progress")
 
@@ -88,18 +88,19 @@ def test_validation_copied_from_another_group_is_rejected(tmp_path, monkeypatch)
     assert not (source_runs[0] / retention.RECEIPT).exists()
 
 
-@pytest.mark.parametrize("protection", ["current", "newest_two", "daily", "monthly"])
+@pytest.mark.parametrize("protection", ["current", "newest_two", "selected_run", "selected_generation"])
 def test_validation_cache_does_not_override_new_protection(
     tmp_path, monkeypatch, protection,
 ):
     root, runs, generations = make_populated_root(tmp_path)
-    target = generations[0] if protection in {"current", "newest_two"} else runs[0]
+    target = runs[0] if protection == "selected_run" else generations[0]
     cache = cache_before_intent(root, target, monkeypatch)
     cached_bytes = cache.read_bytes()
     proof = json.loads(cached_bytes)
     original_files = {item["path"]: (target / item["path"]).read_bytes()
                       for item in proof["files"]}
     as_of = AS_OF
+    selection = {}
     if protection == "current":
         gate = root / "output" / ".jobagg-publication-state.json"
         value = json.loads(gate.read_text())
@@ -110,21 +111,14 @@ def test_validation_cache_does_not_override_new_protection(
         value = json.loads(result.read_text())
         value["completed_at"] = "2026-09-04T00:05:00+00:00"
         write_json(result, value)
-    elif protection == "daily":
-        as_of = datetime(2024, 9, 3, 12, tzinfo=UTC)
+    elif protection == "selected_run":
+        selection["selected_runs"] = [target.name]
     else:
-        outcome = target / "outcome.json"
-        value = json.loads(outcome.read_text())
-        value["finished_at"] = "2024-08-01T00:00:00+00:00"
-        write_json(outcome, value)
-        as_of = datetime(2025, 7, 1, tzinfo=UTC)
+        selection["selected_generations"] = [target.name]
 
-    preview = retention.prune_completed(root, as_of=as_of, max_groups=10)
+    preview = retention.prune_completed(root, as_of=as_of, max_groups=10, **selection)
     assert str(target) not in {item["path"] for item in preview["selected"]}
-    if protection in {"daily", "monthly"}:
-        reason = "daily_30_days" if protection == "daily" else "monthly_12_months"
-        assert preview["protected_run_checkpoints"][reason] > 0
-    result = execute(root, as_of=as_of, max_groups=10)
+    result = execute(root, as_of=as_of, max_groups=10, **selection)
 
     assert str(target) not in {item["path"] for item in result["selected"]}
     assert cache.read_bytes() == cached_bytes
