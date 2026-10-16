@@ -11,6 +11,8 @@ import 'package:atlas/src/atlas_vault/plaintext_migration.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
+import '../test/support/atlas_view_cleanup.dart';
+
 const _defaultVaultId = '92000000-0000-4000-8000-000000000002';
 const _authority = 'http://127.0.0.1:8765';
 const _searchSentinel = 'WINDOWS_RECOVERY_SEARCH_SENTINEL';
@@ -22,6 +24,7 @@ void main() {
   testWidgets('Windows migration resumes completion in a fresh process', (
     tester,
   ) async {
+    registerAtlasViewCleanup(tester);
     if (!Platform.isWindows) {
       return;
     }

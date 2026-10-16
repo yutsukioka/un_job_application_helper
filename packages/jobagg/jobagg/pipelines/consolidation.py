@@ -153,6 +153,7 @@ def consolidate_bundle_databases(
     slug: str = CONSOLIDATED_SLUG,
     stale_current_max_age_days: int = DEFAULT_STALE_CURRENT_MAX_AGE_DAYS,
     expired_current_grace_hours: int = DEFAULT_EXPIRED_CURRENT_GRACE_HOURS,
+    semantic_lease: dict | None = None,
 ) -> ConsolidationResult:
     """Merge existing per-organization SQLite bundles into one all-jobs bundle.
 
@@ -168,17 +169,49 @@ def consolidate_bundle_databases(
         raise ValueError(f"No source *_jobs.sqlite3 files found in {output}")
 
     temp_db = paths["db"].with_name(f".{paths['db'].name}.tmp")
+    table_rows: dict[str, int] = {table: 0 for table, _ in CONSOLIDATED_TABLES}
+    from jobagg.semantic_history import (
+        _state, copy_semantic_history,
+        semantic_database_binding,
+    )
+    old_semantic_binding = None
+    old_semantic_state = None
+    if paths["db"].exists():
+        old_semantic_binding = semantic_database_binding(paths["db"])
+        if old_semantic_binding["writer_fenced"]:
+            from jobagg.storage_budget import BudgetLedger
+            if semantic_lease is None:
+                raise ValueError("activated_consolidation_requires_admitted_lease")
+            BudgetLedger.attach(semantic_lease).validate_writer(
+                expected_cycle_id=semantic_lease["cycle_id"],
+                expected_scope_hash=old_semantic_binding["scope_hash"],
+                expected_ledger_path=old_semantic_binding["ledger_path"],
+                allowed_phases=("publication_admitted",), required_path=paths["db"],
+            )
+            # A lease proves identity/phase, not a reservation for the full
+            # replacement, rollback journal, VACUUM and four export families.
+            # Keep this legacy full-rebuild writer unavailable after activation
+            # until one bounded, recoverable envelope covers every one of them.
+            # The incremental publisher has its own admitted bounded path.
+            from jobagg.storage_budget import StorageBudgetDeferred
+            raise StorageBudgetDeferred(
+                "activated_consolidation_physical_envelope_unsupported_use_bounded_publication"
+            )
+    # An activated authority must be admitted before even the replacement
+    # workspace is written. The owner lock remains a caller requirement.
     _remove_sqlite_artifacts(temp_db)
-
     db = JobDatabase(temp_db)
     db.initialize()
-
-    table_rows: dict[str, int] = {table: 0 for table, _ in CONSOLIDATED_TABLES}
     with closing(sqlite3.connect(temp_db)) as dest:
         dest.row_factory = sqlite3.Row
         dest.execute("PRAGMA foreign_keys=ON")
         dest.execute("BEGIN")
         try:
+            if paths["db"].exists():
+                with closing(_connect_source(paths["db"])) as previous:
+                    prior_state = _state(previous)
+                    if prior_state:
+                        dest.execute("UPDATE semantic_history_state SET max_bytes=? WHERE id=1", (prior_state["max_bytes"],))
             for source_path in source_db_paths:
                 with closing(_connect_source(source_path)) as source:
                     source.row_factory = sqlite3.Row
@@ -202,6 +235,16 @@ def consolidate_bundle_databases(
                         table_rows[table] += copied
                         if table == "grade_mappings":
                             _archive_grade_mapping_conflicts(source, dest, source_path.name)
+                    copy_semantic_history(source, dest)
+            # The old consolidated ledger can contain unique history absent
+            # from every current source/job row. It is an authority, not input
+            # disposable merely because this is a rebuild.
+            if paths["db"].exists():
+                with closing(_connect_source(paths["db"])) as previous:
+                    copy_semantic_history(previous, dest)
+                    old_semantic_state = _state(previous)
+                    if (old_semantic_state and old_semantic_state["policy_epoch"]) or (_table_exists(previous, "semantic_versions") and previous.execute("SELECT 1 FROM semantic_versions LIMIT 1").fetchone()):
+                        _retain_previous_semantic_authority(previous, dest)
             _apply_consolidation_quality_rules(
                 dest,
                 stale_current_max_age_days=stale_current_max_age_days,
@@ -213,6 +256,8 @@ def consolidate_bundle_databases(
             raise
 
     _checkpoint_and_compact(temp_db)
+    if old_semantic_binding and semantic_database_binding(paths["db"]) != old_semantic_binding:
+        raise ValueError("consolidated_semantic_authority_changed_during_rebuild")
     _remove_sqlite_artifacts(paths["db"])
     temp_db.replace(paths["db"])
     _remove_sqlite_sidecars(temp_db)
@@ -1089,6 +1134,96 @@ def _archive_grade_mapping_conflicts(
         dest.execute("INSERT INTO grade_mapping_conflicts VALUES (?,?,?,?,?,?)", (
             source_database, *key, encoded, hashlib.sha256(encoded.encode()).hexdigest(),
         ))
+
+
+def _retain_previous_semantic_authority(previous, dest):
+    """Keep old-only current/history rows and exact versions before a rebuild.
+
+    Current source rows still win ordinary job/association conflicts, but the
+    exact prior variants are preserved. Other mutable-authority conflicts fail
+    closed rather than selecting a winner silently.
+    """
+    from jobagg.semantic_history import preserve_beforeimage, _verify_blob
+    previous.row_factory = sqlite3.Row
+    job_related = {
+        "job_attachments": "job_key", "vacancy_source_features": "vacancy_id",
+        "vacancy_classifications": "vacancy_id", "classification_overrides": "vacancy_id",
+        "vacancy_locations": "vacancy_id", "change_events": "job_key", "vacancy_snapshots": "job_key",
+    }
+    # Exact retained blobs must survive even when no current source association
+    # references them. Same digest/different bytes is an integrity failure.
+    for blob in previous.execute("SELECT * FROM attachment_blobs"):
+        _verify_blob(previous, blob["content_sha256"])
+        existing = dest.execute("SELECT size_bytes,content FROM attachment_blobs WHERE content_sha256=?", (blob["content_sha256"],)).fetchone()
+        if existing and (existing[0] != blob["size_bytes"] or bytes(existing[1]) != bytes(blob["content"])):
+            raise ValueError("consolidated_prior_blob_conflict")
+        if not existing:
+            dest.execute("INSERT INTO attachment_blobs(content_sha256,media_type,size_bytes,content) VALUES(?,?,?,?)",
+                         tuple(blob[k] for k in ("content_sha256", "media_type", "size_bytes", "content")))
+    for row in previous.execute("SELECT * FROM jobs"):
+        before = {"job": dict(row), "related": {}}
+        for table, key in job_related.items():
+            if _table_exists(previous, table) and key in _copyable_columns(previous, table):
+                before["related"][table] = [dict(r) for r in previous.execute(f'SELECT * FROM "{table}" WHERE "{key}"=?', (row["job_key"],))]
+        preserve_beforeimage(dest, before)
+    for prior in previous.execute("SELECT job_key,source_id,external_id,first_seen_at FROM jobs"):
+        current = dest.execute("SELECT source_id,external_id,first_seen_at FROM jobs WHERE job_key=?", (prior["job_key"],)).fetchone()
+        if current is not None:
+            if (current[0], current[1]) != (prior["source_id"], prior["external_id"]):
+                raise ValueError("consolidated_prior_job_identity_conflict")
+            previous_first, current_first = _parse_dt(prior["first_seen_at"]), _parse_dt(current[2])
+            if previous_first is None or current_first is None:
+                raise ValueError("consolidated_prior_first_seen_invalid")
+            if previous_first < current_first:
+                dest.execute("UPDATE jobs SET first_seen_at=? WHERE job_key=?", (prior["first_seen_at"], prior["job_key"]))
+    _copy_table(previous, dest, table="jobs", conflict_target="job_key")
+    _copy_table(previous, dest, table="job_attachments", conflict_target="attachment_id")
+    ignored = {"jobs", "job_attachments", "attachment_blobs", "semantic_history_state",
+               "consolidated_job_aliases", "consolidated_source_status"}
+    # Preserve operational tables (including publication receipts and listing
+    # state) that are not derived by the rebuild. No fixed table list silently
+    # discards a newly added authority table.
+    tables = list(previous.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
+    prior_run_ids = {}
+    virtual_or_shadow = {r[1] for r in previous.execute("PRAGMA table_list") if r[2] in {"virtual", "shadow"}}
+    from jobagg.semantic_history import TABLES as semantic_tables
+    for table, create_sql in tables:
+        if table in ignored or table in virtual_or_shadow or table in semantic_tables or table.startswith("sqlite_"):
+            continue
+        if not _table_exists(dest, table):
+            dest.execute(create_sql)
+        columns = [r[1] for r in previous.execute(f'PRAGMA table_info("{table}")')]
+        if columns != [r[1] for r in dest.execute(f'PRAGMA table_info("{table}")')]:
+            raise ValueError("consolidated_prior_authority_schema_conflict:" + table)
+        pk = [r[1] for r in previous.execute(f'PRAGMA table_info("{table}")') if r[5]]
+        for record in previous.execute(f'SELECT * FROM "{table}"'):
+            values = dict(record)
+            if table == "source_run_diagnostics":
+                if values["source_run_id"] not in prior_run_ids:
+                    raise ValueError("consolidated_prior_run_diagnostics_orphan")
+                values["source_run_id"] = prior_run_ids[values["source_run_id"]]
+            # IDs assigned by independent source databases are not a shared
+            # identity. Compare exact non-ID payload before copying those rows.
+            compare = [c for c in columns if c not in AUTOINCREMENT_COLUMNS.get(table, set())]
+            where = " AND ".join('"' + c + '" IS ?' for c in compare)
+            identical = dest.execute(f'SELECT * FROM "{table}" WHERE ' + where, tuple(values[c] for c in compare)).fetchone()
+            if identical:
+                if table == "source_runs":
+                    prior_run_ids[record["id"]] = identical["id"]
+                continue
+            keys = [c for c in pk if c not in AUTOINCREMENT_COLUMNS.get(table, set())]
+            conflict = bool(keys and dest.execute(f'SELECT 1 FROM "{table}" WHERE ' + " AND ".join('"' + c + '" IS ?' for c in keys), tuple(values[c] for c in keys)).fetchone())
+            if conflict:
+                # Prior job-related records were bound to exact job identities
+                # above. User overrides and unknown operational state may not
+                # silently lose their current effect.
+                if table in job_related and table != "classification_overrides":
+                    continue
+                raise ValueError("consolidated_prior_authority_conflict:" + table)
+            fields = ",".join('"' + c + '"' for c in compare)
+            inserted = dest.execute(f'INSERT INTO "{table}" ({fields}) VALUES (' + ",".join("?" for _ in compare) + ")", tuple(values[c] for c in compare))
+            if table == "source_runs":
+                prior_run_ids[record["id"]] = inserted.lastrowid
 
 
 def _copy_table(

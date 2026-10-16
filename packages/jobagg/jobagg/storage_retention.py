@@ -10,18 +10,17 @@ before any unlink, so an interrupted retirement can be replayed safely.
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
 import fcntl
 import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import tempfile
 import time
-
+from datetime import UTC, datetime
+from pathlib import Path
 
 RECEIPT = "storage-retention.json"
 VALIDATION = "storage-retention-validation.json"
@@ -29,6 +28,59 @@ _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _GENERATION = re.compile(r"[0-9a-f]{32}\Z")
 _EXPORT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*_(?:current|history)\.(?:csv|json)\Z")
 _COLD_HELPER = None
+_HISTORY_HELPER = None
+
+
+def _history_helper():
+    global _HISTORY_HELPER
+    if _HISTORY_HELPER is None:
+        path = Path(__file__).with_name("terminal_history.py")
+        spec = importlib.util.spec_from_file_location("jobagg_terminal_history_retention", path)
+        module = importlib.util.module_from_spec(spec)
+        descriptor, before = _safe_file(path)
+        with os.fdopen(descriptor, "rb") as stream:
+            source = stream.read()
+            after = os.fstat(stream.fileno())
+        if _identity(before) != _identity(after) or _identity(after) != _identity(_regular(path)):
+            raise ValueError("Terminal history helper changed during read")
+        # Reviewed sibling module, bound by the package implementation hash.
+        exec(compile(source, str(path), "exec"), module.__dict__)  # noqa: S102  # nosec B102
+        _HISTORY_HELPER = module
+    return _HISTORY_HELPER
+
+
+def _terminal_history_state(path, *, deadline_at=None):
+    if any((path / name).exists() or (path / name).is_symlink() for name in (
+        "terminal-history-retirement.intent.json", "terminal-history-retirement.json"
+    )):
+        return _history_helper().classify_history(path, deadline_at=deadline_at)["disposition"]
+    return "legacy_active"
+
+
+def _export_copy(generation, path, expected):
+    """Inventory the per-generation representation, never its shared objects."""
+    relative = str(path.relative_to(generation))
+    sidecar = Path(str(path) + ".publication.json")
+    if sidecar.exists() or sidecar.is_symlink():
+        if path.exists() or path.is_symlink():
+            raise ValueError("Export has both materialized and chunked representations")
+        artifacts = _history_helper()._module("publication_artifacts")
+        manifest, _ = artifacts._manifest(path)
+        if any(manifest[key] != expected[key] for key in ("sha256", "size")):
+            raise ValueError("Chunked export differs from publication checkpoint")
+        return {"path": str(sidecar.relative_to(generation)), **_digest(sidecar),
+                "logical_path": relative, "logical_sha256": expected["sha256"],
+                "logical_size": expected["size"]}
+    receipt_path = generation / RECEIPT
+    if receipt_path.exists():
+        for item in _json(receipt_path).get("files", []):
+            if item.get("logical_path") == relative:
+                if (item.get("path") != relative + ".publication.json"
+                        or item.get("logical_sha256") != expected["sha256"]
+                        or item.get("logical_size") != expected["size"]):
+                    raise ValueError("Retired chunked export binding changed")
+                return item
+    return {"path": relative, "sha256": expected["sha256"], "size": expected["size"]}
 
 
 def _cold_helper():
@@ -303,6 +355,11 @@ def _run_group(run, *, deadline_at=None):
     if snapshot is None:
         return None, None
     expected = run / "publication_snapshot.sqlite3"
+    if isinstance(snapshot, dict) and snapshot.get("path") != str(expected):
+        # The activated work projection has independent registered-root unlink
+        # authority. Validate terminal controls, but never delete it here.
+        terminal = _history_helper()._module("terminal_publication").classify_run(run, deadline_at=deadline_at)
+        return None, terminal["result"]
     acceptance_path = run / "acceptance.json"
     if (
         request.get("run_id") != run.name
@@ -411,8 +468,8 @@ def _generation_group(generation, *, deadline_at=None):
             or manifest_record.get("sha256") != new.get("sha256")
         ):
             raise ValueError(f"Storage retention prepared export binding differs: {generation}")
-        files.append({"path": "exports-v2/" + expected_prepared.name,
-                      "sha256": _sha(new.get("sha256")), "size": new.get("size")})
+        files.append(_export_copy(generation, expected_prepared,
+                                  {"sha256": _sha(new.get("sha256")), "size": new.get("size")}))
         backup = checkpoint.get("backup_path")
         if backup:
             old = checkpoint.get("old")
@@ -421,8 +478,8 @@ def _generation_group(generation, *, deadline_at=None):
                 return None  # Verified alternative or legacy candidate is preserved.
             if checkpoint.get("backup_status") != "verified" or not isinstance(old, dict):
                 raise ValueError(f"Storage retention export backup is unverified: {generation}")
-            files.append({"path": "before_exports/" + expected_backup.name,
-                          "sha256": _sha(old.get("sha256")), "size": old.get("size")})
+            files.append(_export_copy(generation, expected_backup,
+                                      {"sha256": _sha(old.get("sha256")), "size": old.get("size")}))
         if checkpoint.get("legacy_backup") or checkpoint.get("unverified_backup_candidates"):
             return None  # Do not retire uncertain legacy rollback evidence.
     if any(type(item["size"]) is not int or item["size"] < 0 for item in files):
@@ -455,6 +512,13 @@ def _generation_group(generation, *, deadline_at=None):
 def _validate_selected(group, *, deadline_at=None, controls=None):
     if group["kind"] != "generation_exports":
         return
+    for item in group["files"]:
+        if item.get("logical_path") and (group["path"] / item["path"]).exists():
+            _check_deadline(deadline_at)
+            actual = _history_helper()._module("publication_artifacts").fingerprint(
+                group["path"] / item["logical_path"], deadline_at=deadline_at)
+            if actual != {"sha256": item["logical_sha256"], "size": item["logical_size"]}:
+                raise ValueError("Selected chunked export failed exact readback")
     plan_path = group["path"] / "plan.json"
     result = _json(group["path"] / "result.json")
     cold_path = group["path"] / "storage-cold-archive.json"
@@ -552,13 +616,13 @@ def _validation_progress(group, controls):
     return saved
 
 
-def _save_validation(group, progress):
+def _save_validation(group, progress, budget=None):
     path = group["path"] / VALIDATION
     if path.exists() or path.is_symlink():
         _regular(path)
-        _replace_json(path, progress)
+        _write_budgeted(path, progress, budget, replace=True)
     else:
-        _seal_json(path, progress)
+        _write_budgeted(path, progress, budget)
 
 
 def _unchanged(path, identity):
@@ -566,7 +630,7 @@ def _unchanged(path, identity):
         raise ValueError(f"Storage retention source changed before unlink: {path}")
 
 
-def _retire(group, *, deadline_at=None, metrics=None):
+def _retire(group, *, deadline_at=None, metrics=None, budget=None):
     receipt_path = group["path"] / RECEIPT
     _check_deadline(deadline_at)
     identities = {}
@@ -610,7 +674,7 @@ def _retire(group, *, deadline_at=None, metrics=None):
         # hash-to-stat gap even if a non-owner modifies the file unexpectedly.
         _unchanged(path, verified["identity"])
         progress["verified"][item["path"]] = verified
-        _save_validation(group, progress)
+        _save_validation(group, progress, budget)
         if metrics is not None:
             metrics["hashed_bytes"] += item["size"]
             metrics["verified_files"] += 1
@@ -633,7 +697,7 @@ def _retire(group, *, deadline_at=None, metrics=None):
             "phase": "intent", "files": group["files"], "controls": controls,
             "created_at": datetime.now().astimezone().isoformat(),
         }
-        _seal_json(receipt_path, receipt)
+        _write_budgeted(receipt_path, receipt, budget)
     deleted = 0
     for item in group["files"]:
         _check_deadline(deadline_at)
@@ -647,7 +711,7 @@ def _retire(group, *, deadline_at=None, metrics=None):
             metrics["deleted_bytes"] += item["size"]
         _sync_dir(path.parent)
     if receipt["phase"] != "complete":
-        _replace_json(receipt_path, {**receipt, "phase": "complete"})
+        _write_budgeted(receipt_path, {**receipt, "phase": "complete"}, budget, replace=True)
     return deleted
 
 
@@ -675,7 +739,9 @@ def verified_retired_generation(generation):
 
 def prune_completed(
     root, *, keep_completed=2, max_groups=1, execute=False, owner_fd=None,
-    shared_lock=None, deadline_at=None, as_of=None,
+    shared_lock=None, deadline_at=None, as_of=None, selected_runs=(), selected_generations=(),
+    selected_evidence_bytes_limit=10_000_000_000, protection=None, budget=None,
+    fixed_budget=False,
 ):
     """Preview or retire a bounded number of verified derived artifact groups.
 
@@ -686,13 +752,22 @@ def prune_completed(
     Execute checkpoints full-file validation across calls, with exact file
     identities. A hash interrupted within one file restarts on the next call;
     the maintenance budget must accommodate the largest individual file.
-    Exact publication snapshots retain the newest two, the latest completed
-    one per UTC day for 30 days, and the latest per UTC month for 12 months.
+    By default also retain the latest snapshot per UTC day for 30 days and per
+    UTC month for 12 months. Explicit fixed-budget activation replaces those
+    calendar checkpoints with the newest complete sets and selected evidence.
     """
     if type(keep_completed) is not int or keep_completed < 2:
         raise ValueError("Storage retention must keep at least two completed groups of each kind")
     if type(max_groups) is not int or max_groups < 1:
         raise ValueError("Storage retention max_groups must be positive")
+    if type(fixed_budget) is not bool:
+        raise ValueError("Storage retention fixed-budget activation must be boolean")
+    if (type(selected_evidence_bytes_limit) is not int
+            or not 0 <= selected_evidence_bytes_limit <= 10_000_000_000):
+        raise ValueError("Selected evidence exceeds the fixed 10 GB category ceiling")
+    if (len(set(selected_runs)) != len(selected_runs)
+            or len(set(selected_generations)) != len(selected_generations)):
+        raise ValueError("Selected evidence IDs must be unique")
     _check_deadline(deadline_at)
     if as_of is None:
         as_of = datetime.now(UTC)
@@ -724,18 +799,35 @@ def prune_completed(
         raise ValueError("Storage retention requires a complete published live gate")
 
     _check_deadline(deadline_at)
-    run_groups, protected_generations = [], set()
+    run_groups, protected_generations = [], set(selected_generations)
+    retired_terminal = []
     for run in sorted(runs.iterdir()):
         _check_deadline(deadline_at)
         if run.name == ".DS_Store":
             _regular(run)
             continue
         _directory(run)
+        history = _terminal_history_state(run, deadline_at=deadline_at)
+        if history == "retired_terminal":
+            retired_terminal.append(str(run))
+            continue
+        if history == "retirement_pending":
+            # Its exact durable intent owns this subject; unrelated groups can
+            # still be maintained under the same exclusive owner.
+            continue
         group, result = _run_group(run, deadline_at=deadline_at)
         _check_deadline(deadline_at)
         if group is not None:
             run_groups.append(group)
         else:
+            no_write = run / "publication_no_write_resolution.json"
+            if no_write.exists() or no_write.is_symlink():
+                prior = _json(no_write).get("proof", {}).get("prior_plan", {})
+                plan = Path(prior.get("path", ""))
+                if (not plan.is_absolute() or not _GENERATION.fullmatch(plan.parent.name)
+                        or plan != generations / plan.parent.name / "plan.json"):
+                    raise ValueError("Unresolved no-write plan reference is invalid")
+                protected_generations.add(plan.parent.name)
             binding_path = run / "publication_generation_binding.json"
             if binding_path.exists() or binding_path.is_symlink():
                 binding = _json(binding_path)
@@ -760,6 +852,14 @@ def prune_completed(
             _regular(generation)
             continue
         _directory(generation)
+        history = _terminal_history_state(generation, deadline_at=deadline_at)
+        if history == "retired_terminal":
+            retired_terminal.append(str(generation))
+            continue
+        if history == "retirement_pending":
+            # Its exact durable intent owns this subject; unrelated groups can
+            # still be maintained under the same exclusive owner.
+            continue
         group = _generation_group(generation, deadline_at=deadline_at)
         _check_deadline(deadline_at)
         if group is not None:
@@ -770,7 +870,8 @@ def prune_completed(
     )[:keep_completed]}
     checkpoint_reasons = {
         "newest_two_or_more": newest_runs,
-        "daily_30_days": set(), "monthly_12_months": set(), "future_dated": set(),
+        "selected_evidence": set(selected_runs), "future_dated": set(),
+        "daily_30_days": set(), "monthly_12_months": set(),
     }
     latest_day, latest_month = {}, {}
     for group in run_groups:
@@ -778,32 +879,55 @@ def prune_completed(
         completed = datetime.fromtimestamp(group["time"], UTC)
         day = completed.date()
         days_old = (today - day).days
-        months_old = (today.year - day.year) * 12 + today.month - day.month
         if days_old < 0:
             checkpoint_reasons["future_dated"].add(group["id"])
-        elif days_old < 30:
-            current = latest_day.get(day)
-            if current is None or group["time"] > current["time"]:
-                latest_day[day] = group
-        if 0 <= months_old < 12:
-            month = (day.year, day.month)
-            current = latest_month.get(month)
-            if current is None or group["time"] > current["time"]:
-                latest_month[month] = group
+        if not fixed_budget:
+            if 0 <= days_old < 30:
+                current = latest_day.get(day)
+                if current is None or group["time"] > current["time"]:
+                    latest_day[day] = group
+            months_old = (today.year - day.year) * 12 + today.month - day.month
+            if 0 <= months_old < 12:
+                month = (day.year, day.month)
+                current = latest_month.get(month)
+                if current is None or group["time"] > current["time"]:
+                    latest_month[month] = group
     checkpoint_reasons["daily_30_days"].update(group["id"] for group in latest_day.values())
     checkpoint_reasons["monthly_12_months"].update(
         group["id"] for group in latest_month.values()
     )
+    # Use the same complete, deduplicated evidence accounting as terminal
+    # history: selected manifests also retain shared chunks and cold objects.
+    selected_bytes = _history_helper()._selected_evidence(
+        root, selected_runs, selected_generations, deadline_at
+    ) if selected_runs or selected_generations else 0
+    if selected_bytes > selected_evidence_bytes_limit:
+        raise ValueError("Selected evidence exceeds its byte ceiling")
     protected_runs = set().union(*checkpoint_reasons.values())
     protected_generations.update(group["id"] for group in sorted(
         generation_groups, key=lambda item: item["time"], reverse=True
     )[:keep_completed])
     if current_generation:
         protected_generations.add(current_generation)
+    if protection is not None:
+        if not isinstance(protection, dict) or protection.get("current") != current_generation:
+            raise ValueError("Storage retention operational closure differs")
+        fresh = _history_helper().operational_closure(
+            root, selected_runs=selected_runs, selected_generations=selected_generations,
+            deadline_at=deadline_at)
+        if fresh != protection:
+            raise ValueError("Storage retention operational closure changed")
+        protected_runs |= set(protection["runs"])
+        protected_generations = set(protection["generations"])
     candidates = []
     skipped_protected = {"run_snapshot": 0, "generation_exports": 0}
     for group in [*run_groups, *generation_groups]:
         _check_deadline(deadline_at)
+        # Shared export evidence is retired as a whole terminal generation so
+        # its object reachability inventory survives removal of its sidecars.
+        if any(item.get("logical_path") for item in group["files"]):
+            skipped_protected[group["kind"]] += 1
+            continue
         receipt_path = group["path"] / RECEIPT
         receipt = None
         if receipt_path.exists() or receipt_path.is_symlink():
@@ -818,7 +942,7 @@ def prune_completed(
         protected = group["id"] in (
             protected_runs if group["kind"] == "run_snapshot" else protected_generations
         )
-        if protected and not receipt:
+        if protected:
             skipped_protected[group["kind"]] += 1
             continue
         candidates.append(group)
@@ -871,6 +995,8 @@ def prune_completed(
             for kind in ("run_snapshot", "generation_exports")
         },
         "skipped_protected": skipped_protected,
+        "retired_terminal": retired_terminal,
+        "selected_evidence_bytes": selected_bytes,
         "protected_run_checkpoints": {
             reason: len(ids) for reason, ids in checkpoint_reasons.items()
         },
@@ -893,7 +1019,7 @@ def prune_completed(
         for group in selected:
             try:
                 _check_deadline(deadline_at)
-                _retire(group, deadline_at=deadline_at, metrics=summary)
+                _retire(group, deadline_at=deadline_at, metrics=summary, budget=budget)
                 summary["removed_groups"] += 1
             except TimeoutError:
                 summary["deadline_deferred"] = True
@@ -930,6 +1056,13 @@ def main(argv=None):
                                  max_groups=args.max_groups, deadline_at=deadline)
     print(json.dumps(result, sort_keys=True))
     return 0
+
+
+def _write_budgeted(path, value, budget, *, replace=False):
+    if budget is not None:
+        _history_helper()._seal_budgeted(path, value, budget, replace=replace)
+    else:
+        (_replace_json if replace else _seal_json)(path, value)
 
 
 if __name__ == "__main__":

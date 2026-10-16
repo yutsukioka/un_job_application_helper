@@ -70,6 +70,8 @@ class JobDatabase:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
+        from jobagg.semantic_history import register_denied_writer
+        register_denied_writer(conn)
         try:
             if not self.read_only:
                 self._apply_pragmas(conn)
@@ -827,6 +829,8 @@ class JobDatabase:
                 )
             self._seed_grade_mappings(conn)
             self._ensure_fts(conn)
+            from jobagg.semantic_history import ensure_schema
+            ensure_schema(conn)
 
     def _ensure_fts(self, conn: sqlite3.Connection) -> None:
         """Create the FTS5 mirror of ``jobs`` and keep it in sync via triggers.
@@ -895,6 +899,10 @@ class JobDatabase:
                 "SELECT * FROM jobs WHERE job_key = ?",
                 (job_key,),
             ).fetchone()
+            from jobagg.semantic_history import preserve_job, semantic_history_enabled
+            preserve_semantics = semantic_history_enabled(conn)
+            if preserve_semantics and current is not None:
+                preserve_job(conn, current)
             if current is not None:
                 self._merge_existing_detail_fields(job, current)
 
@@ -1008,6 +1016,8 @@ class JobDatabase:
                     conn=conn,
                 )
                 self.add_vacancy_snapshot(job, conn=conn)
+            if preserve_semantics:
+                preserve_job(conn, conn.execute("SELECT * FROM jobs WHERE job_key=?", (job_key,)).fetchone())
             return change_type
 
     def _ensure_column(

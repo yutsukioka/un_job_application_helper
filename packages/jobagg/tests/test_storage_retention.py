@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from jobagg import publication_artifacts as artifacts
 from jobagg import storage_retention as retention
 
 
@@ -362,7 +363,8 @@ def test_generation_with_verified_cold_plan_remains_eligible(tmp_path):
     assert (generation / "storage-cold-archive.json").exists()
 
 
-def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
+@pytest.mark.parametrize("fixed_budget", [False, True])
+def test_calendar_checkpoints_are_preserved_without_fixed_budget_activation(tmp_path, fixed_budget):
     root = make_root(tmp_path)
     dates = [
         "2025-08-01T01:00:00+00:00",  # older than the 12-month monthly window
@@ -375,16 +377,74 @@ def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
         "2026-09-28T01:00:00+00:00",  # newest two and daily retained
     ]
     runs = [make_run(root, index, finished_at=date) for index, date in enumerate(dates, 1)]
+    kwargs = {"fixed_budget": True} if fixed_budget else {}
     result = retention.prune_completed(
-        root, max_groups=10, as_of=datetime(2026, 9, 28, 12, tzinfo=UTC)
+        root, max_groups=10, as_of=datetime(2026, 9, 28, 12, tzinfo=UTC), **kwargs
     )
     selected = {item["id"] for item in result["selected"]}
-    assert selected == {runs[index].name for index in (0, 1, 3, 5)}
+    eligible = runs[:-2] if fixed_budget else [runs[i] for i in (0, 1, 3, 5)]
+    assert selected == {run.name for run in eligible}
     assert result["protected_run_checkpoints"]["newest_two_or_more"] == 2
-    assert result["protected_run_checkpoints"]["daily_30_days"] == 3
-    assert result["protected_run_checkpoints"]["monthly_12_months"] == 2
-    assert result["skipped_protected"]["run_snapshot"] == 4
-    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == 4
+    assert result["protected_run_checkpoints"]["selected_evidence"] == 0
+    assert result["protected_run_checkpoints"]["daily_30_days"] == (0 if fixed_budget else 3)
+    assert result["protected_run_checkpoints"]["monthly_12_months"] == (0 if fixed_budget else 2)
+    assert result["skipped_protected"]["run_snapshot"] == len(runs) - len(eligible)
+    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == len(eligible)
+
+
+@pytest.mark.parametrize("fixed_budget", [False, True])
+def test_supplied_closure_does_not_override_legacy_calendar_protection(tmp_path, monkeypatch, fixed_budget):
+    root, runs, generations = make_populated_root(tmp_path)
+    for index, run in enumerate(runs, 21):
+        outcome = json.loads((run / "outcome.json").read_text())
+        outcome["finished_at"] = f"2026-09-{index}T00:00:00+00:00"
+        write_json(run / "outcome.json", outcome)
+    closure = {"current": generations[-1].name, "runs": [],
+               "generations": [generation.name for generation in generations[-2:]]}
+    monkeypatch.setattr(retention._history_helper(), "operational_closure", lambda *a, **kw: closure)
+    result = retention.prune_completed(
+        root, max_groups=10, protection=closure, fixed_budget=fixed_budget,
+        as_of=datetime(2026, 9, 28, 12, tzinfo=UTC),
+    )
+    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == (1 if fixed_budget else 0)
+
+
+def test_selected_incident_evidence_has_explicit_byte_ceiling(tmp_path):
+    root, runs, generations = make_populated_root(tmp_path)
+    result = retention.prune_completed(root, selected_runs=[runs[0].name],
+                                       selected_generations=[generations[0].name])
+    assert result["eligible_groups"] == 0
+    assert result["selected_evidence_bytes"] > 0
+    with pytest.raises(ValueError, match="byte ceiling"):
+        retention.prune_completed(root, selected_runs=[runs[0].name],
+                                  selected_evidence_bytes_limit=1)
+
+
+def test_selected_chunked_evidence_counts_shared_objects_once_and_enforces_smaller_limit(tmp_path):
+    root = make_root(tmp_path)
+    generations = root / "deterministic-live-publication" / "generations"
+    paths = [generations / f"{index:032x}" / "exports-v2" / "all_jobs_current.json"
+             for index in (1, 2)]
+    for path in paths:
+        writer = artifacts.RecordWriter(path)
+        writer.write("x" * 4097)
+        writer.record_boundary()
+        writer.write("y" * 6001)
+        writer.seal()
+    shared = set(artifacts.referenced_objects(paths[0]))
+    assert shared == set(artifacts.referenced_objects(paths[1]))
+    assert len(shared) == 2
+    evidence = {artifacts.sidecar(path) for path in paths} | shared
+    expected = sum(max(path.stat().st_size, path.stat().st_blocks * 512) for path in evidence)
+    selected = [path.parent.parent.name for path in paths]
+
+    result = retention.prune_completed(root, selected_generations=selected,
+                                       selected_evidence_bytes_limit=expected)
+    assert result["selected_evidence_bytes"] == expected
+    with pytest.raises(ValueError, match="byte ceiling"):
+        retention.prune_completed(root, selected_generations=selected,
+                                  selected_evidence_bytes_limit=expected - 1)
+    assert all(path.exists() for path in evidence)
 
 
 def execute_retention(root, **kwargs):

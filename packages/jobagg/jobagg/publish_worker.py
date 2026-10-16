@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import fcntl
 import json
 import os
-from pathlib import Path
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 from jobagg.pipelines.live_publication import _save, _sha, publish_incremental
-from jobagg.publication_snapshot import validate_publication_snapshot, validate_recovery_generation, _recovery_identity
 from jobagg.publication_deadline import wall_deadline
+from jobagg.publication_snapshot import (
+    _recovery_identity,
+    validate_publication_snapshot,
+    validate_recovery_generation,
+)
+from jobagg.publication_storage import write_scope
 
 
 @contextmanager
@@ -90,12 +95,24 @@ def main(argv=None):
     if inherited is None and os.environ.get("JOBAGG_SHARED_LOCK_FD"):
         inherited = int(os.environ["JOBAGG_SHARED_LOCK_FD"])
 
+    lease = None
+    if args.execute and os.environ.get("JOBAGG_STORAGE_BUDGET_LEASE"):
+        lease = json.loads(os.environ["JOBAGG_STORAGE_BUDGET_LEASE"])
+    initial_request = json.loads(Path(args.request).read_text()) if args.request else {}
+    policy = initial_request.get("publication_policy")
+    if args.execute and bool(policy) != bool(lease):
+        raise ValueError("publication_policy_and_budget_lease_required_together")
+
     def invoke(*, owner_held=False):
         deadline = started + args.max_seconds
         checked = {}
         request = _request(
             args, owner_held=owner_held, deadline_at=deadline, validation=checked
         )
+        if request.get("publication_policy") != policy:
+            raise ValueError("publication_request_policy_changed")
+        if lease is not None and request.get("run_id") != lease["cycle_id"]:
+            raise ValueError("publication_budget_cycle_differs_from_request")
         if request.get("deadline_epoch"):
             deadline = min(
                 deadline, time.monotonic() + max(0, float(request["deadline_epoch"]) - time.time())
@@ -119,6 +136,8 @@ def main(argv=None):
                     deadline_at=deadline,
                     execute=args.execute,
                     request_identity=_recovery_identity(request) if request else None,
+                    publication_policy=policy,
+                    storage_budget_lease=lease,
                 )
         if recovery and (
             result.get("generation_id") != recovery["binding"]["generation_id"]
@@ -145,8 +164,13 @@ def main(argv=None):
 
     if args.execute:
         try:
-            with _owner(args.shared_lock, inherited):
-                result = invoke(owner_held=True)
+            with write_scope(lease, (policy or {}).get("write_limits")) as escrow:
+                if lease is not None and not Path(args.shared_lock).is_file():
+                    raise ValueError("admitted_publication_requires_existing_owner")
+                with _owner(args.shared_lock, inherited):
+                    result = invoke(owner_held=True)
+                if escrow is not None and result.get("status") in {"incomplete", "deferred"}:
+                    escrow.keep_open = True
         except BlockingIOError:
             result = {"status": "owner_busy", "completeness_certified": False}
             print(json.dumps(result))

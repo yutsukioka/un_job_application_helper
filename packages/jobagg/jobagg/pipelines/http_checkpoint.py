@@ -21,7 +21,8 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit, urljoin
 
-from jobagg.http import HttpResponse, HTTPError
+from jobagg.http import HttpResponse, HTTPError, ResponseTooLargeError
+from jobagg.storage_budget import StorageBudgetDeferred
 from jobagg.robots import BlankLineSafeRobotFileParser
 from jobagg.atomic_files import atomic_write_text
 from jobagg.pipelines.host_recovery import (
@@ -171,8 +172,12 @@ class DurableCapture:
         phase=None,
         deadline_at=None,
         source=None,
+        storage=None,
+        first_storage_grant=None,
     ):
         self.client, self.policy, self.target = client, policy, Path(target)
+        self.storage = storage
+        self.first_storage_grant = first_storage_grant
         self.lock_root = Path(lock_root)
         self.forbidden_paths = tuple(forbidden_paths)
         self.phase = phase
@@ -195,8 +200,12 @@ class DurableCapture:
             self.origin(default_header_origin) if default_header_origin else None
         )
         self.client.max_retries = 0
-        self.lock_root.mkdir(parents=True, exist_ok=True)
-        (self.target / "http").mkdir(parents=True, exist_ok=True)
+        if self.storage is not None:
+            self.storage.ensure_directory(self.lock_root)
+            self.storage.ensure_directory(self.target / "http", grant=self.first_storage_grant)
+        else:
+            self.lock_root.mkdir(parents=True, exist_ok=True)
+            (self.target / "http").mkdir(parents=True, exist_ok=True)
         if not self.client.tls_verify:
             raise ValueError("Recovery requires verified TLS")
         self.client._opener = self.client._build_opener(OneHopRedirect())
@@ -275,6 +284,8 @@ class DurableCapture:
                 yield state_path, state
             finally:
                 completed = time.time()
+                if self.storage is not None:
+                    self.storage.charge_file(lock_path, len(str(completed).encode()))
                 owner.seek(0)
                 owner.truncate()
                 owner.write(str(completed))
@@ -300,6 +311,8 @@ class DurableCapture:
 
     def request(self, url, *, _depth=0, _is_robots=False, _native_dispatch=None, _redirects=(), **kwargs):
         self._check_deadline()
+        if self.storage is not None and _native_dispatch is not None:
+            raise StorageBudgetDeferred("bounded_browser_reader_unavailable")
         configured_timeout = float(kwargs.get("timeout_seconds") or self.client.timeout_seconds)
         request_allowance = min(configured_timeout, 5.0) + 1.0
         host = (urlsplit(url).hostname or "").lower()
@@ -320,6 +333,7 @@ class DurableCapture:
             raise HostIneligible("Bounded request ceiling reached after robots check", category="budget")
         self.count += 1
         record_path = self.target / "http" / f"{self.count:05d}.json"
+        storage_grant = None
         phase = (
             dict(self.phase)
             if self.phase is not None
@@ -364,6 +378,10 @@ class DurableCapture:
                         record["public_pagination_request"] = public
             except (ValueError, UnicodeError):
                 pass
+        if self.storage is not None:
+            storage_grant = self.storage.bind_request(record_path, self.first_storage_grant, host=host)
+            self.first_storage_grant = None
+            self.client.max_response_bytes = storage_grant.body_limit
         redirect = None
         try:
             with self.host_lock(host, request_allowance=request_allowance,
@@ -413,9 +431,22 @@ class DurableCapture:
                                 record["status_code"] = diagnostics["status_code"]
                     stage = "capture_persistence"
                     body = response.content or response.text.encode()
+                    if len(body) > self.client.max_response_bytes:
+                        oversized = ResponseTooLargeError(
+                            "Transport response exceeds admitted body limit",
+                            prefix=body[:self.client.max_response_bytes], observed_bytes=len(body),
+                            limit_bytes=self.client.max_response_bytes,
+                        )
+                        oversized.response_url, oversized.status_code = response.url, response.status_code
+                        oversized.headers = response.headers
+                        oversized.body_representation = "decoded_http_body_v1"
+                        raise oversized
                     artifact = record_path.with_suffix(".body.gz")
+                    compressed = gzip.compress(body)
+                    if self.storage is not None:
+                        self.storage.charge_file(artifact, len(compressed))
                     with artifact.open("xb") as body_file:
-                        body_file.write(gzip.compress(body))
+                        body_file.write(compressed)
                         body_file.flush()
                         os.fsync(body_file.fileno())
                     record.update(
@@ -424,10 +455,13 @@ class DurableCapture:
                         response_url_sha256=hashlib.sha256(response.url.encode()).hexdigest(),
                         artifact=str(artifact),
                         body_captured=True,
+                        body_complete=True,
+                        storage_limited=False,
+                        body_representation="decoded_http_body_v1",
                         body_bytes=len(body),
                         body_sha256=hashlib.sha256(body).hexdigest(),
                         response_headers={
-                            k: v
+                            k: str(v)[:2048]
                             for k, v in response.headers.items()
                             if k.lower() in {"content-type", "last-modified", "etag", "retry-after"}
                         },
@@ -475,6 +509,51 @@ class DurableCapture:
                         state.pop("recovery", None)
                     record["state"] = "response_captured"
                     return response
+                except ResponseTooLargeError as exc:
+                    artifact = record_path.with_suffix(".partial.gz")
+                    compressed = gzip.compress(exc.prefix)
+                    if self.storage is not None:
+                        self.storage.charge_file(artifact, len(compressed))
+                    with artifact.open("xb") as output:
+                        output.write(compressed)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    record.update(
+                        schema_version=2, attempt_id=self.target.name,
+                        body_complete=False, body_captured=False, storage_limited=True,
+                        partial_artifact=str(artifact), retained_bytes=len(exc.prefix),
+                        observed_bytes=exc.observed_bytes, limit_bytes=exc.limit_bytes,
+                        declared_content_length_if_any=exc.declared_content_length,
+                        sha256_scope="retained_prefix",
+                        retained_prefix_sha256=hashlib.sha256(exc.prefix).hexdigest(),
+                        termination_reason=exc.termination_reason,
+                        remaining_content_unavailable=not exc.wire_complete,
+                        wire_body_complete=exc.wire_complete,
+                        decoded_body_complete=False,
+                        body_representation=getattr(exc, "body_representation", "wire_http_body_v1"),
+                        decoded_observed_bytes=getattr(exc, "decoded_observed_bytes", None),
+                        failure_category="storage_budget", failure_stage=stage,
+                        status_code=exc.status_code,
+                        response_url=safe_url(exc.response_url or url),
+                        response_headers={k: str(v)[:2048] for k, v in exc.headers.items()
+                                          if k.lower() in {"content-type", "content-encoding", "content-length", "etag", "last-modified", "retry-after"}},
+                    )
+                    retry = next((str(value) for key, value in exc.headers.items()
+                                  if key.lower() == "retry-after"), None)
+                    if retry:
+                        record["retry_after"] = retry[:2048]
+                        # Preserve an explicit provider floor even when its body
+                        # could not be captured fully. Do not add failure counts.
+                        state["eligible_at"] = max(finite_epoch(state.get("eligible_at", 0)),
+                                                   retry_floor(retry, time.time()))
+                    # Keep the charged probe and prior failure evidence, but do
+                    # not turn a local storage stop into an abandoned-probe delay.
+                    recovery = state.get("recovery")
+                    if recovery and recovery.get("probe_owner") == self.probe_owner:
+                        recovery.update(phase="cooldown")
+                        recovery.pop("probe_owner", None)
+                        recovery.pop("probe_until", None)
+                    raise
                 except RedirectHop as exc:
                     redirect = exc.request
                     record.update(
@@ -532,7 +611,11 @@ class DurableCapture:
                 "failed" if "error_type" in record and not record.get("detail_outcome")
                 else record.get("state", "redirect_captured")
             )
-            save(record_path, record)
+            try:
+                save(record_path, record)
+            finally:
+                if storage_grant is not None:
+                    self.storage.release_request(record_path, storage_grant)
         if redirect is not None:
             target = redirect.full_url
             if urlsplit(url).scheme == "https" and urlsplit(target).scheme != "https":

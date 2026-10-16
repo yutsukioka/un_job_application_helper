@@ -272,6 +272,7 @@ jobs:
             Remove-Item Env:ATLAS_WINDOWS_PRIVATE_TEST_VAULT_ID
 
             $Tests = @(
+              "integration_test\atlas_vault_windows_focus_lifecycle_test.dart",
               "integration_test\atlas_vault_windows_plaintext_migration_integration_test.dart",
               "integration_test\atlas_vault_windows_interoperability_integration_test.dart"
             )

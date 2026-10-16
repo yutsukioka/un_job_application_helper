@@ -10,23 +10,25 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import stat
 import sys
 import tempfile
+from pathlib import Path
 
-from jobagg.publication_deadline import expired
 from jobagg.atomic_files import atomic_write_text
 from jobagg.db import JobDatabase
 from jobagg.pipelines.exports import export_jobs
+from jobagg.publication_deadline import expired
+from jobagg.publication_storage import charge, ensure_directory
 from jobagg.retained_artifacts import archived_fingerprint, open_artifact
-
 
 JOURNAL_NAME = "export-checkpoints.json"
 
 
 def _save(path, value):
-    atomic_write_text(path, json.dumps(value, sort_keys=True, ensure_ascii=True) + "\n")
+    payload = json.dumps(value, sort_keys=True, ensure_ascii=True) + "\n"
+    charge(path, len(payload.encode()) + 4096)
+    atomic_write_text(path, payload)
     _sync_directory(Path(path).parent)
 
 
@@ -129,7 +131,8 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
     and any previously sealed target remain untouched until verification/fsync.
     """
     source, target = Path(source), Path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    charge(target, expected["size"] + 4096)
+    ensure_directory(target.parent)
     _require(source, expected, "export_copy_source_changed")
     # Cloning requires an absent destination. A private staging directory keeps
     # that name exclusive without unlinking/reusing a reserved temporary path.
@@ -164,10 +167,24 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
         _require(target, expected, "export_sealed_copy_readback_failed")
 
 
-def _render(item, root, *, fault=None):
+def _render(item, root, *, fault=None, content_addressed=False, consume=None):
     # A separate directory avoids replacing unjournaled legacy preparation.
     prepared = root / "exports-v2" / Path(item["path"]).name
-    prepared.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(prepared.parent)
+    if content_addressed:
+        from jobagg.publication_artifacts import RecordWriter
+
+        writer = RecordWriter(prepared, translate_newlines=item["format"] == "json", consume=consume)
+        export_jobs(
+            JobDatabase(item["database"], read_only=True), output_path=prepared,
+            output_format=item["format"], status=item["status"],
+            history_only=item["history_only"], output_stream=writer,
+        )
+        _fault(fault, "before_export_prepared_seal", item["path"])
+        return str(prepared), writer.seal()
+    from jobagg.publication_storage import active
+    if active():
+        raise ValueError("admitted_publication_requires_record_chunk_exports")
     fd, temporary = tempfile.mkstemp(prefix="." + prepared.name + ".", dir=prepared.parent)
     os.close(fd)
     try:
@@ -258,7 +275,8 @@ def _initialize_checkpoint(plan, item, receipt, prior_hashes, *, fault=None):
             "legacy_backup": _legacy_backup(plan, item, prior_hashes),
             "phase": "replaced_verified" if old == new else "replace_intent",
         }
-    prepared, new = _render(item, root, fault=fault)
+    content_addressed = plan.get("publication_policy", {}).get("export_storage") == "record_chunks_v1"
+    prepared, new = _render(item, root, fault=fault, content_addressed=content_addressed, consume=charge)
     checkpoint = {
         "item": item,
         "prepared": prepared,
@@ -267,6 +285,7 @@ def _initialize_checkpoint(plan, item, receipt, prior_hashes, *, fault=None):
         "old_state_known": True,
         "legacy_receipt": False,
         "phase": "prepared_verified",
+        "content_addressed": content_addressed,
     }
     legacy_path = root / "before_exports" / target.name
     if legacy_path.exists() or legacy_path.is_symlink():
@@ -300,7 +319,19 @@ def _backup(checkpoint, root, *, fault=None):
             raise ValueError("verified_export_backup_hash_changed")
     if found is None:
         _require(target, old, "export_original_unavailable_for_backup")
-        _copy_sealed(target, backup, old, stage="export_backup", key=str(target), fault=fault)
+        if checkpoint.get("content_addressed"):
+            from jobagg.publication_artifacts import capture
+
+            candidates = []
+            for generation in sorted(root.parent.iterdir(), reverse=True):
+                if generation.is_dir() and not generation.is_symlink() and generation != root:
+                    candidates.append(generation / "exports-v2" / target.name)
+            _fault(fault, "during_export_backup_copy", str(target))
+            _fault(fault, "before_export_backup_seal", str(target))
+            capture(target, backup, old, candidates=candidates, consume=charge)
+            _fault(fault, "after_export_backup_seal", str(target))
+        else:
+            _copy_sealed(target, backup, old, stage="export_backup", key=str(target), fault=fault)
     _require(backup, old, "export_backup_readback_failed")
     checkpoint["backup_path"] = str(backup)
     checkpoint["backup_status"] = "verified"
