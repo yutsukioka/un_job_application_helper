@@ -102,7 +102,10 @@ database writer fence and absent former processes. An uncertain child outcome
 requires explicit review; an acceptance file alone does not prove success.
 Publication intents retain the existing explicit recovery boundary. A published
 terminal receipt can reconcile a crash before final ledger closure without
-replaying either process.
+replaying either process. A deferred publisher can close its cycle only after
+exact request, intent, acceptance, result and process evidence proves that no
+generation started. Consumed publisher bytes stay charged and accepted data
+stays intact; later cycles can continue without replaying the old worker.
 
 The worker enforces wire and decoded response bounds, including robots and
 redirects. A bounded retained prefix is reported as partial; storage holds do
@@ -121,8 +124,10 @@ It does not silently replace the bounded incremental publisher.
 Maintenance first retires eligible external projections, then terminal history
 and shared objects, then eligible old copies. Current/previous, selected evidence
 and exact unresolved dependencies remain protected. An unrelated terminal group
-can retire while another publication remains unresolved. There is no daily or
-monthly full-copy retention tier. Durable, identity-bound intents precede unlink;
+can retire while another publication remains unresolved. Activated fixed-budget
+retention has no daily or monthly full-copy tier. Deployments without that
+activation retain the legacy latest-per-day 30-day and latest-per-month 12-month
+snapshot protection. Durable, identity-bound intents precede unlink;
 receipts allow interrupted cleanup to resume. Unknown legacy layouts remain
 protected; legacy retirement requires exact verified backup evidence. See the
 [history contract](semantic-history.md) and

@@ -108,12 +108,20 @@ def active():
     return _ACTIVE.get() is not None
 
 
-def ensure_directory(path):
+def ensure_directory(path, *, charge_directory=None, exist_ok=True):
+    """Charge each missing parent before creation; existing directories cost zero.
+
+    Other admitted writers may supply their own charge callback. Their caller
+    serializes shared-parent creation; the publisher already holds its owner.
+    """
     path = Path(path)
+    if not exist_ok and path.exists():
+        raise FileExistsError(path)
+    charge_directory = charge if charge_directory is None else charge_directory
     missing = []
     while not path.exists():
         missing.append(path)
         path = path.parent
     for directory in reversed(missing):
-        charge(directory, 4096)
+        charge_directory(directory, 4096)
         directory.mkdir()

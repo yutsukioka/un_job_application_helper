@@ -200,8 +200,12 @@ class DurableCapture:
             self.origin(default_header_origin) if default_header_origin else None
         )
         self.client.max_retries = 0
-        self.lock_root.mkdir(parents=True, exist_ok=True)
-        (self.target / "http").mkdir(parents=True, exist_ok=True)
+        if self.storage is not None:
+            self.storage.ensure_directory(self.lock_root)
+            self.storage.ensure_directory(self.target / "http", grant=self.first_storage_grant)
+        else:
+            self.lock_root.mkdir(parents=True, exist_ok=True)
+            (self.target / "http").mkdir(parents=True, exist_ok=True)
         if not self.client.tls_verify:
             raise ValueError("Recovery requires verified TLS")
         self.client._opener = self.client._build_opener(OneHopRedirect())

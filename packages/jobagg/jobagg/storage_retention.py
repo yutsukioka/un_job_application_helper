@@ -741,6 +741,7 @@ def prune_completed(
     root, *, keep_completed=2, max_groups=1, execute=False, owner_fd=None,
     shared_lock=None, deadline_at=None, as_of=None, selected_runs=(), selected_generations=(),
     selected_evidence_bytes_limit=10_000_000_000, protection=None, budget=None,
+    fixed_budget=False,
 ):
     """Preview or retire a bounded number of verified derived artifact groups.
 
@@ -751,13 +752,16 @@ def prune_completed(
     Execute checkpoints full-file validation across calls, with exact file
     identities. A hash interrupted within one file restarts on the next call;
     the maintenance budget must accommodate the largest individual file.
-    Keep the newest two complete snapshot/checkpoint sets plus explicit selected
-    evidence. Calendar age alone does not allocate another full archive copy.
+    By default also retain the latest snapshot per UTC day for 30 days and per
+    UTC month for 12 months. Explicit fixed-budget activation replaces those
+    calendar checkpoints with the newest complete sets and selected evidence.
     """
     if type(keep_completed) is not int or keep_completed < 2:
         raise ValueError("Storage retention must keep at least two completed groups of each kind")
     if type(max_groups) is not int or max_groups < 1:
         raise ValueError("Storage retention max_groups must be positive")
+    if type(fixed_budget) is not bool:
+        raise ValueError("Storage retention fixed-budget activation must be boolean")
     if (type(selected_evidence_bytes_limit) is not int
             or not 0 <= selected_evidence_bytes_limit <= 10_000_000_000):
         raise ValueError("Selected evidence exceeds the fixed 10 GB category ceiling")
@@ -867,7 +871,9 @@ def prune_completed(
     checkpoint_reasons = {
         "newest_two_or_more": newest_runs,
         "selected_evidence": set(selected_runs), "future_dated": set(),
+        "daily_30_days": set(), "monthly_12_months": set(),
     }
+    latest_day, latest_month = {}, {}
     for group in run_groups:
         _check_deadline(deadline_at)
         completed = datetime.fromtimestamp(group["time"], UTC)
@@ -875,19 +881,26 @@ def prune_completed(
         days_old = (today - day).days
         if days_old < 0:
             checkpoint_reasons["future_dated"].add(group["id"])
-    selected_bytes = 0
-    for base, identifiers in ((runs, selected_runs), (generations, selected_generations)):
-        for identifier in identifiers:
-            if not isinstance(identifier, str) or Path(identifier).name != identifier:
-                raise ValueError("Selected evidence identifier is invalid")
-            directory = _directory(base / identifier)
-            for parent, directories, filenames in os.walk(directory, followlinks=False):
-                for name in directories:
-                    _directory(Path(parent) / name)
-                for name in filenames:
-                    _check_deadline(deadline_at)
-                    info = _regular(Path(parent) / name)
-                    selected_bytes += max(info.st_size, info.st_blocks * 512)
+        if not fixed_budget:
+            if 0 <= days_old < 30:
+                current = latest_day.get(day)
+                if current is None or group["time"] > current["time"]:
+                    latest_day[day] = group
+            months_old = (today.year - day.year) * 12 + today.month - day.month
+            if 0 <= months_old < 12:
+                month = (day.year, day.month)
+                current = latest_month.get(month)
+                if current is None or group["time"] > current["time"]:
+                    latest_month[month] = group
+    checkpoint_reasons["daily_30_days"].update(group["id"] for group in latest_day.values())
+    checkpoint_reasons["monthly_12_months"].update(
+        group["id"] for group in latest_month.values()
+    )
+    # Use the same complete, deduplicated evidence accounting as terminal
+    # history: selected manifests also retain shared chunks and cold objects.
+    selected_bytes = _history_helper()._selected_evidence(
+        root, selected_runs, selected_generations, deadline_at
+    ) if selected_runs or selected_generations else 0
     if selected_bytes > selected_evidence_bytes_limit:
         raise ValueError("Selected evidence exceeds its byte ceiling")
     protected_runs = set().union(*checkpoint_reasons.values())
@@ -904,7 +917,7 @@ def prune_completed(
             deadline_at=deadline_at)
         if fresh != protection:
             raise ValueError("Storage retention operational closure changed")
-        protected_runs = set(protection["runs"]) | checkpoint_reasons["future_dated"]
+        protected_runs |= set(protection["runs"])
         protected_generations = set(protection["generations"])
     candidates = []
     skipped_protected = {"run_snapshot": 0, "generation_exports": 0}

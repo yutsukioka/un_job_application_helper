@@ -265,6 +265,8 @@ def test_redirect_and_robots_each_require_new_admission(tmp_path, monkeypatch):
     class Grant:
         body_limit = 16
     class Storage:
+        def ensure_directory(self, path, **kwargs):
+            path.mkdir(parents=True, exist_ok=True)
         def bind_request(self, path, grant=None, *, host):
             reservations.append(path.name)
             if len(reservations) > 2:

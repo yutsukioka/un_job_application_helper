@@ -341,7 +341,8 @@ def _validate_generation_binding(run, request, binding, publication):
         _clock(authorization.get("gate_started_at"))
 
 
-def classify_run(run, *, allow_missing_generation_result=False, deadline_at=None):
+def classify_run(run, *, allow_missing_generation_result=False, deadline_at=None,
+                 allow_unfinished_no_write_state=False):
     """Return a conservative classification of a run's *present* controls.
 
     ``controls`` contains only existing, read and verified paths. Missing files
@@ -350,6 +351,7 @@ def classify_run(run, *, allow_missing_generation_result=False, deadline_at=None
     it never synthesizes that result or authorizes retirement on its own.
     """
     _require(type(allow_missing_generation_result) is bool, "invalid missing-result option")
+    _require(type(allow_unfinished_no_write_state) is bool, "invalid no-write state option")
     run = Path(os.path.abspath(run))
     controls = _Controls(deadline_at)
     answer = {"disposition": "unresolved", "terminal_kind": None, "result": None,
@@ -426,15 +428,19 @@ def classify_run(run, *, allow_missing_generation_result=False, deadline_at=None
         _require(selected.get("run_id") == run.name
                  and selected.get("previous_outcome_sha256") == controls.digest(run / "outcome.json"),
                  "resolution original outcome differs")
-        if state is None:
-            raise _Missing(run / "state.json")
-        _require(state.get("status") in {"complete", "incomplete"}
-                 and state.get("publication_recovery_allowed") is False,
-                 "resolved run state is not terminal")
+        pending_no_write_state = (allow_unfinished_no_write_state and no_write is not None
+                                  and (state is None or state == outcome))
+        if not pending_no_write_state:
+            if state is None:
+                raise _Missing(run / "state.json")
+            _require(state.get("status") in {"complete", "incomplete"}
+                     and state.get("publication_recovery_allowed") is False,
+                     "resolved run state is not terminal")
         if no_write is not None:
-            _require(binding is None and state.get("publication_status") == "deferred"
+            _require(binding is None and (pending_no_write_state or (
+                     state.get("publication_status") == "deferred"
                      and state.get("generation_not_started") is True
-                     and state.get("worker_reexecuted") is False
+                     and state.get("worker_reexecuted") is False))
                      and no_write.get("original_request_sha256") == request_sha
                      and no_write.get("original_intent_sha256")
                      == controls.digest(run / "publication_intent.json"), "no-write resolution differs")
@@ -463,6 +469,8 @@ def classify_run(run, *, allow_missing_generation_result=False, deadline_at=None
                      and gate.get("plan_sha256") == controls.digest(plan_path)
                      and prior_result == gate, "prior gate/plan/result binding differs")
             answer.update(disposition="terminal", terminal_kind="verified_unstarted")
+            if pending_no_write_state:
+                answer["no_write_state_pending"] = True
             return finish()
         _require(state.get("publication_status") == "published"
                  and state.get("publication_resolution_sha256") == controls.digest(resolution_path),

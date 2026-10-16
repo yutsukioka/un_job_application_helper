@@ -211,6 +211,33 @@ def test_published_with_incomplete_worker_and_absent_snapshot_is_terminal(run):
     assert {p: p.read_bytes() for p in run.rglob("*") if p.is_file()} == before
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_immutable_no_write_proof_can_validate_before_state_replacement(run, missing):
+    no_write(run)
+    if missing:
+        (run / "state.json").unlink()
+    else:
+        (run / "state.json").write_bytes((run / "outcome.json").read_bytes())
+    before = {p: p.read_bytes() for p in run.rglob("*") if p.is_file()}
+    classified = terminal.classify_run(run, allow_unfinished_no_write_state=True)
+    assert classified["terminal_kind"] == "verified_unstarted"
+    assert classified["no_write_state_pending"] is True
+    assert before == {p: p.read_bytes() for p in run.rglob("*") if p.is_file()}
+    # This opt-in never discharges a borrowed/corrupt immutable proof.
+    resolution = read(run / "publication_no_write_resolution.json")
+    resolution["original_intent_sha256"] = "f" * 64
+    write(run / "publication_no_write_resolution.json", resolution)
+    with pytest.raises(ValueError):
+        terminal.classify_run(run, allow_unfinished_no_write_state=True)
+
+
+def test_no_write_state_repair_rejects_a_different_mutable_state(run):
+    no_write(run)
+    write(run / "state.json", {**read(run / "outcome.json"), "status": "different_failure"})
+    with pytest.raises(ValueError, match="resolved run state is not terminal"):
+        terminal.classify_run(run, allow_unfinished_no_write_state=True)
+
+
 def test_noop_preserves_real_no_changes_result(run):
     modify(run / "publication_result.json", status="noop",
            publication={"status": "no_changes", "generation_not_started": True})

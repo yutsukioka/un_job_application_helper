@@ -59,6 +59,7 @@ def _mock_tick(monkeypatch, tmp_path, *, enabled=True, prune=None, unresolved=Fa
         "shared_lock_path": tmp_path / "owner.lock",
         "maintenance_file": tmp_path / "maintenance",
         "publication_argv": [],
+        "total_timeout_seconds": 15,
         "storage_retention": {
             "enabled": enabled, "max_seconds": 5, "max_groups": 2,
             "keep_completed": 2,
@@ -66,18 +67,18 @@ def _mock_tick(monkeypatch, tmp_path, *, enabled=True, prune=None, unresolved=Fa
     }
     health = []
     monkeypatch.setattr(runner.OBSERVABILITY, "storage_check", lambda _, **_kw: {"ready": True})
-    monkeypatch.setattr(runner.OBSERVABILITY, "condition_fingerprint", lambda *_: "condition")
-    monkeypatch.setattr(runner.OBSERVABILITY, "failure_hold", lambda *_: None)
+    monkeypatch.setattr(runner.OBSERVABILITY, "condition_fingerprint", lambda *_, **_kw: "condition")
+    monkeypatch.setattr(runner.OBSERVABILITY, "failure_hold", lambda *_, **_kw: None)
     monkeypatch.setattr(runner.OBSERVABILITY, "record_failure", lambda _c, _fingerprint, result: health.append(dict(result)))
     monkeypatch.setattr(runner, "recover_stale_runs", lambda *_args, **_kw: [])
 
-    def work(*_args):
+    def work(*_args, **_kwargs):
         if pause_during_work:
             config["maintenance_file"].write_text("pause")
         return {"status": "complete", "publication_status": "published"}
 
     monkeypatch.setattr(runner, "locked_tick", work)
-    monkeypatch.setattr(runner, "unresolved_publications", lambda *_: ["pending"] if unresolved else [])
+    monkeypatch.setattr(runner, "unresolved_publications", lambda *_, **_kw: ["pending"] if unresolved else [])
     if prune is not None:
         monkeypatch.setattr(runner, "retention_helper", lambda _config: SimpleNamespace(prune_completed=prune))
     return config, health
@@ -90,6 +91,7 @@ def test_retention_runs_under_owner_after_terminal_health_record(monkeypatch, tm
         assert health == [{"status": "complete", "publication_status": "published"}]
         assert root == config["state_dir"].parent
         assert kwargs["execute"] is True
+        assert kwargs["fixed_budget"] is False
         assert kwargs["shared_lock"] == config["shared_lock_path"]
         assert kwargs["keep_completed"] == 2 and kwargs["max_groups"] == 2
         assert kwargs["deadline_at"] > runner.time.monotonic()
@@ -170,7 +172,7 @@ def test_retention_partial_deadline_is_reported_separately(monkeypatch, tmp_path
 
 def test_enabled_dry_run_does_not_load_retention_helper(monkeypatch, fixture, capsys):
     fixture.configure(storage_retention={"enabled": True})
-    monkeypatch.setattr(runner, "retention_helper", lambda *_: pytest.fail("dry run loaded helper"))
+    monkeypatch.setattr(runner, "retention_helper", lambda *_, **_kw: pytest.fail("dry run loaded helper"))
     before = set(fixture.root.rglob("*"))
     assert runner.main(["--config", str(fixture.config_path), "--dry-run"]) == 0
     result = json.loads(capsys.readouterr().out)
@@ -233,8 +235,8 @@ def test_low_reserve_runs_only_retention_under_owner_then_retries_next_tick(monk
 
     config, health = _mock_tick(monkeypatch, tmp_path, prune=prune)
     checks = _under_reserve(monkeypatch)
-    monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("fetch under reserve"))
-    monkeypatch.setattr(runner.OBSERVABILITY, "failure_hold", lambda *_: pytest.fail("maintenance must not be held by prior fetch failures"))
+    monkeypatch.setattr(runner, "locked_tick", lambda *_, **_kw: pytest.fail("fetch under reserve"))
+    monkeypatch.setattr(runner.OBSERVABILITY, "failure_hold", lambda *_, **_kw: pytest.fail("maintenance must not be held by prior fetch failures"))
     for _ in range(2):
         result = runner.tick(config, [])
         assert result["status"] == "process_failure"
@@ -254,7 +256,7 @@ def test_reclaimed_reserve_is_rechecked_before_work_and_maintenance_is_not_doubl
 
     config, _ = _mock_tick(monkeypatch, tmp_path, prune=prune)
     checks = _under_reserve(monkeypatch, freed=True)
-    monkeypatch.setattr(runner, "locked_tick", lambda *_: order.append("work") or {"status": "complete"})
+    monkeypatch.setattr(runner, "locked_tick", lambda *_, **_kw: order.append("work") or {"status": "complete"})
     result = runner.tick(config, [])
     assert order == ["prune", "work"]
     assert checks == [False, False, True]
@@ -268,7 +270,7 @@ def test_low_reserve_preserves_maintenance_publication_and_owner_gates(monkeypat
                           if gate == "unresolved" else
                           lambda *_a, **_k: pytest.fail("protected cleanup"))
     _under_reserve(monkeypatch)
-    monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("protected worker"))
+    monkeypatch.setattr(runner, "locked_tick", lambda *_, **_kw: pytest.fail("protected worker"))
     if gate == "maintenance":
         config["maintenance_file"].write_text("operator pause")
         assert runner.tick(config, [])["status"] == "maintenance_paused"
@@ -289,7 +291,7 @@ def test_low_reserve_does_not_admit_work_after_retention_integrity_error(monkeyp
 
     config, _ = _mock_tick(monkeypatch, tmp_path, prune=prune)
     _under_reserve(monkeypatch, freed=True)
-    monkeypatch.setattr(runner, "locked_tick", lambda *_: pytest.fail("integrity error must stop work"))
+    monkeypatch.setattr(runner, "locked_tick", lambda *_, **_kw: pytest.fail("integrity error must stop work"))
     result = runner.tick(config, [])
     assert result["status"] == "process_failure"
     assert result["storage_retention"]["status"] == "error"
@@ -325,7 +327,7 @@ def test_retention_gate_scan_error_blocks_unverified_new_work(monkeypatch, tmp_p
                                prune=lambda *_a, **_k: pytest.fail("uncertain gate"))
     scans = 0
 
-    def unresolved(_root, _config=None):
+    def unresolved(_root, _config=None, *, deadline_at=None):
         nonlocal scans
         scans += 1
         if scans == 1:
@@ -368,14 +370,15 @@ def test_activated_maintenance_shares_group_deadline_and_protection(
     def copies(_root, **kw):
         calls.append(("copies", kw))
         assert kw["protection"] is protection
+        assert kw["fixed_budget"] is True
         assert kw["selected_runs"] == ["incident-a", "incident-b"]
         assert kw["selected_generations"] == []
         assert kw["max_groups"] == max_groups - projection_count - history_count
         return {"deadline_deferred": False}
 
-    monkeypatch.setattr(runner, "package_helper", lambda *_: SimpleNamespace(
+    monkeypatch.setattr(runner, "package_helper", lambda *_, **_kw: SimpleNamespace(
         retire_published_projections=projections, maintain_history=history))
-    monkeypatch.setattr(runner, "retention_helper", lambda *_: SimpleNamespace(prune_completed=copies))
+    monkeypatch.setattr(runner, "retention_helper", lambda *_, **_kw: SimpleNamespace(prune_completed=copies))
     result = runner.maintain_storage(config, 123, budget)
     assert result["status"] == "complete", result
     assert [item[0] for item in calls] == ["projection", "history", "copies"]

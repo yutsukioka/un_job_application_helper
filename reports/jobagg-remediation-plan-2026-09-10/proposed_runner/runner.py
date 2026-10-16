@@ -859,7 +859,9 @@ def immutable_json(path, value):
     atomic_json(path, value)
 
 
-def recover_stale_runs(config, descriptor, allow_publication_recovery=False):
+def recover_stale_runs(config, descriptor, allow_publication_recovery=False, *, deadline_at=None):
+    if deadline_at is None:
+        deadline_at = time.monotonic() + config["total_timeout_seconds"]
     owner = owner_evidence(config, descriptor)
     recovered = []
     root = config["state_dir"] / "runs"
@@ -992,22 +994,24 @@ def recover_stale_runs(config, descriptor, allow_publication_recovery=False):
     # publication automatically until that ambiguity has been explicitly resolved.
     if not allow_publication_recovery:
         require(
-            not unresolved_publications(root, config),
+            not unresolved_publications(root, config, deadline_at=deadline_at),
             "Unresolved prior publication intent; use explicit --recover-publication before new work",
         )
     return recovered
 
 
-def maintain_storage(config, descriptor, budget=None):
+def maintain_storage(config, descriptor, budget=None, *, deadline_at=None):
     """One bounded retention pass; never release publication or maintenance gates."""
     try:
         if config.get("maintenance_file") and config["maintenance_file"].exists():
             return {"status": "skipped", "reason": "maintenance_paused"}
-        # Validate unresolved receipts, but protect their exact dependency closure
-        # in the shared classifier instead of pinning every unrelated old group.
-        unresolved_publications(config["state_dir"] / "runs", config)
         retention = config["storage_retention"]
         deadline = time.monotonic() + retention["max_seconds"]
+        if deadline_at is not None:
+            deadline = min(deadline, deadline_at)
+        # Validate unresolved receipts, but protect their exact dependency closure
+        # in the shared classifier instead of pinning every unrelated old group.
+        unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline)
         history = projections = None
         remaining = retention["max_groups"]
         if config.get("history_policy", {}).get("enabled"):
@@ -1042,6 +1046,7 @@ def maintain_storage(config, descriptor, budget=None):
             owner_fd=descriptor,
             shared_lock=config["shared_lock_path"],
             deadline_at=deadline,
+            fixed_budget=budget is not None,
             **selection,
             **({"budget": budget, "protection": history["protected"]} if history else {}),
         )
@@ -1074,8 +1079,10 @@ def controller_scope(config, context):
         config.pop("_storage_context", None)
 
 
-def budgeted_tick(config, expected, recover_publication=False):
+def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=None):
     """Admit the complete bounded cycle before creating a run or fetching."""
+    if deadline_at is None:
+        deadline_at = time.monotonic() + config["total_timeout_seconds"]
     bridge = package_helper(config, "storage_cycle")
     controls = package_helper(config, "dispatcher_storage")
     pending = package_helper(config, "pending_publication")
@@ -1099,7 +1106,12 @@ def budgeted_tick(config, expected, recover_publication=False):
             terminal_path = interrupted_run / "outcome.json"
             if context["ledger"].snapshot()["phase"] == "publication_admitted" and terminal_path.exists():
                 terminal = read_json(terminal_path)
-                if terminal.get("publication_status") in {"published", "noop"}:
+                if (interrupted_run / "publication_no_write_resolution.json").exists():
+                    settle_unstarted_publication(config, context, interrupted_run, deadline_at=deadline_at)
+                    context["ledger"].transition("publication_admitted", "completed")
+                    return {**read_json(interrupted_run / "state.json"), "storage_cycle_reconciled": True,
+                            "worker_reexecuted": False, "publisher_reexecuted": False}
+                if terminal.get("publication_status") in {"published", "noop", "deferred"}:
                     # A crash after the terminal receipt must not wedge a fully
                     # published cycle or authorize replay. Reconcile only exact
                     # immutable request/result evidence and absent old processes.
@@ -1111,6 +1123,10 @@ def budgeted_tick(config, expected, recover_publication=False):
                             and terminal.get("publication_result_sha256") == digest(receipt_path),
                             "Completed publication reconciliation bindings differ")
                     validate_publication(read_json(receipt_path), read_json(publication_path))
+                    require(read_json(receipt_path).get("status") == terminal["publication_status"],
+                            "Completed publication reconciliation status differs")
+                    if terminal["publication_status"] == "deferred":
+                        settle_unstarted_publication(config, context, interrupted_run, deadline_at=deadline_at)
                     context["ledger"].transition("publication_admitted", "completed")
                     return {**terminal, "storage_cycle_reconciled": True,
                             "worker_reexecuted": False, "publisher_reexecuted": False}
@@ -1130,7 +1146,7 @@ def budgeted_tick(config, expected, recover_publication=False):
                 with controller_scope(config, context):
                     pending.release_after_intent(config["state_dir"], run_id=accepted["run_id"])
                 accepted = None
-        unknown = unresolved_publications(config["state_dir"] / "runs", config)
+        unknown = unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at)
         if context and accepted is None and not unknown:
             old_run = config["state_dir"] / "runs" / context["ledger"].cycle_id
             old_state = old_run / "state.json"
@@ -1183,7 +1199,7 @@ def budgeted_tick(config, expected, recover_publication=False):
             try:
                 maintenance = bridge.prepare_maintenance(config, str(uuid.uuid4()), pending_context=context)
                 with controller_scope(config, maintenance):
-                    result["storage_retention"] = maintain_storage(config, descriptor, maintenance["ledger"])
+                    result["storage_retention"] = maintain_storage(config, descriptor, maintenance["ledger"], deadline_at=deadline_at)
                 if not maintenance.get("maintenance_reuses_pending"):
                     maintenance["ledger"].transition("worker_admitted", "completed")
             except (errors.StorageBudgetError, errors.StorageBudgetDeferred) as exc:
@@ -1197,7 +1213,7 @@ def budgeted_tick(config, expected, recover_publication=False):
             if config["storage_retention"]["enabled"]:
                 maintenance = bridge.prepare_maintenance(config, str(uuid.uuid4()))
                 with controller_scope(config, maintenance):
-                    prior_retention = maintain_storage(config, descriptor, maintenance["ledger"])
+                    prior_retention = maintain_storage(config, descriptor, maintenance["ledger"], deadline_at=deadline_at)
                 maintenance["ledger"].transition("worker_admitted", "completed")
                 require(prior_retention["status"] not in {"error", "skipped"},
                         "Storage maintenance could not validate eligible artifacts")
@@ -1209,7 +1225,7 @@ def budgeted_tick(config, expected, recover_publication=False):
             if recover_publication:
                 require(phase == "publication_admitted", "Recovery requires the original publication escrow")
                 execution_attempted = True
-                result = resume_publication(config, expected, descriptor)
+                result = resume_publication(config, expected, descriptor, deadline_at=deadline_at)
             else:
                 if accepted:
                     pending.validate(config["state_dir"], config_sha256=config["_config_sha256"],
@@ -1220,10 +1236,11 @@ def budgeted_tick(config, expected, recover_publication=False):
                     proof = former_processes_absent(state)
                     pending.prepare_resume(config["state_dir"], process_evidence=proof)
                 execution_attempted, worker_attempt_possible = True, accepted is None
-                result = locked_tick(config, expected, descriptor, storage_context=context, resume=accepted)
+                result = locked_tick(config, expected, descriptor, storage_context=context, resume=accepted,
+                                     deadline_at=deadline_at)
             result["storage_budget"] = controls.summary(context)
             if result.get("publication_status") in {"published", "noop"} and config["storage_retention"]["enabled"]:
-                result["storage_retention"] = maintain_storage(config, descriptor, context["ledger"])
+                result["storage_retention"] = maintain_storage(config, descriptor, context["ledger"], deadline_at=deadline_at)
             elif prior_retention is not None:
                 result["storage_retention"] = prior_retention
             OBSERVABILITY.finish_attempt(attempt, intent, result)
@@ -1236,7 +1253,11 @@ def budgeted_tick(config, expected, recover_publication=False):
                         written = os.write(sys.stdout.fileno(), view)
                         view = view[written:]
                     os.fsync(sys.stdout.fileno())
-        if result.get("publication_status") in {"published", "noop"}:
+        if result.get("publication_status") == "deferred":
+            settle_unstarted_publication(config, context,
+                                         config["state_dir"] / "runs" / context["ledger"].cycle_id,
+                                         deadline_at=deadline_at)
+        if result.get("publication_status") in {"published", "noop", "deferred"}:
             context["ledger"].transition("publication_admitted", "completed")
         return result
     except (errors.StorageBudgetError, errors.StorageBudgetDeferred) as exc:
@@ -1256,9 +1277,104 @@ def budgeted_tick(config, expected, recover_publication=False):
         os.close(descriptor)
 
 
+def settle_unstarted_publication(config, context, run, *, deadline_at=None):
+    """Close only proven no-generation publisher grants; retain accepted data.
+
+    The caller holds the shared owner. A terminal receipt is written before this
+    settlement, so a restart can validate the same immutable evidence. Consumed
+    reservations remain charged, including any abandoned preparation files.
+    """
+    require(run.name == context["ledger"].cycle_id,
+            "Deferred publication storage cycle differs")
+    outcome = read_json(run / "outcome.json")
+    request_path, result_path = run / "publication_request.json", run / "publication_result.json"
+    request = read_json(request_path)
+    intent = read_json(run / "publication_intent.json")
+    repair_state = False
+    require(outcome.get("run_id") == run.name
+            and not outcome.get("cleanup_failure")
+            and request.get("run_id") == run.name
+            and intent.get("run_id") == run.name
+            and intent.get("config_sha256") == config["_config_sha256"]
+            and intent.get("command_template") == config["publication_argv"]
+            and intent.get("cwd") == str(config["publication_cwd"])
+            and intent.get("request_sha256") == digest(request_path),
+            "Deferred publication terminal bindings differ")
+    if (run / "publication_no_write_resolution.json").exists():
+        # Explicit recovery may have proven an old ambiguous intent never
+        # started. Its immutable outcome remains unknown; validate the complete
+        # canonical resolution instead of manufacturing a publisher receipt.
+        classified = package_helper(config, "terminal_publication").classify_run(
+            run, deadline_at=deadline_at, allow_unfinished_no_write_state=True)
+        require(classified["disposition"] == "terminal"
+                and classified["terminal_kind"] == "verified_unstarted",
+                "Deferred publication no-write resolution is not verified")
+        repair_state = classified.get("no_write_state_pending", False)
+    else:
+        result = read_json(result_path)
+        require(outcome.get("publication_status") == "deferred"
+                and outcome.get("publication_recovery_allowed") is False
+                and outcome.get("publication_exit_code") == 0
+                and result.get("publication_request_sha256") == digest(request_path)
+                and outcome.get("publication_result_sha256") == digest(result_path)
+                and result.get("status") == "deferred",
+                "Deferred publication terminal bindings differ")
+        validate_publication(result, request)
+    acceptance = run / "acceptance.json"
+    worker = read_json(run / "worker_result.json")
+    require(request.get("worker_acceptance_path") == str(acceptance)
+            and request.get("worker_acceptance_sha256") == digest(acceptance)
+            and worker.get("run_id") == run.name
+            and worker.get("worker_exit_code") == 0
+            and worker.get("report_sha256") == digest(acceptance)
+            and worker.get("request_sha256") == digest(run / "request.json")
+            and worker.get("config_sha256") == config["_config_sha256"]
+            and request.get("publication_policy") == config["publication_policy"],
+            "Deferred publication accepted-work proof differs")
+    former_processes_absent(outcome)
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        raise TimeoutError("Deferred publication settlement deadline exceeded")
+    if repair_state:
+        state = {**outcome, "status": "incomplete", "phase": "finished",
+                 "publication_status": "deferred", "publication_recovery_allowed": False,
+                 "generation_not_started": True, "worker_reexecuted": False,
+                 "reasons": ["Unstarted publication safely deferred; accepted data retained for next tick"],
+                 "finished_at": now().isoformat()}
+        with controller_scope(config, context):
+            atomic_json(run / "state.json", state)
+            atomic_json(config["state_dir"] / "state.json", state)
+    # Resume only the publisher's deterministic operation IDs and original
+    # limits. Unknown worker/controller operations still prevent ledger close.
+    publishers = [writer for writer, role in context["admission"].config.writer_roles.items()
+                  if role == "publisher"]
+    require(len(publishers) == 1, "Deferred publication writer identity differs")
+    publisher = context["ledger"].for_writer(publishers[0])
+    operations = publisher.snapshot()["operations"]
+    selected = []
+    for category, maximum in context["limits"]["publisher_write_limits"].items():
+        # PublisherEscrow.operation_id's immutable cycle/writer/category key.
+        operation_id = hashlib.sha256(
+            f"publication\n{publisher.cycle_id}\n{publisher.writer_id}\n{category}".encode()
+        ).hexdigest()
+        operation = operations.get(operation_id)
+        if operation is not None:
+            require(operation.get("writer_id") == publisher.writer_id
+                    and operation.get("category") == category
+                    and operation.get("maximum") == maximum,
+                    "Deferred publication reservation binding differs")
+            selected.append(operation_id)
+    proof = run / "publication_no_write_resolution.json"
+    proof_sha = digest(proof if proof.exists() else result_path)
+    for operation_id in selected:
+        # Already settled categories are absent after a partial settlement;
+        # never reserve them again or refund their consumed charges.
+        publisher.resume(operation_id).settle(proof_sha256=proof_sha)
+
+
 def tick(config, expected, recover_publication=False):
+    deadline_at = time.monotonic() + config["total_timeout_seconds"]
     if config.get("storage_budget", {}).get("enabled"):
-        return budgeted_tick(config, expected, recover_publication=recover_publication)
+        return budgeted_tick(config, expected, recover_publication=recover_publication, deadline_at=deadline_at)
     # Identity/mount/path checks still precede every guarded-volume write. Only
     # enabled retention may enter under the reserve, and it cannot launch work.
     retention = config.get("storage_retention", {})
@@ -1285,7 +1401,7 @@ def tick(config, expected, recover_publication=False):
             }
         prior_retention = None
         if (retention.get("enabled") and not recover_publication
-                and unresolved_publications(config["state_dir"] / "runs", config)):
+                and unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at)):
             # This is deliberately a maintenance-only invocation.  Reclaiming B
             # must never become an implicit replay/recovery of unresolved A.
             return {
@@ -1293,7 +1409,7 @@ def tick(config, expected, recover_publication=False):
                 "unresolved_publication": True,
                 "worker_dispatched": False, "publisher_dispatched": False,
                 "reasons": ["Unresolved publication requires explicit recovery; independent cleanup only"],
-                "storage_retention": maintain_storage(config, descriptor),
+                "storage_retention": maintain_storage(config, descriptor, deadline_at=deadline_at),
             }
         if retention.get("enabled"):
             # Recheck after acquiring the owner: the first free-space sample may
@@ -1301,7 +1417,7 @@ def tick(config, expected, recover_publication=False):
             # a fresh, fully guarded check admits the ordinary worker path.
             storage = OBSERVABILITY.storage_check(config, require_reserve=False)
             if not storage["ready"]:
-                prior_retention = maintain_storage(config, descriptor)
+                prior_retention = maintain_storage(config, descriptor, deadline_at=deadline_at)
                 try:
                     OBSERVABILITY.storage_check(config)
                 except Exception as exc:
@@ -1311,7 +1427,7 @@ def tick(config, expected, recover_publication=False):
                         "reasons": [type(exc).__name__ + ": " + str(exc)],
                         "storage_retention": prior_retention,
                         "unresolved_publication": bool(
-                            unresolved_publications(config["state_dir"] / "runs", config)
+                            unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at)
                         ),
                     }
                 if prior_retention["status"] in {"error", "skipped"}:
@@ -1333,16 +1449,17 @@ def tick(config, expected, recover_publication=False):
                 descriptor,
                 allow_publication_recovery=recover_publication
                 or bool(config["publication_argv"]),
+                deadline_at=deadline_at,
             )
             if recover_publication or unresolved_publications(
-                config["state_dir"] / "runs", config
+                config["state_dir"] / "runs", config, deadline_at=deadline_at
             ):
-                result = resume_publication(config, expected, descriptor)
+                result = resume_publication(config, expected, descriptor, deadline_at=deadline_at)
             else:
-                result = locked_tick(config, expected, descriptor, recovered)
+                result = locked_tick(config, expected, descriptor, recovered, deadline_at=deadline_at)
         except Exception as exc:
             try:
-                unresolved = bool(unresolved_publications(config["state_dir"] / "runs", config))
+                unresolved = bool(unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at))
             except Exception:
                 # An unreadable recovery boundary is unknown, never evidence
                 # that publication is clear. Preserve the original error below.
@@ -1358,7 +1475,7 @@ def tick(config, expected, recover_publication=False):
             # when needed to regain the reserve, otherwise after terminal work.
             result["storage_retention"] = (
                 prior_retention if prior_retention is not None
-                else maintain_storage(config, descriptor)
+                else maintain_storage(config, descriptor, deadline_at=deadline_at)
             )
         return result
     finally:
@@ -1541,15 +1658,65 @@ def validate_publication(result, request):
     )
 
 
-def unresolved_publications(root, config=None):
+def unresolved_publications(root, config=None, *, deadline_at=None):
+    """Scan controls once, sharing one bounded operational closure for receipts."""
+    def check_deadline():
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            raise TimeoutError("Unresolved publication scan deadline exhausted")
+
+    def read_control(path):
+        check_deadline()
+        value = read_json(path)
+        check_deadline()
+        return value
+
+    def control_digest(path):
+        if deadline_at is None:
+            return digest(path)
+        check_deadline()
+        result = hashlib.sha256()
+        with path.open("rb") as stream:
+            while True:
+                check_deadline()
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                result.update(chunk)
+        check_deadline()
+        return result.hexdigest()
+
+    def control_reference(reference, run_dir):
+        if deadline_at is None:
+            return evidence_path(reference, run_dir)
+        check_deadline()
+        require(isinstance(reference, dict), "evidence reference must be an object")
+        name = reference.get("path")
+        require(isinstance(name, str) and name, "evidence path missing")
+        path = (run_dir / name).resolve()
+        require(path.is_relative_to(run_dir.resolve()), "evidence escapes this run directory")
+        require(path.is_file(), "evidence file missing")
+        require(reference.get("sha256") == control_digest(path), "evidence SHA-256 mismatch")
+        return path
+
+    check_deadline()
     unknown = []
+    history = closure = None
+    history_root = root.parent.parent
     for outcome in root.glob("*/outcome.json"):
+        check_deadline()
         if (outcome.parent / "terminal-history-retirement.json").exists():
             require(config is not None, "Retired history requires the canonical classifier")
-            classified = package_helper(config, "terminal_history").classify_history(outcome.parent)
+            if history is None:
+                history = package_helper(config, "terminal_history")
+                check_deadline()
+                closure = history.operational_closure(history_root, deadline_at=deadline_at)
+                check_deadline()
+            classified = history.classify_history(
+                outcome.parent, root=history_root, closure=closure, deadline_at=deadline_at)
+            check_deadline()
             if classified["disposition"] == "retired_terminal":
                 continue
-        value = read_json(outcome)
+        value = read_control(outcome)
         if value.get("publication_status") not in {
             "unknown_requires_review_no_replay",
             "incomplete",
@@ -1557,40 +1724,40 @@ def unresolved_publications(root, config=None):
             continue
         no_write = outcome.parent / "publication_no_write_resolution.json"
         if no_write.exists():
-            resolved = read_json(no_write)
+            resolved = read_control(no_write)
             original = outcome.parent / "publication_request.json"
             proof = resolved.get("proof", {})
             gate = proof.get("prior_gate", {})
             require(
                 resolved.get("run_id") == value["run_id"]
-                and resolved.get("previous_outcome_sha256") == digest(outcome)
-                and resolved.get("original_request_sha256") == digest(original)
-                and resolved.get("original_intent_sha256") == digest(outcome.parent / "publication_intent.json")
+                and resolved.get("previous_outcome_sha256") == control_digest(outcome)
+                and resolved.get("original_request_sha256") == control_digest(original)
+                and resolved.get("original_intent_sha256") == control_digest(outcome.parent / "publication_intent.json")
                 and proof.get("kind") == "verified_unstarted_publication"
                 and proof.get("generation_not_started") is True
                 and gate.get("state") == "complete"
-                and timestamp(gate["completed_at"]) < timestamp(read_json(original)["generated_at"]),
+                and timestamp(gate["completed_at"]) < timestamp(read_control(original)["generated_at"]),
                 "invalid unstarted publication resolution",
             )
             for key in ("prior_plan", "prior_result"):
-                require(digest(Path(proof[key]["path"])) == proof[key]["sha256"],
+                require(control_digest(Path(proof[key]["path"])) == proof[key]["sha256"],
                         "unstarted publication journal evidence changed")
-            require(read_json(Path(proof["prior_result"]["path"])) == gate,
+            require(read_control(Path(proof["prior_result"]["path"])) == gate,
                     "unstarted publication result differs")
             continue
         resolution = outcome.parent / "publication_resolution.json"
         if resolution.exists():
-            resolved = read_json(resolution)
+            resolved = read_control(resolution)
             require(
                 resolved.get("run_id") == value["run_id"]
-                and resolved.get("previous_outcome_sha256") == digest(outcome),
+                and resolved.get("previous_outcome_sha256") == control_digest(outcome),
                 "invalid publication resolution",
             )
-            request_path = evidence_path(resolved["request"], outcome.parent)
-            result_path = evidence_path(resolved["result"], outcome.parent)
-            recovery_request = read_json(request_path)
+            request_path = control_reference(resolved["request"], outcome.parent)
+            result_path = control_reference(resolved["result"], outcome.parent)
+            recovery_request = read_control(request_path)
             original_path = outcome.parent / "publication_request.json"
-            original = read_json(original_path)
+            original = read_control(original_path)
             require(
                 recovery_request.get("run_id") == value["run_id"]
                 and recovery_request.get("recover_publication") is True
@@ -1602,9 +1769,9 @@ def unresolved_publications(root, config=None):
                 ).resolve()
                 == original_path.resolve()
                 and recovery_request["original_publication_request"].get("sha256")
-                == digest(original_path)
+                == control_digest(original_path)
                 and recovery_request.get("original_publication_intent_sha256")
-                == digest(outcome.parent / "publication_intent.json")
+                == control_digest(outcome.parent / "publication_intent.json")
                 and ("publication_snapshot" in recovery_request)
                 == ("publication_snapshot" in original)
                 and all(
@@ -1626,14 +1793,16 @@ def unresolved_publications(root, config=None):
             if "recovery_generation_binding" in recovery_request:
                 require(
                     recovery_request["recovery_generation_binding"]
-                    == read_json(
+                    == read_control(
                         outcome.parent / "publication_generation_binding.json"
                     ),
                     "recovery borrowed a different publication generation",
                 )
-            validate_publication(read_json(result_path), recovery_request)
+            validate_publication(read_control(result_path), recovery_request)
+            check_deadline()
         else:
             unknown.append(outcome)
+    check_deadline()
     return unknown
 
 
@@ -1674,11 +1843,17 @@ def recovery_generation_fields(
     return {"recovery_generation_binding": binding}
 
 
-def resume_publication(config, expected, descriptor):
+def resume_publication(config, expected, descriptor, *, deadline_at=None):
     """Explicitly resume the publisher's same journal; never rerun the worker."""
+    validation_deadline = time.monotonic() + min(
+        config["publication_timeout_seconds"],
+        config["total_timeout_seconds"] - config["terminate_grace_seconds"],
+    )
+    if deadline_at is not None:
+        validation_deadline = min(validation_deadline, deadline_at - config["terminate_grace_seconds"])
     OBSERVABILITY.storage_check(config)
     storage_context = config.get("_storage_context")
-    unknown = unresolved_publications(config["state_dir"] / "runs", config)
+    unknown = unresolved_publications(config["state_dir"] / "runs", config, deadline_at=validation_deadline)
     require(
         len(unknown) == 1,
         "explicit recovery requires exactly one unresolved publication",
@@ -1714,10 +1889,6 @@ def resume_publication(config, expected, descriptor):
         digest(Path(original["worker_acceptance_path"]))
         == original["worker_acceptance_sha256"],
         "recovery acceptance changed",
-    )
-    validation_deadline = time.monotonic() + min(
-        config["publication_timeout_seconds"],
-        config["total_timeout_seconds"] - config["terminate_grace_seconds"],
     )
     owner_evidence(config, descriptor)
     validated_snapshot = snapshot_helper(config).validate_publication_snapshot(
@@ -1935,11 +2106,16 @@ def resume_publication(config, expected, descriptor):
     return result_state
 
 
-def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_context=None, resume=None):
+def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_context=None, resume=None,
+                deadline_at=None):
     OBSERVABILITY.storage_check(config)
     run_id = storage_context["ledger"].cycle_id if storage_context else str(uuid.uuid4())
     started = now()
     hard_end = time.monotonic() + config["total_timeout_seconds"]
+    if deadline_at is not None:
+        hard_end = min(hard_end, deadline_at)
+    require(hard_end > time.monotonic(), "no tick budget remains after admission")
+    wall_end = started + timedelta(seconds=max(0, hard_end - time.monotonic()))
     run_dir = config["state_dir"] / "runs" / run_id
     if resume is None:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -1958,11 +2134,9 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
         "run_id": run_id,
         "started_at": started.isoformat(),
         "deadline_at": (
-            started + timedelta(seconds=config["timeout_seconds"])
+            min(started + timedelta(seconds=config["timeout_seconds"]), wall_end)
         ).isoformat(),
-        "tick_deadline_at": (
-            started + timedelta(seconds=config["total_timeout_seconds"])
-        ).isoformat(),
+        "tick_deadline_at": wall_end.isoformat(),
         "source_manifest_path": str(manifest_path),
         "source_manifest_sha256": digest(manifest_path),
         "source_registry": {

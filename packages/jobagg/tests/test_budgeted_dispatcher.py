@@ -212,6 +212,247 @@ def test_interrupted_final_ledger_close_reconciles_without_replay(configured, mo
     assert storage_cycle.existing_context(config) is None
 
 
+@pytest.fixture
+def deferred_publisher(configured, monkeypatch):
+    """Real publisher escrow plus small synthetic subprocess receipts."""
+    from types import SimpleNamespace
+
+    from jobagg.publication_storage import PublisherEscrow
+
+    config, calls = configured
+    child = runner.subprocess.Popen
+    reserved = []
+
+    def snapshot(source, target, acceptance_sha, *_args, **_kwargs):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"sealed no-generation accepted-work projection")
+        return {"path": str(target), "sha256": runner.digest(target),
+                "source_database": str(source), "worker_acceptance_sha256": acceptance_sha}
+
+    def dispatch(argv, **kwargs):
+        process = child(argv, **kwargs)
+        if len(calls) == 2:
+            request_path = Path(argv[argv.index("--request") + 1])
+            report_path = Path(argv[argv.index("--report") + 1])
+            receipt = json.loads(report_path.read_text())
+            receipt.update(status="deferred", publication={"status": "deferred", "generation_not_started": True},
+                           publication_request_sha256=runner.digest(request_path))
+            escrow = PublisherEscrow(json.loads(kwargs["env"]["JOBAGG_STORAGE_BUDGET_LEASE"]),
+                                     config["storage_cycle"]["publisher_write_limits"])
+            escrow.charge(report_path, 4096)
+            escrow.charge(config["publication_worker_database"], 1)
+            reserved.append(escrow.ledger.snapshot()["operations"].copy())
+            # Match publish_worker: deferred leaves these operations open.
+            report_path.write_text(json.dumps(receipt))
+        return process
+
+    monkeypatch.setattr(runner, "snapshot_helper", lambda _c: SimpleNamespace(create_publication_snapshot=snapshot))
+    monkeypatch.setattr(runner.subprocess, "Popen", dispatch)
+    return config, calls, reserved
+
+
+def test_verified_no_generation_deferral_settles_and_next_tick_continues(deferred_publisher):
+    config, calls, reserved = deferred_publisher
+    original_database = config["publication_worker_database"].read_bytes()
+    first = runner.tick(config, ["fixture"])
+    assert first["publication_status"] == "deferred", first
+    assert first["publication_recovery_allowed"] is False
+    assert reserved and storage_cycle.existing_context(config) is None
+    run = Path(first["run_dir"])
+    preserved = {name: (run / name).read_bytes() for name in (
+        "request.json", "acceptance.json", "worker_result.json", "publication_request.json",
+        "publication_result.json", "publication_intent.json", "outcome.json")}
+    ledger = json.loads(Path(config["storage_budget"]["ledger_path"]).read_text())
+    assert not ledger["operations"]
+    for operation in reserved[0].values():
+        assert ledger["settled"][operation["category"]] >= operation["consumed"]
+    assert config["publication_worker_database"].read_bytes() == original_database
+    again = runner.tick(config, ["fixture"])
+    assert again["publication_status"] == "published", again
+    assert again["run_id"] != first["run_id"]
+    assert len(calls) == 4
+    assert all((run / name).read_bytes() == payload for name, payload in preserved.items())
+
+
+@pytest.fixture
+def interrupted_deferred_settlement(deferred_publisher, monkeypatch):
+    from jobagg.storage_budget import StorageBudgetDeferred
+    config, calls, reserved = deferred_publisher
+    settle = runner.settle_unstarted_publication
+
+    def interrupt(*_args, **_kwargs):
+        raise StorageBudgetDeferred("injected crash after terminal before publisher settlement")
+
+    monkeypatch.setattr(runner, "settle_unstarted_publication", interrupt)
+    first = runner.tick(config, ["fixture"])
+    assert first["status"] == "storage_deferred"
+    ledger = json.loads(Path(config["storage_budget"]["ledger_path"]).read_text())
+    assert ledger["phase"] == "publication_admitted"
+    assert ledger["operations"]
+    monkeypatch.setattr(runner, "settle_unstarted_publication", settle)
+    return config, calls, reserved, config["state_dir"] / "runs" / ledger["cycle_id"]
+
+
+def test_no_generation_terminal_crash_reconciles_without_replay(interrupted_deferred_settlement):
+    config, calls, _reserved, run = interrupted_deferred_settlement
+    preserved = {p.name: p.read_bytes() for p in run.glob("*.json")}
+    result = runner.tick(config, ["fixture"])
+    assert result["storage_cycle_reconciled"] is True
+    assert result["publication_status"] == "deferred"
+    assert result["worker_reexecuted"] is result["publisher_reexecuted"] is False
+    assert len(calls) == 2
+    assert storage_cycle.existing_context(config) is None
+    assert all((run / name).read_bytes() == payload for name, payload in preserved.items())
+
+
+@pytest.mark.parametrize("invalid", ["request", "result", "acceptance", "config", "started", "live_process"])
+def test_no_generation_settlement_rejects_inexact_evidence(interrupted_deferred_settlement, monkeypatch, invalid):
+    config, calls, _reserved, run = interrupted_deferred_settlement
+    if invalid in {"request", "result", "acceptance"}:
+        name = "acceptance.json" if invalid == "acceptance" else "publication_" + invalid + ".json"
+        path = run / name
+        path.write_text(path.read_text() + "\n")
+    elif invalid == "config":
+        config["_config_sha256"] = "f" * 64
+    elif invalid == "started":
+        path = run / "publication_result.json"
+        value = json.loads(path.read_text())
+        value["publication"]["generation_not_started"] = False
+        path.write_text(json.dumps(value))
+        outcome = json.loads((run / "outcome.json").read_text())
+        outcome["publication_result_sha256"] = runner.digest(path)
+        (run / "outcome.json").write_text(json.dumps(outcome))
+    else:
+        def live(_record):
+            raise runner.InvalidReport("former publisher is still present")
+        monkeypatch.setattr(runner, "former_processes_absent", live)
+    if invalid == "config":
+        assert runner.tick(config, ["fixture"])["status"] == "storage_deferred"
+    else:
+        with pytest.raises(runner.InvalidReport):
+            runner.tick(config, ["fixture"])
+    ledger = json.loads(Path(config["storage_budget"]["ledger_path"]).read_text())
+    assert ledger["phase"] == "publication_admitted"
+    assert ledger["operations"]
+    assert len(calls) == 2
+
+
+def test_partial_no_generation_settlement_resumes_without_refund(deferred_publisher, monkeypatch):
+    from jobagg.storage_budget import OperationReservation, StorageBudgetDeferred
+
+    config, calls, reserved = deferred_publisher
+    settle = OperationReservation.settle
+    count = [0]
+
+    def interrupted(self, *args, **kwargs):
+        if kwargs.get("proof_sha256"):
+            count[0] += 1
+            if count[0] == 2:
+                raise StorageBudgetDeferred("interrupted between publisher category settlements")
+        return settle(self, *args, **kwargs)
+
+    monkeypatch.setattr(OperationReservation, "settle", interrupted)
+    first = runner.tick(config, ["fixture"])
+    assert first["status"] == "storage_deferred", first
+    context = storage_cycle.existing_context(config)
+    assert len(context["ledger"].snapshot()["operations"]) == len(reserved[0]) - 1
+    monkeypatch.setattr(OperationReservation, "settle", settle)
+    again = runner.tick(config, ["fixture"])
+    assert again["storage_cycle_reconciled"] is True
+    assert len(calls) == 2
+    ledger = json.loads(Path(config["storage_budget"]["ledger_path"]).read_text())
+    assert ledger["phase"] == "completed" and not ledger["operations"]
+    for operation in reserved[0].values():
+        assert ledger["settled"][operation["category"]] >= operation["consumed"]
+
+
+@pytest.mark.parametrize("missing_state", [False, True])
+def test_no_write_resolution_crash_repairs_state_from_exact_proof(configured, missing_state):
+    from test_terminal_publication import modify, no_write, write
+    from test_terminal_publication import run as make_run
+
+    from jobagg import terminal_publication
+    from jobagg.publication_storage import PublisherEscrow
+
+    config, calls = configured
+    run = make_run.__wrapped__(config["state_dir"].parent / "canonical")
+    context = storage_cycle.prepare_cycle(config, run.name)
+    context["ledger"].transition("worker_admitted", "accepted_pending")
+    context["ledger"].transition("accepted_pending", "publication_admitted")
+    config["state_dir"] = run.parent.parent
+    modify(run / "publication_request.json", publication_policy=config["publication_policy"])
+    modify(run / "publication_intent.json", config_sha256=config["_config_sha256"],
+           command_template=config["publication_argv"], cwd=str(config["publication_cwd"]),
+           request_sha256=runner.digest(run / "publication_request.json"))
+    write(run / "worker_result.json", {
+        "run_id": run.name, "worker_exit_code": 0, "report_sha256": runner.digest(run / "acceptance.json"),
+        "request_sha256": runner.digest(run / "request.json"), "config_sha256": config["_config_sha256"],
+    })
+    no_write(run)
+    # The immutable resolution reached disk; neither mutable state replacement
+    # nor publisher reservation settlement did.
+    if missing_state:
+        (run / "state.json").unlink()
+    else:
+        (run / "state.json").write_bytes((run / "outcome.json").read_bytes())
+    immutable = {path: path.read_bytes() for path in run.rglob("*.json") if path.name != "state.json"}
+    lease = json.loads(storage_cycle.child_environment(context, "publisher")["JOBAGG_STORAGE_BUDGET_LEASE"])
+    escrow = PublisherEscrow(lease, context["limits"]["publisher_write_limits"])
+    escrow.charge(run / "state.json", 64)
+    runner.settle_unstarted_publication(config, context, run, deadline_at=runner.time.monotonic() + 10)
+    assert terminal_publication.classify_run(run)["terminal_kind"] == "verified_unstarted"
+    assert all(path.read_bytes() == payload for path, payload in immutable.items())
+    assert not context["ledger"].snapshot()["operations"]
+    assert not calls
+
+
+def test_history_scan_spends_original_tick_deadline(configured, monkeypatch):
+    from types import SimpleNamespace
+
+    config, calls = configured
+    monotonic, scan = runner.time.monotonic, runner.unresolved_publications
+    elapsed, deadlines = [0], []
+    monkeypatch.setattr(runner.time, "monotonic", lambda: monotonic() + elapsed[0])
+
+    def slow_scan(root, config, *, deadline_at):
+        deadlines.append(deadline_at)
+        elapsed[0] = 8
+        return scan(root, config, deadline_at=deadline_at)
+
+    def snapshot(source, target, acceptance_sha, *_args, **_kwargs):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"bounded deadline projection")
+        return {"path": str(target), "sha256": runner.digest(target),
+                "source_database": str(source), "worker_acceptance_sha256": acceptance_sha}
+
+    monkeypatch.setattr(runner, "unresolved_publications", slow_scan)
+    monkeypatch.setattr(runner, "snapshot_helper", lambda _c: SimpleNamespace(create_publication_snapshot=snapshot))
+    result = runner.tick(config, ["fixture"])
+    assert result["publication_status"] == "published", result
+    request = calls[0]
+    remaining = (runner.timestamp(request["tick_deadline_at"]) - runner.timestamp(request["started_at"])).total_seconds()
+    assert 0 < remaining <= config["total_timeout_seconds"] - 8
+    assert deadlines and len(calls) == 2
+
+
+def test_expired_history_scan_cannot_start_worker(configured, monkeypatch):
+    config, calls = configured
+    monotonic, scan = runner.time.monotonic, runner.unresolved_publications
+    elapsed = [0]
+    monkeypatch.setattr(runner.time, "monotonic", lambda: monotonic() + elapsed[0])
+
+    def expired_scan(root, config, *, deadline_at):
+        elapsed[0] = config["total_timeout_seconds"] + 1
+        return scan(root, config, deadline_at=deadline_at)
+
+    monkeypatch.setattr(runner, "unresolved_publications", expired_scan)
+    with pytest.raises(TimeoutError):
+        runner.tick(config, ["fixture"])
+    assert not calls
+    assert not (config["state_dir"] / "runs").exists()
+    assert not Path(config["storage_budget"]["ledger_path"]).exists()
+
+
 def test_log_budget_deferral_holds_unknown_worker_without_replay(configured, monkeypatch):
     from jobagg.storage_budget import StorageBudgetDeferred
 

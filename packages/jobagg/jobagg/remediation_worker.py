@@ -337,9 +337,41 @@ class WorkerStorage:
         with self.lock:
             if self.used[stage] + self.reserved[stage] + count > self.caps[stage]:
                 raise StorageBudgetDeferred(stage + "_cycle_limit_exhausted")
-            grant = self.ledger.reserve(self.ledger.category_for(path), count, path=path)
+            category = self.ledger.category_for(path)
+            grant = self.ledger.reserve(category, count, path=path)
             self.reserved[stage] += count
-            return WorkerStorageGrant(self, stage, count, grant)
+            return WorkerStorageGrant(self, stage, count, grant, category)
+
+    def ensure_directory(self, path, *, grant=None, exist_ok=True):
+        from jobagg.publication_storage import ensure_directory
+
+        path = Path(path).absolute()
+        with self.lock:
+            self.ledger.category_for(path)
+            if path.resolve() != path:
+                raise StorageBudgetError("directory_path_must_not_alias")
+            if path.exists() and not path.is_dir():
+                raise NotADirectoryError(path)
+            hosts = self.worker.shared_policy.root / "hosts"
+            if grant is None and (path == hosts or hosts in path.parents):
+                task_id = getattr(self.local, "task_id", None)
+                grant = self.completion.get(task_id, {}).get("first_host")
+
+            def charge_directory(directory, count):
+                category = self.ledger.category_for(directory)
+                if grant is not None and grant.category == category:
+                    grant.consume(count)
+                    return
+                # A parent can belong to another registered category. Its bytes
+                # must not be hidden in the child's already-admitted grant.
+                stage = grant.stage if grant is not None else self.stage_for(directory)
+                parent_grant = self.reserve(stage, count, directory)
+                try:
+                    parent_grant.consume(count)
+                finally:
+                    parent_grant.close()
+
+            ensure_directory(path, charge_directory=charge_directory, exist_ok=exist_ok)
 
     def request_grant(self):
         # The response limit includes room for gzip framing, receipts, directory
@@ -627,8 +659,9 @@ class WorkerStorage:
 
 
 class WorkerStorageGrant:
-    def __init__(self, owner, stage, maximum, grant):
+    def __init__(self, owner, stage, maximum, grant, category):
         self.owner, self.stage, self.maximum, self.grant = owner, stage, maximum, grant
+        self.category = category
         self.consumed, self.closed = 0, False
 
     def consume(self, count):
@@ -1218,7 +1251,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             deadline_at=deadline,
             source=source,
             storage=self.storage,
-            first_storage_grant=(self.storage.initial.pop(task["task_id"], None) if self.storage else None),
+            # Task cleanup retains ownership even if capture/adapter setup fails.
+            first_storage_grant=(self.storage.initial.get(task["task_id"]) if self.storage else None),
         )
         capture.current_id = phase["job_id"]
         original_transport = capture.original
@@ -2123,7 +2157,12 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         capture = None
         try:
             self.check_deadline(deadline)
-            target.mkdir(parents=True)
+            if self.storage:
+                self.storage.ensure_directory(
+                    target, grant=self.storage.initial.get(task["task_id"]), exist_ok=False,
+                )
+            else:
+                target.mkdir(parents=True)
             adapter, client, capture = self.context(configured, target, task, deadline)
             if task["kind"] == "listing":
                 adapter.listing_checkpoint_path = self.workspace / "listing_checkpoints" / (source.id + ".json")
