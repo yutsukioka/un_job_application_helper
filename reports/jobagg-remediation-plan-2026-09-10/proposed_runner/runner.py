@@ -12,6 +12,7 @@ from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -56,50 +57,133 @@ OBSERVABILITY = load_file_module(
 )
 
 
+def verify_package_modules(package):
+    """Reject an interpreter already holding any other JobAgg implementation."""
+    for name, module in tuple(sys.modules.items()):
+        if name != "jobagg" and not name.startswith("jobagg."):
+            continue
+        relative = Path(*name.split(".")[1:])
+        expected = {package / relative / "__init__.py"}
+        if name != "jobagg":
+            expected.add((package / relative).with_suffix(".py"))
+        origin = getattr(module, "__file__", None)
+        spec = getattr(module, "__spec__", None)
+        spec_origin = getattr(spec, "origin", None)
+        paths = getattr(module, "__path__", None)
+        if name != "jobagg" and origin is None and spec_origin is None:
+            # Subpackages such as jobagg.pipelines are implicit namespaces.
+            # They have no file origin, so bind both search paths instead.
+            namespace = package / relative
+            initializer = namespace / "__init__.py"
+            spec_paths = getattr(spec, "submodule_search_locations", None)
+            require(
+                isinstance(getattr(spec, "loader", None), importlib.machinery.NamespaceLoader)
+                and getattr(spec, "name", None) == name
+                and getattr(spec, "has_location", True) is False
+                and namespace.is_dir() and namespace.resolve().is_relative_to(package)
+                and not initializer.exists() and not initializer.is_symlink()
+                and paths is not None and spec_paths is not None
+                and [Path(path).resolve() for path in paths] == [namespace]
+                and [Path(path).resolve() for path in spec_paths] == [namespace],
+                "Loaded JobAgg module differs from selected implementation: " + name,
+            )
+            continue
+        require(
+            bool(origin) and bool(spec_origin)
+            and Path(origin).resolve().is_relative_to(package)
+            and Path(origin).resolve() in {path.resolve() for path in expected}
+            and Path(spec_origin).resolve() == Path(origin).resolve(),
+            "Loaded JobAgg module differs from selected implementation: " + name,
+        )
+        if paths is not None:
+            require(
+                [Path(path).resolve() for path in paths] == [package / relative],
+                "Loaded JobAgg package search path differs from selected implementation: " + name,
+            )
+
+
+def bind_package(cwd):
+    """Bind nested helper imports to the same cwd used for its child process.
+
+    A shared interpreter may have an editable install of a different checkout.
+    Binding is independent of optional storage-budget activation. Never evict
+    already imported modules: mixing releases requires a fresh interpreter.
+    """
+    selected = str(Path(cwd).resolve())
+    package = (Path(selected) / "jobagg").resolve()
+    require(
+        (package / "__init__.py").is_file()
+        and (package / "__init__.py").resolve().is_relative_to(package),
+        "Reviewed JobAgg package missing or outside selected package",
+    )
+    verify_package_modules(package)
+    # Move an existing entry too; a stale checkout may precede it on sys.path.
+    sys.path[:] = [selected] + [entry for entry in sys.path if entry != selected]
+    sys.dont_write_bytecode = True
+    importlib.import_module("jobagg")
+    verify_package_modules(package)
+    return package
+
+
 def snapshot_helper(config):
-    package = config["publication_cwd"] / "jobagg"
+    package = bind_package(config["publication_cwd"])
     path = package / "publication_snapshot.py"
     require(
         path.is_file() and path.resolve().is_relative_to(package.resolve()),
         "Reviewed publication snapshot helper missing or outside selected package",
     )
-    return load_file_module(path, "jobagg_dispatcher_publication_snapshot")
+    module = load_file_module(path, "jobagg_dispatcher_publication_snapshot")
+    verify_package_modules(package)
+    return module
 
 
 def retention_helper(config):
-    package = config["worker_cwd"] / "jobagg"
+    package = (config["worker_cwd"] / "jobagg").resolve()
+    initializer = package / "__init__.py"
+    # This stdlib-only helper also supports standalone worker installations.
+    packaged = initializer.exists() or initializer.is_symlink()
+    if packaged:
+        bind_package(config["worker_cwd"])
     path = package / "storage_retention.py"
     require(
         path.is_file() and path.resolve().is_relative_to(package.resolve()),
         "Reviewed storage retention helper missing or outside selected package",
     )
-    return load_file_module(path, "jobagg_dispatcher_storage_retention")
+    module = load_file_module(path, "jobagg_dispatcher_storage_retention")
+    if packaged:
+        verify_package_modules(package)
+    return module
 
 
 def package_helper(config, name):
     """Import new shared contracts from the selected, reviewed worker package."""
-    package = (config["worker_cwd"] / "jobagg").resolve()
+    package = bind_package(config["worker_cwd"])
     path = package / (name + ".py")
     require(path.is_file() and path.resolve().is_relative_to(package),
             "Reviewed package helper is missing: " + name)
-    selected = str(config["worker_cwd"])
-    if selected not in sys.path:
-        sys.path.insert(0, selected)
-    sys.dont_write_bytecode = True
     module = importlib.import_module("jobagg." + name)
+    verify_package_modules(package)
     require(Path(module.__file__).resolve() == path,
             "Loaded package helper differs from selected implementation: " + name)
     return module
 
 
 def concurrency_helper(config):
-    package = config["worker_cwd"] / "jobagg"
+    package = (config["worker_cwd"] / "jobagg").resolve()
+    initializer = package / "__init__.py"
+    # This stdlib-only helper also supports standalone worker installations.
+    packaged = initializer.exists() or initializer.is_symlink()
+    if packaged:
+        bind_package(config["worker_cwd"])
     path = package / "remediation_concurrency.py"
     require(
         path.is_file() and path.resolve().is_relative_to(package.resolve()),
         "Concurrency helper missing or outside selected worker package",
     )
-    return load_file_module(path, "jobagg_dispatcher_concurrency")
+    module = load_file_module(path, "jobagg_dispatcher_concurrency")
+    if packaged:
+        verify_package_modules(package)
+    return module
 
 
 def begin_concurrency(config, record):
