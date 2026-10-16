@@ -85,7 +85,9 @@ assert not list(selected.rglob('__pycache__'))
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("conflict", ["root", "submodule", "package_path", "missing_origin"])
+@pytest.mark.parametrize("conflict", [
+    "root", "submodule", "package_path", "missing_origin", "regular_missing_origins",
+])
 def test_preloaded_foreign_or_incomplete_modules_fail_without_eviction(tmp_path, conflict):
     selected = package(tmp_path / "selected-release", "selected")
     result = probe(tmp_path, selected, f"""
@@ -102,6 +104,10 @@ elif {conflict!r} == 'package_path':
     jobagg.__path__.append(str(stale / 'jobagg'))
 elif {conflict!r} == 'missing_origin':
     jobagg.__spec__.origin = None
+elif {conflict!r} == 'regular_missing_origins':
+    import jobagg.selected_dependency
+    jobagg.selected_dependency.__file__ = None
+    jobagg.selected_dependency.__spec__.origin = None
 before = {{name: module for name, module in sys.modules.items()
           if name == 'jobagg' or name.startswith('jobagg.')}}
 try:
@@ -110,6 +116,68 @@ except ValueError as exc:
     assert 'differs from selected implementation' in str(exc), str(exc)
 else:
     raise AssertionError('conflicting preloaded JobAgg was accepted')
+assert all(sys.modules[name] is module for name, module in before.items())
+""")
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("conflict", [
+    "foreign_path", "extra_path", "empty_path", "foreign_spec_path", "empty_spec_path",
+    "missing_spec", "spec_origin", "file_origin", "wrong_loader", "wrong_name", "has_location",
+    "initializer", "dangling_initializer", "escaped_directory", "missing_directory",
+])
+def test_invalid_namespace_packages_fail_without_eviction(tmp_path, conflict):
+    selected = package(tmp_path / "selected-release", "selected")
+    namespace = selected / "jobagg/pipelines"
+    if conflict == "escaped_directory":
+        outside = tmp_path / "foreign-pipelines"
+        outside.mkdir()
+        namespace.symlink_to(outside, target_is_directory=True)
+    else:
+        namespace.mkdir()
+    result = probe(tmp_path, selected, f"""
+sys.path.insert(0, str(selected))
+import jobagg.pipelines
+module = jobagg.pipelines
+foreign = str(stale / 'jobagg/pipelines')
+conflict = {conflict!r}
+if conflict == 'foreign_path':
+    module.__path__ = [foreign]
+elif conflict == 'extra_path':
+    module.__path__.append(foreign)
+elif conflict == 'empty_path':
+    module.__path__ = []
+elif conflict == 'foreign_spec_path':
+    module.__spec__.submodule_search_locations = [foreign]
+elif conflict == 'empty_spec_path':
+    module.__spec__.submodule_search_locations = []
+elif conflict == 'missing_spec':
+    module.__spec__ = None
+elif conflict == 'spec_origin':
+    module.__spec__.origin = str(selected / 'jobagg/pipelines/__init__.py')
+elif conflict == 'file_origin':
+    module.__file__ = str(selected / 'jobagg/pipelines/__init__.py')
+elif conflict == 'wrong_loader':
+    module.__spec__.loader = importlib.machinery.SourceFileLoader(
+        module.__name__, str(selected / 'jobagg/pipelines/__init__.py'))
+elif conflict == 'wrong_name':
+    module.__spec__.name = 'jobagg.other'
+elif conflict == 'has_location':
+    module.__spec__.has_location = True
+elif conflict == 'initializer':
+    (selected / 'jobagg/pipelines/__init__.py').write_text('')
+elif conflict == 'dangling_initializer':
+    (selected / 'jobagg/pipelines/__init__.py').symlink_to(selected / 'missing.py')
+elif conflict == 'missing_directory':
+    (selected / 'jobagg/pipelines').rmdir()
+before = {{name: module for name, module in sys.modules.items()
+          if name == 'jobagg' or name.startswith('jobagg.')}}
+try:
+    runner.snapshot_helper({{'publication_cwd': selected}})
+except ValueError as exc:
+    assert 'differs from selected implementation' in str(exc), str(exc)
+else:
+    raise AssertionError('invalid preloaded namespace package was accepted')
 assert all(sys.modules[name] is module for name, module in before.items())
 """)
     assert result.returncode == 0, result.stderr
@@ -199,7 +267,8 @@ else:
     assert result.returncode == 0, result.stderr
 
 
-def test_budget_disabled_dispatch_publishes_with_stale_editable_and_no_pythonpath(fixture):
+@pytest.mark.parametrize("preload_namespace", [False, True])
+def test_budget_disabled_dispatch_publishes_with_stale_editable_and_no_pythonpath(fixture, preload_namespace):
     # This is the production failure boundary: the parent snapshot module imports
     # storage_budget even though optional budget enforcement has not been enabled.
     phase_config(fixture, publication="published", worker_cwd=str(PACKAGE),
@@ -223,7 +292,14 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     for key in ("worker_argv", "publication_argv"):
         config[key].insert(1, str(child_probe))
     fixture.config_path.write_text(json.dumps(config))
-    result = probe(fixture.root, PACKAGE, """
+    result = probe(fixture.root, PACKAGE, f"""
+# The CI service tests import jobagg.pipelines before the in-process dispatcher.
+# It is a real implicit namespace package, without a file or spec origin.
+if {preload_namespace!r}:
+    sys.path.insert(0, str(selected))
+    import jobagg.pipelines
+    assert jobagg.pipelines.__file__ is None
+    assert jobagg.pipelines.__spec__.origin is None
 code = runner.main(['--config', sys.argv[4], '--execute'])
 if code == 0:
     import jobagg.storage_budget

@@ -12,6 +12,7 @@ from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -66,7 +67,27 @@ def verify_package_modules(package):
         if name != "jobagg":
             expected.add((package / relative).with_suffix(".py"))
         origin = getattr(module, "__file__", None)
-        spec_origin = getattr(getattr(module, "__spec__", None), "origin", None)
+        spec = getattr(module, "__spec__", None)
+        spec_origin = getattr(spec, "origin", None)
+        paths = getattr(module, "__path__", None)
+        if name != "jobagg" and origin is None and spec_origin is None:
+            # Subpackages such as jobagg.pipelines are implicit namespaces.
+            # They have no file origin, so bind both search paths instead.
+            namespace = package / relative
+            initializer = namespace / "__init__.py"
+            spec_paths = getattr(spec, "submodule_search_locations", None)
+            require(
+                isinstance(getattr(spec, "loader", None), importlib.machinery.NamespaceLoader)
+                and getattr(spec, "name", None) == name
+                and getattr(spec, "has_location", True) is False
+                and namespace.is_dir() and namespace.resolve().is_relative_to(package)
+                and not initializer.exists() and not initializer.is_symlink()
+                and paths is not None and spec_paths is not None
+                and [Path(path).resolve() for path in paths] == [namespace]
+                and [Path(path).resolve() for path in spec_paths] == [namespace],
+                "Loaded JobAgg module differs from selected implementation: " + name,
+            )
+            continue
         require(
             bool(origin) and bool(spec_origin)
             and Path(origin).resolve().is_relative_to(package)
@@ -74,7 +95,6 @@ def verify_package_modules(package):
             and Path(spec_origin).resolve() == Path(origin).resolve(),
             "Loaded JobAgg module differs from selected implementation: " + name,
         )
-        paths = getattr(module, "__path__", None)
         if paths is not None:
             require(
                 [Path(path).resolve() for path in paths] == [package / relative],
