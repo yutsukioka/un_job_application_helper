@@ -80,6 +80,32 @@ jobs:
               attempt=$((attempt + 1))
             done
           }
+
+          run_stateful_sequence_with_retry() {
+            attempts=3
+            delay_seconds=15
+            attempt=1
+            until "$@"; do
+              if [ "$attempt" -ge "$attempts" ]; then
+                printf '::error::Stateful pairing sequence failed after %s attempts: %s\n' "$attempts" "$*" >&2
+                return 1
+              fi
+              printf 'Attempt %s failed; resetting staged pairing state and retrying in %ss...\n' "$attempt" "$delay_seconds" >&2
+              adb uninstall "com.yutsukioka.jobagg.atlas" >/dev/null 2>&1 || true
+              adb kill-server >/dev/null 2>&1 || true
+              adb start-server >/dev/null 2>&1 || true
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          run_android_pairing_state_sequence() {
+            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
+            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+          }
+
           flutter pub get
           if [[ "$pairing_scenario" == "persistence" ]]; then
             run_with_retry flutter test integration_test/atlas_vault_android_storage_integration_test.dart -d emulator-5554
@@ -88,12 +114,9 @@ jobs:
             run_with_retry flutter test integration_test/atlas_vault_android_plaintext_migration_recovery_test.dart -d emulator-5554
             run_with_retry flutter test integration_test/atlas_vault_android_interoperability_integration_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64" --dart-define=ATLAS_WINDOWS_INTEROP_VECTOR_B64="$windows_interop_vector_b64"
             run_with_retry flutter test integration_test/atlas_vault_android_interoperability_recovery_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64"
-            run_with_retry flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
-            run_with_retry flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
-            run_with_retry flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
-            run_with_retry flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+            run_stateful_sequence_with_retry run_android_pairing_state_sequence
           else
-            run_with_retry flutter test test/atlas_vault_pairing_ring_test.dart --dart-define=ATLAS_ACTIVATION_VECTOR_B64="$activation_vector_b64" --dart-define=ATLAS_PAYLOAD_VECTOR_B64="$payload_vector_b64"
+            flutter test test/atlas_vault_pairing_ring_test.dart --dart-define=ATLAS_ACTIVATION_VECTOR_B64="$activation_vector_b64" --dart-define=ATLAS_PAYLOAD_VECTOR_B64="$payload_vector_b64"
             app_id="com.yutsukioka.jobagg.atlas"
             device_ring_relative="files/atlas-pairing-ring"
             device_ring="/data/user/0/$app_id/$device_ring_relative"
