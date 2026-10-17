@@ -100,10 +100,10 @@ jobs:
           }
 
           run_android_pairing_state_sequence() {
-            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
-            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
-            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
-            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare || return 1
+            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify || return 1
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare || return 1
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify || return 1
           }
 
           flutter pub get
