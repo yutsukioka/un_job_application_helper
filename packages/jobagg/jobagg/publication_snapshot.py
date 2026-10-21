@@ -7,15 +7,21 @@ verifies that owner itself and is the only operation here which opens SQLite.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import fcntl
 import hashlib
+import json
 import os
-from pathlib import Path
 import re
 import stat
 import tempfile
 import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+from jobagg.storage_budget import (
+    MIN_PROJECTION_ALLOCATION_BYTES,
+    PROJECTION_RECEIPT_MAX_BYTES,
+)
 
 
 def _check(deadline_at):
@@ -121,7 +127,8 @@ def validate_publication_snapshot(request, database, *, owner_held=False, deadli
         ):
             raise ValueError("Malformed sealed publication snapshot binding")
         if snapshot["kind"] == "sqlite_publication_projection":
-            from jobagg.publication_projection import _sha as manifest_sha, validate_manifest
+            from jobagg.publication_projection import _sha as manifest_sha
+            from jobagg.publication_projection import validate_manifest
             projection = snapshot.get("projection", {})
             validate_manifest(projection.get("manifest"))
             if manifest_sha(projection["manifest"]) != projection.get("sha256"):
@@ -230,7 +237,188 @@ def _verify_owner(owner_fd, shared_lock):
             raise ValueError("Snapshot creation requires a held shared owner")
 
 
-def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, shared_lock, *, deadline_at=None, projection=False):
+def _sync_snapshot_directory(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _projection_operation(binding):
+    encoded = json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()
+    return "projection-" + hashlib.sha256(encoded).hexdigest()
+
+
+def _write_projection_receipt(path, receipt):
+    """The already consumed projection grant includes this bounded sidecar."""
+    from contextlib import nullcontext
+
+    from jobagg.atomic_files import admitted_file_writes, atomic_write_bytes
+    from jobagg.storage_budget import StorageBudgetDeferred
+
+    payload = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > PROJECTION_RECEIPT_MAX_BYTES:
+        raise StorageBudgetDeferred("publication_projection_receipt_limit_exceeded")
+
+    def prepaid(target, size):
+        if target != path or size != len(payload):
+            raise ValueError("Projection receipt escaped its prepaid bound")
+        return nullcontext()
+
+    with admitted_file_writes(prepaid):
+        atomic_write_bytes(path, payload)
+
+
+def _finish_budgeted_projection(binding, target, temporary, receipt_path, budget, *, deadline_at):
+    from jobagg.publication_projection import _sha, validate_manifest
+    from jobagg.storage_budget import StorageBudgetError
+
+    info = _regular(receipt_path)
+    if info.st_nlink != 1 or info.st_size > PROJECTION_RECEIPT_MAX_BYTES:
+        raise ValueError("Projection recovery receipt is unbounded or aliased")
+    receipt, receipt_record = _json_document(receipt_path, deadline_at=deadline_at)
+    if (set(receipt) != {"schema_version", "binding", "snapshot", "identity"}
+            or receipt.get("schema_version") != 1 or receipt.get("binding") != binding):
+        raise ValueError("Projection recovery receipt binding differs")
+    snapshot = receipt["snapshot"]
+    identity = receipt["identity"]
+    if (not isinstance(identity, list) or len(identity) != 4
+            or any(type(item) is not int for item in identity)
+            or snapshot.get("schema_version") != 1 or snapshot.get("kind") != "sqlite_publication_projection"
+            or snapshot.get("path") != str(target) or snapshot.get("source_database") != binding["source_database"]
+            or snapshot.get("worker_acceptance_sha256") != binding["worker_acceptance_sha256"]
+            or type(snapshot.get("size_bytes")) is not int or not 0 < snapshot["size_bytes"] <= binding["main_cap_bytes"]
+            or not re.fullmatch(r"[a-f0-9]{64}", str(snapshot.get("sha256")))):
+        raise ValueError("Projection recovery payload binding differs")
+    projection = snapshot.get("projection", {})
+    validate_manifest(projection.get("manifest"))
+    if _sha(projection["manifest"]) != projection.get("sha256"):
+        raise ValueError("Projection recovery manifest differs")
+    operation_id = _projection_operation(binding)
+    state = budget.snapshot()
+    expected_operation = {"category": "work", "maximum": binding["max_bytes"],
+                          "consumed": binding["max_bytes"], "path": str(target), "writer_id": budget.writer_id}
+    outstanding = state["operations"].get(operation_id)
+    completed = state["completions"].get(operation_id)
+    if outstanding != expected_operation and completed != {
+            **expected_operation, "proof_sha256": receipt_record["sha256"]}:
+        raise StorageBudgetError("Projection recovery lacks its exact charged operation")
+    paths = [path for path in (target, temporary) if _exists(path)]
+    if not paths:
+        raise ValueError("Sealed projection payload is missing")
+    for path in (target, temporary):
+        if any(_exists(Path(str(path) + suffix)) for suffix in ("-wal", "-shm", "-journal")):
+            raise ValueError("Sealed projection has mutable sidecars")
+    candidate = paths[0]
+    record = stable_file(candidate, deadline_at=deadline_at)
+    actual = _regular(candidate)
+    if (record["sha256"] != snapshot["sha256"] or record["size_bytes"] != snapshot["size_bytes"]
+            or list(_stamp(actual)[:4]) != identity or actual.st_mode & 0o222
+            or actual.st_nlink != len(paths) or max(actual.st_size, actual.st_blocks * 512) > binding["main_cap_bytes"]):
+        raise ValueError("Sealed projection bytes, identity or allocation changed")
+    if os.path.samefile(candidate, binding["source_database"]):
+        raise ValueError("Sealed projection aliases its mutable source")
+    if len(paths) == 2 and not os.path.samefile(target, temporary):
+        raise ValueError("Projection publication target differs from retained temporary")
+    _unchanged(receipt_path, _record_stamp(receipt_record))
+    _unchanged(candidate, _record_stamp(record))
+    if not _exists(target):
+        os.link(temporary, target)
+        _sync_snapshot_directory(target.parent)
+    if _exists(temporary):
+        # Only this exact verified sealed inode may be retired after the final
+        # name is durably linked. A partial/unproven temporary is never removed.
+        if not os.path.samefile(target, temporary) or list(_stamp(_regular(target))[:4]) != identity:
+            raise ValueError("Projection identity changed during publication")
+        temporary.unlink()
+        _sync_snapshot_directory(target.parent)
+    if outstanding is not None:
+        budget.resume(operation_id).settle(binding["max_bytes"], proof_sha256=receipt_record["sha256"])
+    return snapshot
+
+
+def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_bytes, *, deadline_at):
+    """Resume only a sealed, hashed inode and its original durable operation."""
+    import sqlite3
+
+    from jobagg.publication_projection import build_projection
+    from jobagg.storage_budget import (
+        PROJECTION_CONTROL_BYTES,
+        StorageBudgetDeferred,
+        StorageBudgetError,
+    )
+
+    if type(max_bytes) is not int or max_bytes < MIN_PROJECTION_ALLOCATION_BYTES:
+        raise StorageBudgetError("Finite projection allocation bound must include its recovery controls")
+    if source.resolve() != source or target.resolve() != target or not target.parent.parent.is_dir():
+        raise StorageBudgetError("Budgeted projection requires direct paths and an existing scratch parent")
+    budget.validate_writer(expected_cycle_id=budget.cycle_id, expected_scope_hash=budget.scope_hash,
+                           expected_ledger_path=budget.path, allowed_phases=("accepted_pending",), required_path=target)
+    if budget.category_for(target) != "work":
+        raise StorageBudgetError("Projection target must be registered work")
+    binding = {"source_database": str(source), "target": str(target),
+               "worker_acceptance_sha256": acceptance_sha256, "max_bytes": max_bytes,
+               "main_cap_bytes": ((max_bytes - PROJECTION_CONTROL_BYTES) // 2 // 4096) * 4096,
+               "cycle_id": budget.cycle_id, "scope_hash": budget.scope_hash,
+               "ledger_path": str(budget.path), "writer_id": budget.writer_id}
+    operation_id = _projection_operation(binding)
+    temporary = target.with_name("." + target.name + "." + operation_id + ".sqlite3")
+    receipt_path = target.with_name(target.name + ".sealed.json")
+    if _exists(receipt_path):
+        return _finish_budgeted_projection(binding, target, temporary, receipt_path, budget, deadline_at=deadline_at)
+    if _exists(target) or _exists(temporary) or any(
+            _exists(Path(str(path) + suffix)) for path in (target, temporary) for suffix in ("-wal", "-shm", "-journal")):
+        raise StorageBudgetDeferred("publication_projection_unsealed_artifact_requires_review")
+    state = budget.snapshot()
+    if operation_id in state["completions"]:
+        raise StorageBudgetError("Completed projection is missing its recovery receipt")
+    prior = state["operations"].get(operation_id)
+    expected = {"category": "work", "maximum": max_bytes, "consumed": 0,
+                "path": str(target), "writer_id": budget.writer_id}
+    if prior is not None and prior not in (expected, {**expected, "consumed": max_bytes}):
+        raise StorageBudgetError("Projection operation binding differs")
+    operation = budget.resume(operation_id) if prior is not None else budget.reserve(
+        "work", max_bytes, path=target, operation_id=operation_id)
+    if prior is None or prior["consumed"] == 0:
+        operation.consume(max_bytes)
+    target.parent.mkdir(exist_ok=True)
+    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(descriptor)
+    origin = copy = None
+    try:
+        origin = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=1)
+        copy = sqlite3.connect(temporary, timeout=1)
+        projection_receipt = build_projection(origin, copy, deadline_at=deadline_at, max_bytes=binding["main_cap_bytes"])
+        _check(deadline_at)
+        copy.set_progress_handler(lambda: int(deadline_at is not None and time.monotonic() >= deadline_at), 1000)
+        if copy.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() != "delete":
+            raise ValueError("Publication projection could not seal journal mode")
+        if copy.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise ValueError("Publication projection integrity check failed")
+    finally:
+        for connection in (origin, copy):
+            if connection is not None:
+                connection.close()
+    if any(_exists(Path(str(temporary) + suffix)) for suffix in ("-wal", "-shm", "-journal")):
+        raise ValueError("Publication projection has unsealed sidecars")
+    info = _regular(temporary)
+    if max(info.st_size, info.st_blocks * 512) > binding["main_cap_bytes"]:
+        raise StorageBudgetDeferred("publication_projection_allocation_limit_exceeded")
+    os.chmod(temporary, 0o444)
+    with temporary.open("rb") as handle:
+        os.fsync(handle.fileno())
+    record = stable_file(temporary, deadline_at=deadline_at)
+    snapshot = {"schema_version": 1, "kind": "sqlite_publication_projection", "path": str(target),
+                "sha256": record["sha256"], "size_bytes": record["size_bytes"], "source_database": str(source),
+                "worker_acceptance_sha256": acceptance_sha256, "projection": projection_receipt}
+    receipt = {"schema_version": 1, "binding": binding, "snapshot": snapshot,
+               "identity": list(_stamp(_regular(temporary))[:4])}
+    _write_projection_receipt(receipt_path, receipt)
+    return _finish_budgeted_projection(binding, target, temporary, receipt_path, budget, deadline_at=deadline_at)
+
+
+def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, shared_lock, *, deadline_at=None, projection=False, budget=None, max_bytes=None):
     """Create one fsynced, read-only SQLite backup; never overwrite an old backup."""
     import sqlite3
 
@@ -240,7 +428,14 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
     _regular(source)
     if not re.fullmatch(r"[0-9a-f]{64}", str(acceptance_sha256)):
         raise ValueError("Snapshot requires a worker acceptance digest")
-    if target.resolve() == source.resolve() or _exists(target):
+    if target.resolve() == source.resolve():
+        raise ValueError("Publication snapshot target exists or aliases its source")
+    if budget is not None:
+        from jobagg.storage_budget import StorageBudgetError
+        if not projection:
+            raise StorageBudgetError("Finite projection allocation bound required")
+        return _create_budgeted_projection(source, target, acceptance_sha256, budget, max_bytes, deadline_at=deadline_at)
+    if _exists(target):
         raise ValueError("Publication snapshot target exists or aliases its source")
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".publication-backup-", suffix=".sqlite3", dir=target.parent)
@@ -254,7 +449,8 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
             with sqlite3.connect(temporary, timeout=1) as copy:
                 if projection:
                     from jobagg.publication_projection import build_projection
-                    projection_receipt = build_projection(origin, copy, deadline_at=deadline_at)
+                    projection_receipt = build_projection(origin, copy, deadline_at=deadline_at,
+                                                          max_bytes=max_bytes // 2 if budget is not None else None)
                 else:
                     origin.backup(copy, pages=256, progress=progress, sleep=0.05)
                 _check(deadline_at)
@@ -311,7 +507,7 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
 _RECOVERY_IDENTITY = (
     "run_id", "source_manifest_sha256", "registry_sha256", "expected_source_ids",
     "worker_acceptance_path", "worker_acceptance_sha256", "worker_database",
-    "worker_database_files", "publication_snapshot",
+    "worker_database_files", "publication_snapshot", "publication_policy",
 )
 
 
@@ -459,6 +655,8 @@ def validate_recovery_generation(request, effective_database, output_dir, state_
         or gate["observation_set_sha256"] != binding.get("observation_set_sha256")
     ):
         raise ValueError("Recovery generation changed since first binding")
+    if plan.get("publication_policy") != request.get("publication_policy"):
+        raise ValueError("Recovery publication policy differs from immutable plan")
     completed = None
     if gate["state"] == "complete":
         result, _ = _json_document(root / "result.json", deadline_at=deadline_at)

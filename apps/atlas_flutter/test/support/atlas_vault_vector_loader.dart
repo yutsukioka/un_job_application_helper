@@ -15,6 +15,11 @@ const _trustedPairingVectorBase64 = String.fromEnvironment(
   'ATLAS_TRUSTED_PAIRING_VECTOR_B64',
 );
 
+const _activationVectorBase64 = String.fromEnvironment(
+  'ATLAS_ACTIVATION_VECTOR_B64',
+);
+const _payloadVectorBase64 = String.fromEnvironment('ATLAS_PAYLOAD_VECTOR_B64');
+
 Directory atlasVaultRepositoryRoot() {
   var current = Directory.current.absolute;
   while (true) {
@@ -58,6 +63,20 @@ Uint8List loadAtlasVaultVectorBytes(String fileName) {
       _trustedPairingVectorBase64.isNotEmpty) {
     try {
       bytes = base64Decode(_trustedPairingVectorBase64);
+    } on FormatException {
+      throw StateError('AtlasVault device vector input is invalid.');
+    }
+  } else if (fileName == 'atlasvault_activation_v1.json' &&
+      _activationVectorBase64.isNotEmpty) {
+    try {
+      bytes = base64Decode(_activationVectorBase64);
+    } on FormatException {
+      throw StateError('AtlasVault device vector input is invalid.');
+    }
+  } else if (fileName == 'atlasvault_payload_vectors_v1.json' &&
+      _payloadVectorBase64.isNotEmpty) {
+    try {
+      bytes = base64Decode(_payloadVectorBase64);
     } on FormatException {
       throw StateError('AtlasVault device vector input is invalid.');
     }

@@ -959,3 +959,216 @@ String _nextCleanupRevision(
   }
   throw StateError('native pairing cleanup revision is unavailable');
 }
+
+/// Verify current runtime enrollment separately from legacy fixed-vector ingress.
+Future<void> verifyAtlasVaultPairingArtifactSet(
+  Map<AtlasVaultPairingArtifactKind, Uint8List> artifacts,
+  Map<String, Object?> vector, {
+  required bool runtimeEnrollment,
+}) async {
+  expect(artifacts.keys, unorderedEquals(AtlasVaultPairingArtifactKind.values));
+  final parsed = <AtlasVaultPairingArtifactKind, AtlasVaultPairingArtifact>{};
+  for (final kind in AtlasVaultPairingArtifactKind.values) {
+    final bytes = Uint8List.fromList(artifacts[kind]!);
+    final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(bytes);
+    expect(artifact.kind, kind);
+    expect(artifact.canonicalBytes(), bytes);
+    parsed[kind] = artifact;
+  }
+
+  final signedOffer = AtlasVaultSignedPairingOffer.fromJson(
+    atlasVaultObject(
+      parsed[AtlasVaultPairingArtifactKind.offer]!.payload['signed_offer'],
+    ),
+  );
+  final acceptancePayload =
+      parsed[AtlasVaultPairingArtifactKind.acceptance]!.payload;
+  final signedAcceptance = AtlasVaultSignedPairingAcceptance.fromJson(
+    atlasVaultObject(acceptancePayload['signed_acceptance']),
+  );
+  final signedRequest = AtlasVaultSignedPairingKeyRequest.fromJson(
+    atlasVaultObject(acceptancePayload['signed_key_request']),
+  );
+  final deliveryPayload =
+      parsed[AtlasVaultPairingArtifactKind.delivery]!.payload;
+
+  final transcript = await atlasVaultPairingTranscriptSha256(
+    signedOffer,
+    signedAcceptance,
+  );
+  final inviteeProof = Uint8List.fromList(
+    base64Decode(acceptancePayload['invitee_proof']! as String),
+  );
+  final inviterProof = Uint8List.fromList(
+    base64Decode(deliveryPayload['inviter_proof']! as String),
+  );
+  AtlasVaultDeviceIdentity? identity;
+  AtlasVaultPairingSession? session;
+  try {
+    identity = await _identityForDevice(
+      vector,
+      signedOffer.offer.inviter.descriptor.deviceId,
+      runtimeEnrollment: runtimeEnrollment,
+    );
+    session = await verifyAtlasVaultPairingTranscript(
+      localIdentity: identity,
+      signedOffer: signedOffer,
+      signedAcceptance: signedAcceptance,
+      proofs: AtlasVaultPairingProofs(
+        inviter: inviterProof,
+        invitee: inviteeProof,
+      ),
+      currentTime: signedAcceptance.acceptance.acceptedAt,
+      replayGuard: _RuntimeRingReplayGuard(),
+    );
+    expect(_hex(transcript), signedRequest.request.transcriptSha256);
+    await verifyAtlasVaultPairingKeyRequest(
+      signedRequest,
+      transcriptSha256: transcript,
+      inviterDeviceId: signedOffer.offer.inviter.descriptor.deviceId,
+      inviteeDeviceId: signedAcceptance.acceptance.invitee.descriptor.deviceId,
+      currentTime: signedRequest.request.issuedAt,
+    );
+    if (runtimeEnrollment) {
+      expect(
+        deliveryPayload.keys,
+        unorderedEquals(['enrollment_delivery', 'inviter_proof']),
+      );
+      final packet = atlasVaultObject(deliveryPayload['enrollment_delivery']);
+      final acknowledgement =
+          parsed[AtlasVaultPairingArtifactKind.acknowledgement]!.payload;
+      expect(
+        acknowledgement.keys,
+        unorderedEquals(['enrollment_acknowledgement']),
+      );
+      final recipient = await _identityForDevice(
+        vector,
+        signedAcceptance.acceptance.invitee.descriptor.deviceId,
+        runtimeEnrollment: true,
+      );
+      final scratch = await Directory.systemTemp.createTemp(
+        'atlas-ring-enrollment-',
+      );
+      final agreement = runtimeTestKey(100);
+      final storage = runtimeTestKey(111);
+      try {
+        final pins = await AtlasVaultEnrollmentDelivery.ceremonyPins(
+          packet,
+          recipient: recipient,
+          peer: signedOffer.offer.inviter.descriptor,
+          transcript: _hex(transcript),
+        );
+        // Exercise signature, anchor, recipient-only HPKE, historical authority,
+        // and runtime-body validation through the production enrollment path.
+        final owner = await AtlasVaultEnrollmentDelivery.installRuntime(
+          Directory('${scratch.path}/recipient'),
+          packet,
+          pins: pins,
+          trustedSigner: signedOffer.offer.inviter.descriptor.signingPublicKey,
+          recipient: recipient,
+          agreementPrivateKey: agreement,
+          storageKey: storage,
+        );
+        final records = await owner.runtimeRecords();
+        expect(records, hasLength(2));
+        expect(records.where((record) => record.payload == null), hasLength(1));
+        await AtlasVaultEnrollmentDelivery.verifyAcknowledgement(
+          packet,
+          await atlasVaultSha256Hex(
+            parsed[AtlasVaultPairingArtifactKind.delivery]!.canonicalBytes(),
+          ),
+          atlasVaultObject(acknowledgement['enrollment_acknowledgement']),
+          signedAcceptance.acceptance.invitee.descriptor,
+        );
+      } finally {
+        recipient.destroy();
+        agreement.fillRange(0, agreement.length, 0);
+        storage.fillRange(0, storage.length, 0);
+        await scratch.delete(recursive: true);
+      }
+    } else {
+      final signedDelivery = AtlasVaultSignedVaultKeyDelivery.fromJson(
+        atlasVaultObject(deliveryPayload['signed_delivery']),
+      );
+      final bootstrap = AtlasVaultPairingBootstrap.fromJson(
+        atlasVaultObject(deliveryPayload['bootstrap']),
+      );
+      final signedAcknowledgement =
+          AtlasVaultSignedPairingAcknowledgement.fromJson(
+            atlasVaultObject(
+              parsed[AtlasVaultPairingArtifactKind.acknowledgement]!
+                  .payload['signed_acknowledgement'],
+            ),
+          );
+
+      final delivery = await verifyAtlasVaultSignedVaultKeyDelivery(
+        signedDelivery,
+      );
+      expect(delivery.transcriptSha256, _hex(transcript));
+      expect(
+        delivery.requestSha256,
+        await atlasVaultSha256Hex(signedRequest.canonicalBytes()),
+      );
+      expect(
+        delivery.bootstrapSha256,
+        await atlasVaultSha256Hex(bootstrap.canonicalBytes()),
+      );
+      expect(delivery.inviterDeviceId, signedRequest.request.inviterDeviceId);
+      expect(delivery.inviteeDeviceId, signedRequest.request.inviteeDeviceId);
+      expect(delivery.expiresAt, signedRequest.request.expiresAt);
+      await verifyAtlasVaultPairingAcknowledgement(
+        signedAcknowledgement,
+        delivery: signedDelivery,
+        inviterDeviceId: delivery.inviterDeviceId,
+        inviteeDeviceId: delivery.inviteeDeviceId,
+      );
+    }
+  } finally {
+    session?.destroy();
+    identity?.destroy();
+    transcript.fillRange(0, transcript.length, 0);
+    inviteeProof.fillRange(0, inviteeProof.length, 0);
+    inviterProof.fillRange(0, inviterProof.length, 0);
+  }
+}
+
+Future<AtlasVaultDeviceIdentity> _identityForDevice(
+  Map<String, Object?> vector,
+  String deviceId, {
+  required bool runtimeEnrollment,
+}) async {
+  for (final name in const <String>['inviter', 'invitee']) {
+    final bytes = runtimeEnrollment
+        ? await _secureJourneyIdentity(name == 'inviter')
+        : await atlasVaultPairingIdentitySecret(vector, name);
+    AtlasVaultDeviceIdentitySecret? secret;
+    try {
+      secret = AtlasVaultDeviceIdentitySecret.fromJson(
+        atlasVaultObject(jsonDecode(utf8.decode(bytes))),
+      );
+      if (secret.deviceId == deviceId) return await secret.loadIdentity();
+    } finally {
+      secret?.destroy();
+      bytes.fillRange(0, bytes.length, 0);
+    }
+  }
+  throw StateError('runtime pairing identity is not in the fake vector');
+}
+
+String _hex(Uint8List bytes) =>
+    bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+
+final class _RuntimeRingReplayGuard implements AtlasVaultPairingReplayGuard {
+  var _consumed = false;
+
+  @override
+  Future<AtlasVaultPairingReplayOutcome> consume({
+    required String offerId,
+    required Uint8List transcriptSha256,
+    required String expiresAt,
+  }) async {
+    if (_consumed) return AtlasVaultPairingReplayOutcome.alreadyConsumed;
+    _consumed = true;
+    return AtlasVaultPairingReplayOutcome.accepted;
+  }
+}

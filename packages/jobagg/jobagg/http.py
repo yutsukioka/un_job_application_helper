@@ -62,7 +62,21 @@ class HTTPError(RuntimeError):
 
 
 class ResponseTooLargeError(HTTPError):
-    """Raised when a response exceeds the configured byte cap."""
+    """Bounded retained evidence; never a complete parseable response."""
+
+    def __init__(self, message, *, prefix=b"", observed_bytes=0, limit_bytes=None,
+                 termination_reason="wire_body_limit", wire_complete=False):
+        super().__init__(message)
+        self.prefix = prefix
+        self.observed_bytes = observed_bytes
+        self.limit_bytes = limit_bytes
+        self.termination_reason = termination_reason
+        self.wire_complete = wire_complete
+        self.response_url = None
+        self.status_code = None
+        self.headers = {}
+        self.declared_content_length = None
+
 
 
 # 50 MiB. Listing JSON and HTML pages from supported ATSs are typically
@@ -270,26 +284,9 @@ class JobAggHTTPClient:
                     self.last_request_diagnostics.update(
                         stage="body_read", headers_received=True, status_code=response.status,
                     )
-                    declared = response.headers.get("Content-Length")
-                    if declared is not None:
-                        try:
-                            if int(declared) > self.max_response_bytes:
-                                raise ResponseTooLargeError(
-                                    f"Response from {url} declares {declared} bytes, exceeds cap {self.max_response_bytes}"
-                                )
-                        except ValueError:
-                            pass
-                    raw_bytes = _read_capped_body(
-                        response,
-                        url=url,
-                        max_bytes=self.max_response_bytes,
+                    decoded_bytes = _bounded_response_bytes(
+                        response, url=url, max_bytes=self.max_response_bytes,
                         progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total),
-                    )
-                    self.last_request_diagnostics["stage"] = "body_decode"
-                    decoded_bytes = _decode_content_encoding(
-                        raw_bytes,
-                        response.headers.get("Content-Encoding"),
-                        max_bytes=self.max_response_bytes,
                     )
                     charset = response.headers.get_content_charset() or "utf-8"
                     text = decoded_bytes.decode(charset, errors="replace")
@@ -305,12 +302,13 @@ class JobAggHTTPClient:
             except urllib.error.HTTPError as exc:
                 self._mark_request(host)
                 self.last_request_diagnostics.update(stage="error_body_read", headers_received=True, status_code=exc.code)
-                error_bytes = _decode_content_encoding(
-                    _read_capped_body(exc, url=url, max_bytes=self.max_response_bytes,
-                                     progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total)),
-                    exc.headers.get("Content-Encoding") if exc.headers else None,
-                    max_bytes=self.max_response_bytes,
-                )
+                try:
+                    error_bytes = _bounded_response_bytes(
+                        exc, url=url, max_bytes=self.max_response_bytes,
+                        progress=lambda total: self.last_request_diagnostics.update(wire_bytes_read=total),
+                    )
+                finally:
+                    exc.close()
                 response_body = error_bytes.decode("utf-8", errors="replace")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     retry_after = _retry_after_from_headers(exc.headers)
@@ -490,7 +488,7 @@ def _read_capped_body(stream: Any, *, url: str, max_bytes: int, progress=None) -
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = stream.read(_RESPONSE_READ_CHUNK_BYTES)
+        chunk = stream.read(min(_RESPONSE_READ_CHUNK_BYTES, max_bytes - total + 1))
         if not chunk:
             break
         total += len(chunk)
@@ -498,10 +496,46 @@ def _read_capped_body(stream: Any, *, url: str, max_bytes: int, progress=None) -
             progress(total)
         if total > max_bytes:
             raise ResponseTooLargeError(
-                f"Response from {url} exceeded cap of {max_bytes} bytes"
+                f"Response from {url} exceeded cap of {max_bytes} bytes",
+                prefix=b"".join(chunks) + chunk[:max_bytes - (total - len(chunk))],
+                observed_bytes=total, limit_bytes=max_bytes,
             )
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _bounded_response_bytes(response, *, url, max_bytes, progress=None):
+    """Retain wire bytes on bounded decode failure, before any adapter sees them."""
+    raw = None
+    declared = response.headers.get("Content-Length") if response.headers else None
+    try:
+        known_length = int(declared) if declared is not None else None
+    except (ValueError, TypeError):
+        known_length = None
+    try:
+        if known_length is not None and known_length > max_bytes:
+            raise ResponseTooLargeError(
+                "Declared response exceeds admitted body limit", limit_bytes=max_bytes,
+                termination_reason="declared_content_length_exceeds_limit",
+            )
+        raw = _read_capped_body(response, url=url, max_bytes=max_bytes, progress=progress)
+        return _decode_content_encoding(raw, response.headers.get("Content-Encoding") if response.headers else None,
+                                        max_bytes=max_bytes)
+    except ResponseTooLargeError as exc:
+        if raw is not None:
+            # Complete compressed bytes are preserved in their original encoding;
+            # they are not a complete decoded response or accepted document.
+            exc.decoded_observed_bytes = exc.observed_bytes
+            exc.prefix = raw
+            exc.wire_complete = True
+            exc.termination_reason = "decoded_body_limit"
+            exc.observed_bytes = len(raw)
+        exc.limit_bytes = max_bytes
+        exc.declared_content_length = known_length
+        exc.response_url = response.geturl()
+        exc.status_code = getattr(response, "status", None) or getattr(response, "code", None)
+        exc.headers = dict(response.headers or {})
+        raise
 
 
 def _decode_content_encoding(data: bytes, encoding: str | None, *, max_bytes: int | None = None) -> bytes:
@@ -572,12 +606,16 @@ def _append_decoded_chunk(
         return total
     total += len(chunk)
     if max_bytes is not None and total > max_bytes:
-        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes")
+        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes",
+                                    observed_bytes=total, limit_bytes=max_bytes,
+                                    termination_reason="decoded_body_limit")
     chunks.append(chunk)
     return total
 
 
 def _ensure_decoded_size(data: bytes, max_bytes: int | None) -> bytes:
     if max_bytes is not None and len(data) > max_bytes:
-        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes")
+        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes",
+                                    prefix=data[:max_bytes], observed_bytes=len(data), limit_bytes=max_bytes,
+                                    termination_reason="decoded_body_limit")
     return data

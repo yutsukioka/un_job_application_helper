@@ -71,7 +71,7 @@ def file_condition(path, *, contents=False):
     return result
 
 
-def storage_check(config):
+def storage_check(config, *, require_reserve=True):
     guard = config.get("storage_guard")
     if not guard:
         return {"configured": False, "ready": True}
@@ -128,12 +128,12 @@ def storage_check(config):
     storage_health = record_storage_health(
         config, available, reserve, persist=config.get("_record_storage_health", False)
     )
-    if available < reserve:
+    if available < reserve and require_reserve:
         raise ValueError("Configured storage free space is below static reserve")
     # Nonexistent mounted volume never gets created and no data path falls back.
     return {
         "configured": True,
-        "ready": True,
+        "ready": available >= reserve,
         "mount_root": str(mount),
         "sentinel_sha256": guard["sentinel_sha256"],
         "device": mount.stat().st_dev,
@@ -235,6 +235,8 @@ def update_health(directory, value):
             if value.get("finished_at"):
                 health["last_attempt_finished_at"] = value["finished_at"]
             health["last_reasons"] = result.get("reasons", [])[:5]
+            if isinstance(result.get("storage_budget"), dict):
+                health["storage_budget"] = result["storage_budget"]
             retention = result.get("storage_retention")
             if isinstance(retention, dict):
                 health["last_retention_status"] = retention.get("status")
@@ -270,7 +272,7 @@ def update_health(directory, value):
             bool(health.get("last_publication_complete_at"))
             and not health.get("unresolved_publication", False)
             and health.get("last_attempt_status")
-            not in {"process_failure", "unchanged_failure_hold"}
+            not in {"process_failure", "unchanged_failure_hold", "storage_deferred", "accepted_work_pending", "publication_held"}
         )
         health["operational_ready"] = (
             health.get("last_attempt_status") in {"complete", "incomplete"}
@@ -388,6 +390,8 @@ def failure_hold(config, fingerprint):
 
 
 def record_failure(config, fingerprint, result):
+    if result.get("status") in {"storage_deferred", "accepted_work_pending", "publication_held"}:
+        return
     path = config["attempt_state_dir"] / "failure_condition.json"
     previous = json.loads(path.read_text()) if path.exists() else {}
     if result["status"] != "process_failure":

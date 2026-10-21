@@ -1056,6 +1056,11 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         }
         let entered = await gate.waitUntilEntered()
         XCTAssertTrue(entered)
+        let pendingRuntimeStatus = await harness.runtime.status()
+        let pendingSnapshot = await harness.observer.currentSnapshot()
+        XCTAssertEqual(pendingRuntimeStatus, .activating)
+        XCTAssertEqual(pendingSnapshot.status, .activating)
+        XCTAssertNil(pendingSnapshot.privateState)
         activation.cancel()
 
         do {

@@ -118,7 +118,7 @@ def _accepted_attempt_ids(origin, deadline_at):
     return identifiers
 
 
-def build_projection(origin, destination, *, deadline_at=None):
+def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
     """Copy only declared read dependencies within a single pinned source TX."""
     if origin.in_transaction or destination.in_transaction:
         raise ValueError("Publication projection requires connections without active transactions")
@@ -141,7 +141,17 @@ def build_projection(origin, destination, *, deadline_at=None):
         origin.execute("BEGIN")
         origin.set_progress_handler(progress, 1000)
         destination.set_progress_handler(progress, 1000)
-        destination.execute("PRAGMA journal_mode=DELETE")
+        if max_bytes is not None:
+            if type(max_bytes) is not int or max_bytes < 4096:
+                raise ValueError("Invalid projection byte limit")
+            destination.execute("PRAGMA page_size=4096")
+            if (destination.execute("PRAGMA page_size").fetchone()[0] != 4096
+                    or destination.execute("PRAGMA max_page_count=" + str(max_bytes // 4096)).fetchone()[0] > max_bytes // 4096):
+                raise ValueError("Projection database cannot enforce its page bound")
+            destination.execute("PRAGMA temp_store=MEMORY")
+            destination.execute("PRAGMA journal_mode=MEMORY")
+        else:
+            destination.execute("PRAGMA journal_mode=DELETE")
         destination.execute("PRAGMA synchronous=FULL")
         destination.execute("BEGIN")
         if not _exists(origin, "jobs") or not _exists(origin, "remediation_observations"):
@@ -265,6 +275,10 @@ def build_projection(origin, destination, *, deadline_at=None):
     except BaseException as exc:
         destination.set_progress_handler(None, 0)
         destination.rollback()
+        if (max_bytes is not None and isinstance(exc, sqlite3.OperationalError)
+                and getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL):
+            from jobagg.storage_budget import StorageBudgetDeferred
+            raise StorageBudgetDeferred("publication_projection_limit_exceeded") from exc
         if (
             isinstance(exc, sqlite3.OperationalError)
             and getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT

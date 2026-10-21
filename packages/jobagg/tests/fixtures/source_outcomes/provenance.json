@@ -1,0 +1,20 @@
+{
+  "unv_successful_null.json": {
+    "kind": "sanitized exact JSON envelope; trailing whitespace normalized",
+    "source_id": "unv_uvp",
+    "observed_at": "2026-10-07T00:20:30.599496+00:00",
+    "request_url": "https://app.unv.org/api/doa/doa/1784888021271570",
+    "original_body_sha256": "fda3ce8fa3974686151be8f968f5365cca46e0280f6d42161aa8b6ca3528ab1c",
+    "observation": "HTTP 200 successful-null envelope, not a closure assertion"
+  },
+  "who_active_unavailable.html": {
+    "kind": "sanitized structural excerpt from captured public HTML; navigation, assets and session controls omitted",
+    "source_id": "who_taleo",
+    "request_url": "https://careers.who.int/careersection/ex/jobdetail.ftl?job=2603643&tz=GMT%2B00%3A00&tzname=Etc%2FUTC",
+    "observation": "HTTP 200 active unavailable form, page identifier, interface panel and exact provider message",
+    "healthy_counterexample": "../taleo_public_bindings/who_taleo_2603964_20260913.html",
+    "original_body_sha256": "aae89ed0b3396461ec6b3bfbb1da6120c00a3e2ef0a20546dbeab764bf4f3406",
+    "observed_at": "2026-10-03T13:45:27.813909+00:00"
+  },
+  "successful_unv_counterexample": "../unv/public_projection_1784888021272041_20260913.json"
+}

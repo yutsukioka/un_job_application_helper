@@ -4,10 +4,12 @@ import fcntl
 import gzip
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 
 import pytest
 
+from jobagg import publication_artifacts as artifacts
 from jobagg import storage_retention as retention
 
 
@@ -274,6 +276,7 @@ def test_durable_intent_replays_after_partial_unlink(tmp_path, monkeypatch):
         first = retention.prune_completed(root, max_groups=1, execute=True,
                                           owner_fd=owner.fileno(), shared_lock=lock)
         assert first["deadline_deferred"]
+        assert first["deleted_bytes"] == len(b"new export 1")
         assert json.loads((generations[0] / retention.RECEIPT).read_text())["phase"] == "intent"
         monkeypatch.setattr(retention, "_sync_dir", original)
         second = retention.prune_completed(root, max_groups=1, execute=True,
@@ -360,7 +363,8 @@ def test_generation_with_verified_cold_plan_remains_eligible(tmp_path):
     assert (generation / "storage-cold-archive.json").exists()
 
 
-def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
+@pytest.mark.parametrize("fixed_budget", [False, True])
+def test_calendar_checkpoints_are_preserved_without_fixed_budget_activation(tmp_path, fixed_budget):
     root = make_root(tmp_path)
     dates = [
         "2025-08-01T01:00:00+00:00",  # older than the 12-month monthly window
@@ -373,13 +377,251 @@ def test_daily_and_monthly_debug_checkpoints_are_bounded(tmp_path):
         "2026-09-28T01:00:00+00:00",  # newest two and daily retained
     ]
     runs = [make_run(root, index, finished_at=date) for index, date in enumerate(dates, 1)]
+    kwargs = {"fixed_budget": True} if fixed_budget else {}
     result = retention.prune_completed(
-        root, max_groups=10, as_of=datetime(2026, 9, 28, 12, tzinfo=UTC)
+        root, max_groups=10, as_of=datetime(2026, 9, 28, 12, tzinfo=UTC), **kwargs
     )
     selected = {item["id"] for item in result["selected"]}
-    assert selected == {runs[index].name for index in (0, 1, 3, 5)}
+    eligible = runs[:-2] if fixed_budget else [runs[i] for i in (0, 1, 3, 5)]
+    assert selected == {run.name for run in eligible}
     assert result["protected_run_checkpoints"]["newest_two_or_more"] == 2
-    assert result["protected_run_checkpoints"]["daily_30_days"] == 3
-    assert result["protected_run_checkpoints"]["monthly_12_months"] == 2
-    assert result["skipped_protected"]["run_snapshot"] == 4
-    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == 4
+    assert result["protected_run_checkpoints"]["selected_evidence"] == 0
+    assert result["protected_run_checkpoints"]["daily_30_days"] == (0 if fixed_budget else 3)
+    assert result["protected_run_checkpoints"]["monthly_12_months"] == (0 if fixed_budget else 2)
+    assert result["skipped_protected"]["run_snapshot"] == len(runs) - len(eligible)
+    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == len(eligible)
+
+
+@pytest.mark.parametrize("fixed_budget", [False, True])
+def test_supplied_closure_does_not_override_legacy_calendar_protection(tmp_path, monkeypatch, fixed_budget):
+    root, runs, generations = make_populated_root(tmp_path)
+    for index, run in enumerate(runs, 21):
+        outcome = json.loads((run / "outcome.json").read_text())
+        outcome["finished_at"] = f"2026-09-{index}T00:00:00+00:00"
+        write_json(run / "outcome.json", outcome)
+    closure = {"current": generations[-1].name, "runs": [],
+               "generations": [generation.name for generation in generations[-2:]]}
+    monkeypatch.setattr(retention._history_helper(), "operational_closure", lambda *a, **kw: closure)
+    result = retention.prune_completed(
+        root, max_groups=10, protection=closure, fixed_budget=fixed_budget,
+        as_of=datetime(2026, 9, 28, 12, tzinfo=UTC),
+    )
+    assert result["eligible_by_kind"]["run_snapshot"]["groups"] == (1 if fixed_budget else 0)
+
+
+def test_selected_incident_evidence_has_explicit_byte_ceiling(tmp_path):
+    root, runs, generations = make_populated_root(tmp_path)
+    result = retention.prune_completed(root, selected_runs=[runs[0].name],
+                                       selected_generations=[generations[0].name])
+    assert result["eligible_groups"] == 0
+    assert result["selected_evidence_bytes"] > 0
+    with pytest.raises(ValueError, match="byte ceiling"):
+        retention.prune_completed(root, selected_runs=[runs[0].name],
+                                  selected_evidence_bytes_limit=1)
+
+
+def test_selected_chunked_evidence_counts_shared_objects_once_and_enforces_smaller_limit(tmp_path):
+    root = make_root(tmp_path)
+    generations = root / "deterministic-live-publication" / "generations"
+    paths = [generations / f"{index:032x}" / "exports-v2" / "all_jobs_current.json"
+             for index in (1, 2)]
+    for path in paths:
+        writer = artifacts.RecordWriter(path)
+        writer.write("x" * 4097)
+        writer.record_boundary()
+        writer.write("y" * 6001)
+        writer.seal()
+    shared = set(artifacts.referenced_objects(paths[0]))
+    assert shared == set(artifacts.referenced_objects(paths[1]))
+    assert len(shared) == 2
+    evidence = {artifacts.sidecar(path) for path in paths} | shared
+    expected = sum(max(path.stat().st_size, path.stat().st_blocks * 512) for path in evidence)
+    selected = [path.parent.parent.name for path in paths]
+
+    result = retention.prune_completed(root, selected_generations=selected,
+                                       selected_evidence_bytes_limit=expected)
+    assert result["selected_evidence_bytes"] == expected
+    with pytest.raises(ValueError, match="byte ceiling"):
+        retention.prune_completed(root, selected_generations=selected,
+                                  selected_evidence_bytes_limit=expected - 1)
+    assert all(path.exists() for path in evidence)
+
+
+def execute_retention(root, **kwargs):
+    lock = root / "remediation" / "manual-fetch-owner.lock"
+    with lock.open("a+") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        return retention.prune_completed(
+            root, execute=True, owner_fd=owner.fileno(), shared_lock=lock, **kwargs
+        )
+
+
+def defer_generation_validation(root, generation, monkeypatch):
+    # Finish the older run so the generation is the next candidate.
+    execute_retention(root, max_groups=1)
+    original = retention._digest
+    backup = generation / "before_exports" / "all_jobs_current.json"
+
+    def interrupt(path, **kwargs):
+        if path == backup:
+            raise TimeoutError("interrupted part-way through the next full file hash")
+        return original(path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention, "_digest", interrupt)
+        result = execute_retention(root, max_groups=1)
+    assert result["deadline_deferred"]
+    assert not (generation / retention.RECEIPT).exists()
+    return result
+
+
+def test_full_file_validation_survives_budget_deferral(tmp_path, monkeypatch):
+    root, _, generations = make_populated_root(tmp_path)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    backup = generation / "before_exports" / "all_jobs_current.json"
+    export_bytes, backup_bytes = export.stat().st_size, backup.stat().st_size
+    first = defer_generation_validation(root, generation, monkeypatch)
+    saved = json.loads((generation / retention.VALIDATION).read_text())
+    assert set(saved["verified"]) == {"exports-v2/all_jobs_current.json"}
+    assert first["hashed_bytes"] == export_bytes
+    assert first["validation_pending_bytes"] == backup_bytes
+    assert first["deleted_bytes"] == 0
+    assert export.exists() and backup.exists()
+    original = retention._digest
+    read_files = []
+
+    def observe(path, **kwargs):
+        if path in (export, backup):
+            read_files.append(path)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(retention, "_digest", observe)
+    second = execute_retention(root, max_groups=1)
+    assert read_files == [backup]
+    assert second["selected"][0]["resuming_validation"]
+    assert second["hashed_bytes"] == backup_bytes
+    assert second["reused_verified_bytes"] == export_bytes
+    assert second["verified_files"] == 1
+    assert second["deleted_bytes"] == export_bytes + backup_bytes
+    assert second["validation_pending_bytes"] == 0
+    assert second["removed_groups"] == 1
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_validation_rehashes_changed_file_with_restored_mtime(tmp_path, monkeypatch, replacement):
+    root, _, generations = make_populated_root(tmp_path)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    defer_generation_validation(root, generation, monkeypatch)
+    before = export.stat()
+    corrupted = b"x" * before.st_size
+    if replacement:
+        candidate = export.with_suffix(".replacement")
+        candidate.write_bytes(corrupted)
+        os.replace(candidate, export)
+    else:
+        export.write_bytes(corrupted)
+    os.utime(export, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert export.stat().st_mtime_ns == before.st_mtime_ns
+    assert retention._identity(export.stat()) != retention._identity(before)
+    with pytest.raises(ValueError, match="source bytes differ"):
+        execute_retention(root, max_groups=1)
+    assert not (generation / retention.RECEIPT).exists()
+    assert export.read_bytes() == corrupted
+    assert (generation / "before_exports" / "all_jobs_current.json").exists()
+
+
+@pytest.mark.parametrize("when", ["after_hash", "later_file", "after_intent"])
+def test_validation_rechecks_identity_before_cache_intent_and_unlink(tmp_path, monkeypatch, when):
+    root, _, generations = make_populated_root(tmp_path)
+    execute_retention(root, max_groups=1)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    backup = generation / "before_exports" / "all_jobs_current.json"
+    original_digest, original_seal = retention._digest, retention._seal_json
+
+    def mutate():
+        before = export.stat()
+        export.write_bytes(b"x" * before.st_size)
+        os.utime(export, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    def digest_then_mutate(path, **kwargs):
+        value = original_digest(path, **kwargs)
+        if (when == "after_hash" and path == export) or (
+            when == "later_file" and path == backup
+        ):
+            mutate()
+        return value
+
+    def seal_then_mutate(path, value):
+        original_seal(path, value)
+        if when == "after_intent" and path == generation / retention.RECEIPT:
+            mutate()
+
+    monkeypatch.setattr(retention, "_digest", digest_then_mutate)
+    monkeypatch.setattr(retention, "_seal_json", seal_then_mutate)
+    with pytest.raises(ValueError, match="source changed before unlink"):
+        execute_retention(root, max_groups=1)
+    assert (generation / retention.RECEIPT).exists() is (when == "after_intent")
+    assert export.exists() and backup.exists()
+
+
+def test_partial_individual_hash_is_not_checkpointed(tmp_path, monkeypatch):
+    root, _, generations = make_populated_root(tmp_path)
+    execute_retention(root, max_groups=1)
+    generation = generations[0]
+    export = generation / "exports-v2" / "all_jobs_current.json"
+    export.write_bytes(b"x" * (3 * 1024 * 1024))
+    checkpoint_path = generation / "export-checkpoints.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint["entries"][str(root / "output" / export.name)]["new"] = {
+        "sha256": digest(export), "size": export.stat().st_size,
+    }
+    write_json(checkpoint_path, checkpoint)
+    write_json(generation / "exports.json", {
+        str(root / "output" / export.name): {"sha256": digest(export)}
+    })
+    original = retention._digest
+
+    def partial_hash(path, **kwargs):
+        if path != export:
+            return original(path, **kwargs)
+        clock = iter([0.0, 0.5, 2.0])
+        with monkeypatch.context() as patch:
+            patch.setattr(retention.time, "monotonic", lambda: next(clock))
+            return original(path, **{**kwargs, "deadline_at": 1.0})
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention, "_digest", partial_hash)
+        first = execute_retention(root, max_groups=1)
+    assert first["deadline_deferred"]
+    assert first["hashed_bytes"] == 0
+    assert not (generation / retention.VALIDATION).exists()
+    assert not (generation / retention.RECEIPT).exists()
+    assert execute_retention(root, max_groups=1)["removed_groups"] == 1
+
+
+def test_failed_validation_checkpoint_keeps_previous_progress_and_all_sources(tmp_path, monkeypatch):
+    root, _, generations = make_populated_root(tmp_path)
+    generation = generations[0]
+    defer_generation_validation(root, generation, monkeypatch)
+    cache = generation / retention.VALIDATION
+    before = cache.read_bytes()
+    original = retention.os.replace
+
+    def fail_cache_replace(source, destination):
+        if destination == cache:
+            raise OSError("simulated ENOSPC while replacing validation journal")
+        return original(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention.os, "replace", fail_cache_replace)
+        with pytest.raises(OSError, match="ENOSPC"):
+            execute_retention(root, max_groups=1)
+    assert cache.read_bytes() == before
+    assert not list(generation.glob(".storage-retention-*"))
+    assert not (generation / retention.RECEIPT).exists()
+    assert (generation / "exports-v2" / "all_jobs_current.json").exists()
+    assert (generation / "before_exports" / "all_jobs_current.json").exists()
+    assert execute_retention(root, max_groups=1)["removed_groups"] == 1

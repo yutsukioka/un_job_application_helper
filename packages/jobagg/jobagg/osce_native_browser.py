@@ -11,7 +11,6 @@ import asyncio
 import base64
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import ssl
@@ -22,7 +21,7 @@ from uuid import uuid4
 
 from jobagg.adapters.osce_inventory import Cards, SESSION, captured_scope, reconcile
 from jobagg.atomic_files import atomic_write_text
-from jobagg.browser_fetch import BrowserContractError, COMPOSED_HTML, COMPOSED_TEXT, GuardedBrowser
+from jobagg.browser_fetch import BrowserContractError, COMPOSED_HTML, COMPOSED_TEXT, GuardedBrowser, configure_browser_runtime
 from jobagg.browser_proxy import pinned_browser_proxy
 from jobagg.http import HttpResponse, ResponseTooLargeError
 from jobagg.html_text import render_html_text
@@ -101,10 +100,8 @@ class OSCENativeBrowser(GuardedBrowser):
         return max(1, (self.capture.deadline_at - time.time()) * 1000)
 
     async def _run(self, url, target):
+        configure_browser_runtime()
         from playwright.async_api import async_playwright
-        bundled = Path(__file__).resolve().parents[3] / "private/jobagg-runtime/browsers"
-        if bundled.is_dir():
-            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
         self.pending, self.chains, self.tasks = {}, {}, set()
         self.serial = asyncio.Lock()
         self.loop = asyncio.get_running_loop()

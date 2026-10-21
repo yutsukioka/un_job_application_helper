@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import gzip
+from datetime import datetime
 from html.parser import HTMLParser
 import re
 import json
@@ -27,6 +28,7 @@ class VacancyUnavailable(ValueError):
 
 
 EXPLICIT_VACANCY_UNAVAILABLE = "explicit_vacancy_unavailable"
+EMPTY_PUBLIC_ASSIGNMENT = "vacancy_detail_empty"
 UNAVAILABLE_STATUSES = frozenset({"unavailable_pending_inventory", "listing_detail_conflict"})
 
 
@@ -35,13 +37,66 @@ class _ActiveTemplate(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.page_ids = []
         self.form_actions = []
+        self.unavailable_interfaces = 0
+        self.description_interfaces = 0
+        self.active_page_ids = []
+        self.active_unavailable_interfaces = 0
+        self.forms = []
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
+        if tag == "form":
+            self.forms.append(values.get("id"))
         if tag == "input" and values.get("name") == "ftlpageid":
             self.page_ids.append(values.get("value"))
+            if self.forms == ["ftlform"]:
+                self.active_page_ids.append(values.get("value"))
         if tag == "form" and values.get("id") == "ftlform":
             self.form_actions.append(values.get("action", ""))
+        if values.get("id") == "requisitionUnavailableInterface":
+            self.unavailable_interfaces += 1
+            if self.forms == ["ftlform"]:
+                self.active_unavailable_interfaces += 1
+        if values.get("id") == "requisitionDescriptionInterface":
+            self.description_interfaces += 1
+
+    def handle_endtag(self, tag):
+        if tag == "form" and self.forms:
+            self.forms.pop()
+
+
+def unv_empty_assignment_template(source_id, external_id, request_url, response_url, body):
+    """Structural observation only; callers must separately bind captured provenance.
+
+    A successful null result contains no assignment, not an assertion of closure.
+    Runtime classification requires current source binding. Reviewed legacy repair
+    may use this pure detector only after validating the original task/frame chain.
+    """
+    if source_id != "unv_uvp" or not re.fullmatch(r"[0-9]+", str(external_id)):
+        return None
+    expected = "https://app.unv.org/api/doa/doa/" + str(external_id)
+    if request_url != expected or response_url != expected:
+        return None
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("Ambiguous duplicate JSON member")
+            value[key] = item
+        return value
+
+    try:
+        payload = json.loads(body, object_pairs_hook=unique_object)
+    except (ValueError, TypeError, UnicodeError):
+        return None
+    if (not isinstance(payload, dict)
+            or set(payload) != {"traceRegistries", "isSuccess", "value"}
+            or payload["traceRegistries"] != [] or payload["isSuccess"] is not True
+            or payload["value"] is not None):
+        return None
+    return {"category": EMPTY_PUBLIC_ASSIGNMENT,
+            "detector": "unv_exact_successful_null_assignment_v1"}
 
 
 def unavailable_template(source_id, external_id, request_url, response_url, body):
@@ -51,6 +106,7 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
         return None
     request, response = urlsplit(request_url), urlsplit(response_url)
     host = {"unicef_pageup": "jobs.unicef.org", "fao_taleo": "jobs.fao.org",
+            "who_taleo": "careers.who.int",
             "opcw_talentsoft_candidatespace": "jobs.opcw.org"}.get(source_id)
     if not host or any(parts.scheme != "https" or parts.netloc != host
                        or parts.username or parts.password or parts.fragment
@@ -75,6 +131,28 @@ def unavailable_template(source_id, external_id, request_url, response_url, body
                 or "job-externaljobno" in text.casefold()):
             return None
         return {"category": EXPLICIT_VACANCY_UNAVAILABLE, "detector": "unicef_jobnotfound_redirect_v1"}
+    if source_id == "who_taleo":
+        query = parse_qs(request.query, keep_blank_values=True)
+        if (not re.fullmatch(r"[0-9]+", str(external_id))
+                or request.path != "/careersection/ex/jobdetail.ftl" or request != response
+                or query.get("job") != [str(external_id)]
+                or set(query) - {"job", "lang", "tz", "tzname"}
+                or any(len(values) != 1 or not values[0] for values in query.values())):
+            return None
+        parsed = _ActiveTemplate()
+        parsed.feed(text)
+        if (parsed.page_ids != ["unavaibleRequisitionPage"]
+                or parsed.active_page_ids != ["unavaibleRequisitionPage"]
+                or parsed.form_actions != ["unavailablerequisition.ftl"]
+                or parsed.unavailable_interfaces != 1 or parsed.active_unavailable_interfaces != 1
+                or parsed.description_interfaces
+                or re.search(r"<input[^>]+type\s*=\s*['\"]password", text, re.I)
+                or re.search(r"api\.fill(?:List|Form|Interface)\s*\(\s*['\"]requisitionDescriptionInterface['\"]", text)
+                or not re.search(r"api\.fillInterface\s*\(\s*['\"]requisitionUnavailableInterface['\"]\s*,\s*\[[^\]]*"
+                                 r"['\"]The job description you are trying to view is no longer available\.['\"][^\]]*\]", text)):
+            return None
+        return {"category": EXPLICIT_VACANCY_UNAVAILABLE,
+                "detector": "who_active_unavailable_template_v1"}
     if (request.path != "/careersection/fao_external/jobdetail.ftl"
             or parse_qs(request.query).get("job") != [str(external_id)]
             or response.path not in {request.path, "/careersection/fao_external/unavailablerequisition.ftl"}
@@ -209,7 +287,34 @@ def classify_unavailable(source_id, external_id, metadata, body, *, redirects=()
                     or not hop.get("started_at") or not hop.get("finished_at")):
                 return None
         original_url = redirects[0].get("url", "")
-    result = (unavailable_template(source_id, external_id, original_url,
+    if source_id in {"unv_uvp", "who_taleo"}:
+        binding = metadata.get("source_binding") or {}
+        content_type = next((value for key, value in (metadata.get("response_headers") or {}).items()
+                             if key.lower() == "content-type"), "")
+        expected_type = "application/json" if source_id == "unv_uvp" else "text/html"
+        if (redirects or metadata.get("status_code") != 200 or metadata.get("method") != "GET"
+                or metadata.get("external_id") != str(external_id)
+                or not isinstance(original_url, str)
+                or not isinstance(metadata.get("response_url"), str)
+                or metadata.get("request_url_sha256") != hashlib.sha256(original_url.encode()).hexdigest()
+                or metadata.get("response_url_sha256") != hashlib.sha256(metadata["response_url"].encode()).hexdigest()
+                or binding.get("source_id") != source_id
+                or binding.get("ats_family") != ("unv" if source_id == "unv_uvp" else "taleo")
+                or type(metadata.get("body_bytes")) is not int or metadata["body_bytes"] != len(body)
+                or not isinstance(content_type, str)
+                or content_type.split(";", 1)[0].strip().lower() != expected_type):
+            return None
+        try:
+            stamps = [datetime.fromisoformat(metadata[key].replace("Z", "+00:00"))
+                      for key in ("started_at", "finished_at")]
+            if any(stamp.tzinfo is None for stamp in stamps) or stamps[0] > stamps[1]:
+                return None
+        except (ValueError, TypeError, AttributeError):
+            return None
+    result = (unv_empty_assignment_template(source_id, external_id, original_url,
+                                            metadata.get("response_url", ""), body)
+              if source_id == "unv_uvp" else
+              unavailable_template(source_id, external_id, original_url,
                                    metadata.get("response_url", ""), body)
               if metadata.get("status_code") == 200 else
               detail_denial_template(source_id, external_id, metadata, body, original_url,

@@ -9,31 +9,32 @@ recovery after a crash. Exports become current only when the gate is complete.
 
 from __future__ import annotations
 
-from contextlib import closing
-from copy import deepcopy
-from dataclasses import fields
-from datetime import UTC, datetime
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import sqlite3
 import time
+from contextlib import ExitStack, closing
+from copy import deepcopy
+from dataclasses import fields
+from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
-from jobagg.publication_deadline import expired
-from jobagg.atomic_files import atomic_write_text
 from jobagg.accepted_detail_lineage import matching_detail_attempts
+from jobagg.atomic_files import atomic_write_text
 from jobagg.classification import classify_and_store
 from jobagg.db import JobDatabase
 from jobagg.detail_quality import DETAIL_QUALITY_COMPLETE, detail_quality_status
 from jobagg.models import JobRecord
 from jobagg.pipelines.bundles import source_output_paths, source_output_slug
-from jobagg.pipelines.publication_exports import publish_exports
 from jobagg.pipelines.document_readback import document_readback
+from jobagg.pipelines.publication_exports import publish_exports
 from jobagg.pipelines.sync_source import load_sources
+from jobagg.publication_deadline import expired
+from jobagg.publication_storage import charge, ensure_directory, write_scope
 
 VERSION = "incremental-live-publication-1"
 GATE_NAME = ".jobagg-publication-state.json"
@@ -58,7 +59,9 @@ def _sha(path):
 
 
 def _save(path, value):
-    atomic_write_text(path, _dump(value) + "\n")
+    payload = _dump(value) + "\n"
+    charge(path, len(payload.encode()) + 4096)
+    atomic_write_text(path, payload)
 
 
 def _now():
@@ -455,14 +458,17 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                                 " ".join((baseline["description"] or "").split())
                             ):
                                 from jobagg.pipelines.public_text_regression import (
-                                    taleo_date_metadata_only_change, inspira_ltr_mark_only_change,
+                                    inspira_ltr_mark_only_change,
+                                    taleo_date_metadata_only_change,
                                 )
 
                                 date_header_check = taleo_date_metadata_only_change(baseline, row)
                                 if date_header_check.get("accepted") is not True:
                                     date_header_check = inspira_ltr_mark_only_change(baseline, row)
                                 if date_header_check.get("accepted") is not True:
-                                    from jobagg.pipelines.reviewed_text_changes import reviewed_text_change
+                                    from jobagg.pipelines.reviewed_text_changes import (
+                                        reviewed_text_change,
+                                    )
                                     date_header_check = reviewed_text_change(baseline, row, proof)
                                 if date_header_check.get("accepted") is not True:
                                     raise ValueError(
@@ -595,7 +601,8 @@ def _merged_model(change, before, generation):
     }
     if imo_calendar_fields:
         restore_raw_public_claims(raw, public_claims(public))
-    from jobagg.adapters.eu_primary_metadata import FIELDS as EU_FIELDS, PREVIOUS as EU_PREVIOUS
+    from jobagg.adapters.eu_primary_metadata import FIELDS as EU_FIELDS
+    from jobagg.adapters.eu_primary_metadata import PREVIOUS as EU_PREVIOUS
     from jobagg.eu_primary_metadata_observation import bound_public_metadata
     from jobagg.eu_primary_observation import MARKER as EU_TEXT_MARKER
 
@@ -763,8 +770,9 @@ def _backup_row(conn, row, target):
             if not blob or hashlib.sha256(blob[0]).hexdigest() != digest:
                 raise ValueError("live_beforeimage_document_blob_conflict")
             path = target / "before_blobs" / digest
-            path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_directory(path.parent)
             if not path.exists():
+                charge(path, len(blob[0]) + 4096)
                 with path.open("xb") as handle:
                     handle.write(blob[0])
                     handle.flush()
@@ -775,7 +783,7 @@ def _backup_row(conn, row, target):
 def _prepare(plan, state_dir):
     generation = uuid4().hex
     root = Path(state_dir).resolve() / "generations" / generation
-    root.mkdir(parents=True)
+    ensure_directory(root)
     plan = deepcopy(plan)
     plan["generation_id"] = generation
     plan["generation_root"] = str(root)
@@ -794,8 +802,9 @@ def _prepare(plan, state_dir):
         for document in change["documents"]:
             source = Path(document["binary_path"])
             path = root / "blobs" / document["content_sha256"]
-            path.parent.mkdir(exist_ok=True)
+            ensure_directory(path.parent)
             if not path.exists():
+                charge(path, source.stat().st_size + 4096)
                 shutil.copyfile(source, path)
                 with path.open("rb") as handle:
                     os.fsync(handle.fileno())
@@ -834,7 +843,7 @@ def _prepare(plan, state_dir):
     return plan, path
 
 
-def _attach_documents(db, conn, change, actual_key):
+def _attach_documents(db, conn, change, actual_key, *, semantic_versions=None):
     row = db.get_job(actual_key)
     raw = row["raw"]
     old_documents = raw.get("attachments", [])
@@ -878,6 +887,13 @@ def _attach_documents(db, conn, change, actual_key):
             digest,
         ):
             raise ValueError("existing_document_association_identity_conflict")
+        if semantic_versions is not None:
+            from jobagg.semantic_history import preserve_document_association
+            previous = conn.execute("SELECT * FROM job_attachments WHERE attachment_id=?", (identifier,)).fetchone()
+            if previous:
+                semantic_versions.add(preserve_document_association(
+                    conn, dict(previous), job_row=_row(conn, actual_key), operation_key=change["publication_key"],
+                ))
         conn.execute(
             """INSERT INTO job_attachments
             (attachment_id,job_key,source_id,url,final_url,label,category,required_for_complete_text,status,content_sha256,extracted_text,metadata_json)
@@ -922,13 +938,69 @@ def _attach_documents(db, conn, change, actual_key):
     )
 
 
-def _apply_database(path, changes, generation, fault=None, frames=()):
+def _database_write_geometry(path, growth):
+    """Include committed WAL pages before requesting any writable connection."""
+    path = Path(path)
+    with closing(_ro(path)) as conn:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
+        pages = conn.execute("PRAGMA page_count").fetchone()[0]
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        main_bytes = path.stat().st_size
+        wal = Path(str(path) + "-wal")
+        wal_bytes = wal.stat().st_size if wal.exists() else 0
+    maximum_pages = max(pages, (main_bytes + page_size - 1) // page_size) + (growth + page_size - 1) // page_size
+    # With cache spill/autocheckpoint disabled and one explicit transaction,
+    # each dirty page needs at most one new WAL frame. Keep the existing WAL
+    # charged even if SQLite later reuses it or checkpoints on final close.
+    frames = (wal_bytes + page_size + 23) // (page_size + 24) + maximum_pages
+    shm_bytes = ((frames + 34 + 4095) // 4096) * 32768
+    maximum_bytes = maximum_pages * page_size + wal_bytes + 32 + maximum_pages * (page_size + 24) + shm_bytes + 65536
+    return maximum_pages, page_size, wal_bytes, maximum_bytes
+
+
+def _apply_database(path, changes, generation, fault=None, frames=(), *, plan=None, lease=None):
+    policy = (plan or {}).get("publication_policy")
+    if policy:
+        from jobagg.storage_budget import BudgetLedger
+        ledger = BudgetLedger.attach(lease)
+        if len({ledger.category_for(str(path) + suffix) for suffix in ("", "-wal", "-shm", "-journal")}) != 1:
+            raise ValueError("publication_database_family_categories_differ")
+        growth = policy.get("transaction_growth_limit_bytes", 64 * 1024**2)
+        maximum_pages, page_size, old_wal_bytes, maximum_bytes = _database_write_geometry(path, growth)
+        charge(path, maximum_bytes)
     db = JobDatabase(path)
-    with db.connection_scope() as conn:
+    coverage_ref = None
+    with db.connection_scope() as conn, ExitStack() as semantic_scope:
         conn.execute("PRAGMA synchronous=FULL")
+        if policy:
+            conn.execute("PRAGMA wal_autocheckpoint=0")
+            conn.execute("PRAGMA cache_spill=OFF")
+            conn.execute("BEGIN IMMEDIATE")
+            wal = Path(str(path) + "-wal")
+            if (conn.execute("PRAGMA page_count").fetchone()[0] > maximum_pages
+                    or conn.execute("PRAGMA page_size").fetchone()[0] != page_size
+                    or (wal.stat().st_size if wal.exists() else 0) > old_wal_bytes):
+                raise ValueError("publication_database_grew_after_admission")
+            conn.execute(f"PRAGMA max_page_count={maximum_pages}")
         conn.execute(
             f"CREATE TABLE IF NOT EXISTS {_JOURNAL}(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)"
         )
+        semantic_versions = set() if policy else None
+        pending_receipts = [] if policy else None
+        if policy:
+            from jobagg import semantic_history as history
+            from jobagg.pipelines.live_inventory import apply_frames
+            # Fence all publication tables before activating domain writes.
+            apply_frames(conn, [], generation)
+            history.activate_semantic_history(
+                conn, policy_epoch=policy["policy_epoch"], max_history_bytes=policy["max_history_bytes"],
+                ledger_path=lease["ledger_path"], scope_hash=lease["scope_hash"],
+            )
+            semantic_scope.enter_context(history.admitted_semantic_write(
+                conn, policy_epoch=policy["policy_epoch"], run_id=lease["cycle_id"], lease=lease,
+            ))
+            semantic_versions.update(history.preserve_publication_plan(conn, plan, destination_path=path))
         for change, destination in changes:
             if _receipt_exists(conn, change["publication_key"]):
                 continue
@@ -945,16 +1017,17 @@ def _apply_database(path, changes, generation, fault=None, frames=()):
                 "expected_public_fields"
             ]:
                 raise ValueError("production_merge_differs_from_prepared_public_fields")
-            _attach_documents(db, conn, change, model.identity_key())
+            _attach_documents(db, conn, change, model.identity_key(), semantic_versions=semantic_versions)
             classify_and_store(db.get_job(model.identity_key()), db)
             conn.execute(
                 "UPDATE jobs SET application_ready=0,detail_quality_status=?,canonical_job_key=COALESCE(canonical_job_key,job_key) WHERE job_key=?",
                 (DETAIL_QUALITY_COMPLETE, model.identity_key()),
             )
-            conn.execute(
-                f"INSERT INTO {_JOURNAL} VALUES(?,?,?,?)",
-                (change["publication_key"], generation, model.identity_key(), _now()),
-            )
+            receipt = (change["publication_key"], generation, model.identity_key(), _now())
+            if pending_receipts is None:
+                conn.execute(f"INSERT INTO {_JOURNAL} VALUES(?,?,?,?)", receipt)
+            else:
+                pending_receipts.append(receipt)
             if fault:
                 fault("before_database_commit", str(path))
         if frames:
@@ -967,7 +1040,8 @@ def _apply_database(path, changes, generation, fault=None, frames=()):
                 _merged_model(change, destination["before"], generation).identity_key()
                 for change, destination in changes
             ]
-            apply_frames(conn, frames, generation, changed_keys=changed_keys)
+            apply_frames(conn, frames, generation, changed_keys=changed_keys,
+                         deferred_receipts=pending_receipts)
         if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE name='live_listing_inventory'"
         ).fetchone():
@@ -977,8 +1051,60 @@ def _apply_database(path, changes, generation, fault=None, frames=()):
                     "UPDATE live_listing_inventory SET canonical_job_key=?,published_detail=1 WHERE source_id=? AND external_id=?",
                     (model.identity_key(), model.source_id, str(model.external_id)),
                 )
+        if policy:
+            coverage_ref = _record_generation_coverage(conn, path, plan, semantic_versions)
+            if fault:
+                fault("after_semantic_coverage_before_receipts", str(path))
+            conn.executemany(f"INSERT INTO {_JOURNAL} VALUES(?,?,?,?)", pending_receipts)
     if fault:
         fault("after_database_commit", str(path))
+    return coverage_ref
+
+
+def _record_generation_coverage(conn, database_path, plan, versions):
+    from jobagg import semantic_history as history
+
+    artifacts = []
+    operations = []
+    for entry in [*plan["changes"], *plan["listing_frames"]]:
+        for destination in entry["destinations"]:
+            if destination["path"] != str(database_path):
+                continue
+            operations.append(entry["publication_key"])
+            before_path = Path(destination["beforeimage_path"])
+            before = json.loads(before_path.read_text())
+            versions.update(history.preserve_beforeimage(
+                conn, before, source_id=entry.get("source_id"), operation_key=entry["publication_key"],
+            ))
+            if "worker_row" in entry:
+                model = _merged_model(entry, destination["before"], plan["generation_id"])
+                final = _row(conn, model.identity_key())
+                versions.add(history.preserve_job(conn, final, operation_key=entry["publication_key"]))
+                for doc in conn.execute("SELECT * FROM job_attachments WHERE job_key=?", (final["job_key"],)):
+                    versions.add(history.preserve_document_association(
+                        conn, dict(doc), job_row=final, operation_key=entry["publication_key"],
+                    ))
+            artifacts.append({"path": str(before_path), "sha256": destination["beforeimage_sha256"],
+                              "size_bytes": before_path.stat().st_size, "kind": "job_beforeimage",
+                              **({"source_id": entry["source_id"]} if "source_id" in entry else {})})
+    root = Path(plan["generation_root"])
+    plan_path = root / "plan.json"
+    artifacts.append({"path": str(plan_path), "sha256": _sha(plan_path),
+                      "size_bytes": plan_path.stat().st_size, "kind": "publication_plan"})
+    blob_digests = {history.read_semantic_version(conn, version)["blob_sha256"] for version in versions}
+    for directory in (root / "blobs", root / "before_blobs"):
+        if directory.exists():
+            for path in sorted(directory.iterdir()):
+                if path.name in blob_digests:
+                    artifacts.append({"path": str(path), "sha256": _sha(path),
+                                      "size_bytes": path.stat().st_size, "kind": "blob"})
+    for artifact in artifacts:
+        artifact["version_ids"] = sorted(versions)
+    return history.record_semantic_coverage(
+        conn, subject_kind="generation", subject_id=plan["generation_id"],
+        policy_epoch=plan["publication_policy"]["policy_epoch"], version_ids=versions,
+        artifacts=artifacts, operation_keys=operations,
+    )
 
 
 def _exports(plan):
@@ -1001,7 +1127,7 @@ def _exports(plan):
                 }
 
 
-def _finish_generation(plan, gate, gate_path, deadline_at, fault=None):
+def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=None):
     grouped = {}
     for change in plan["changes"]:
         for destination in change["destinations"]:
@@ -1011,6 +1137,7 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None):
         for destination in frame["destinations"]:
             grouped_frames.setdefault(destination["path"], []).append((frame, destination))
             grouped.setdefault(destination["path"], [])
+    semantic_refs = []
     # Sources first, consolidated last. Marker + domain writes share each TX.
     for path in sorted(grouped, key=lambda value: (Path(value).name == "all_jobs.sqlite3", value)):
         if expired(deadline_at):
@@ -1019,9 +1146,12 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None):
                 "status": "publication_pending",
                 "reason": "deadline_before_database_transaction",
             }
-        _apply_database(
-            path, grouped[path], plan["generation_id"], fault, frames=grouped_frames.get(path, [])
+        coverage = _apply_database(
+            path, grouped[path], plan["generation_id"], fault, frames=grouped_frames.get(path, []),
+            plan=plan, lease=lease,
         )
+        if coverage:
+            semantic_refs.append(coverage)
     gate["database_transactions_complete"] = True
     gate["state"] = "exporting"
     _save(gate_path, gate)
@@ -1072,6 +1202,15 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None):
                     or not _receipt_exists(conn, frame["publication_key"])
                 ):
                     raise ValueError("live_listing_inventory_readback_failed")
+    if plan.get("publication_policy"):
+        from jobagg import semantic_history as history
+        aggregate = {"schema": history.SCHEMA, "destinations": semantic_refs}
+        history.validate_semantic_coverage(
+            aggregate, subject_kind="generation", subject_id=plan["generation_id"],
+            policy_epoch=plan["publication_policy"]["policy_epoch"],
+            allowed_roots=[plan["output_dir"]], deadline_at=deadline_at,
+        )
+        _save(Path(plan["generation_root"]) / "semantic-coverage.json", aggregate)
     gate.update(
         state="complete",
         status="published",
@@ -1087,7 +1226,7 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None):
     return gate
 
 
-def publish_incremental(
+def _publish_incremental(
     worker_database,
     registry_path,
     output_dir,
@@ -1099,6 +1238,8 @@ def publish_incremental(
     fault=None,
     request_identity=None,
     job_keys=None,
+    publication_policy=None,
+    storage_budget_lease=None,
 ):
     """Publish while the caller holds the shared owner; never acquires it twice.
 
@@ -1118,10 +1259,14 @@ def publish_incremental(
         plan = json.loads(plan_path.read_text())
         if plan["output_dir"] != str(Path(output_dir).resolve()):
             raise ValueError("recovery_output_mismatch")
-        return _finish_generation(plan, gate, gate_path, deadline_at, fault)
+        if plan.get("publication_policy") != publication_policy:
+            raise ValueError("recovery_publication_policy_changed")
+        return _finish_generation(plan, gate, gate_path, deadline_at, fault, lease=storage_budget_lease)
     plan = plan_publication(
         worker_database, registry_path, output_dir, max_jobs=max_jobs, deadline_at=deadline_at, job_keys=job_keys
     )
+    if publication_policy is not None:
+        plan["publication_policy"] = publication_policy
     if not execute:
         return {"status": "preview", "plan": plan}
     if not plan["changes"] and not plan["listing_frames"]:
@@ -1168,4 +1313,34 @@ def publish_incremental(
         "observation_set_sha256": prepared["observation_set_sha256"],
     }
     _save(gate_path, gate)
-    return _finish_generation(prepared, gate, gate_path, deadline_at, fault)
+    return _finish_generation(prepared, gate, gate_path, deadline_at, fault, lease=storage_budget_lease)
+
+
+def publish_incremental(*args, publication_policy=None, storage_budget_lease=None, **kwargs):
+    """Admit the configured publication writer before preparation or domain writes."""
+    if publication_policy is not None:
+        policy = publication_policy
+        if (
+            not isinstance(policy, dict) or policy.get("schema_version") != 1
+            or policy.get("export_storage") != "record_chunks_v1"
+            or not isinstance(policy.get("policy_epoch"), str) or not policy["policy_epoch"].strip()
+            or type(policy.get("max_history_bytes")) is not int
+            or not 0 < policy["max_history_bytes"] <= 40_000_000_000
+            or type(policy.get("transaction_growth_limit_bytes", 64 * 1024**2)) is not int
+            or not 0 < policy.get("transaction_growth_limit_bytes", 64 * 1024**2) <= 40_000_000_000
+        ):
+            raise ValueError("invalid_publication_storage_policy")
+    execute = kwargs.get("execute", False)
+    if execute and storage_budget_lease is None and os.environ.get("JOBAGG_STORAGE_BUDGET_LEASE"):
+        storage_budget_lease = json.loads(os.environ["JOBAGG_STORAGE_BUDGET_LEASE"])
+    if execute and bool(publication_policy) != bool(storage_budget_lease):
+        raise ValueError("publication_policy_and_budget_lease_required_together")
+    with write_scope(storage_budget_lease if execute else None,
+                     (publication_policy or {}).get("write_limits")) as escrow:
+        result = _publish_incremental(
+            *args, publication_policy=publication_policy,
+            storage_budget_lease=storage_budget_lease, **kwargs,
+        )
+        if escrow is not None and result.get("status") in {"publication_pending", "deferred"}:
+            escrow.keep_open = True
+        return result

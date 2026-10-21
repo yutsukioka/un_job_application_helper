@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
@@ -28,10 +28,12 @@ from uuid import uuid4
 from jobagg.adapters.base import AdapterContext, get_adapter_class
 from jobagg.adapters.idb_api import IDBInventoryChanged
 from jobagg.accepted_detail_lineage import ensure_detail_lineage_indexes
-from jobagg.atomic_files import atomic_write_text
+from jobagg.atomic_files import atomic_write_text, admitted_file_writes
 from jobagg.db import JobDatabase
 from jobagg.detail_quality import DETAIL_QUALITY_COMPLETE, detail_quality_status
-from jobagg.http import JobAggHTTPClient
+from jobagg.http import JobAggHTTPClient, ResponseTooLargeError
+from jobagg.storage_budget import BudgetLedger, StorageBudgetDeferred, StorageBudgetError
+from jobagg.semantic_history import SemanticCapacityError
 from jobagg.models import JobRecord
 from jobagg.pipelines.http_checkpoint import (
     DurableCapture,
@@ -59,6 +61,22 @@ from jobagg.vacancy_outcomes import (
 )
 
 VERSION = "deterministic-fetch-v1"
+# Reviewed inventory/storage repairs must not reopen failures merely by resealing.
+# Only retry comparisons recognize these exact reviewed predecessors;
+# startup integrity and every new receipt still use the full current binding.
+# Registry, robots, owner and semantic-input changes are never aliased.
+RETRY_EQUIVALENT_IMPLEMENTATIONS = (
+    "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
+    "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
+    # Merged inventory-verifier release 33edfb9c; the storage delta preserves retries.
+    "7ec4f5b4d37797599eed3ae04af4c18992dd8a2d7e3c01db742e6d3a8c34362b",
+    # Exact 4aa8b8f production predecessor; this policy preserves provider retry accounting.
+    "fa57f6e056aad8afd2ded124162343b18ff98eb7319fce9fcdd2063307630ea3",
+)
+# Applicability seal for this one reviewed successor. Only this literal is
+# normalized when checking scope, avoiding a self-referential hash. The full
+# implementation fingerprint below still includes every byte of every module.
+RETRY_SUCCESSOR_SCOPE_SHA256 = "5c52268e8440ae980192721864cf6fc410014ae32a2d050bec237d9918010abc"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -195,6 +213,35 @@ def implementation_hash():
     ).hexdigest()
 
 
+def _retry_compatibility_manifests():
+    """Derive full and scope manifests from the same complete byte snapshot."""
+    root = Path(__file__).resolve().parent
+    full, scope = {}, {}
+    declaration = ('RETRY_SUCCESSOR_SCOPE_SHA256 = "' + RETRY_SUCCESSOR_SCOPE_SHA256 + '"').encode()
+    found = False
+    for path in sorted(root.rglob("*.py")):
+        name = str(path.relative_to(root))
+        content = path.read_bytes()
+        full[name] = hashlib.sha256(content).hexdigest()
+        if name == "remediation_worker.py":
+            if content.count(declaration) != 1:
+                return None
+            content = content.replace(declaration, b'RETRY_SUCCESSOR_SCOPE_SHA256 = "<reviewed-successor>"')
+            found = True
+        scope[name] = hashlib.sha256(content).hexdigest()
+    return (full, scope) if found else None
+
+
+def reviewed_retry_successor():
+    manifests = _retry_compatibility_manifests()
+    if manifests is None:
+        return None
+    full, scope = manifests
+    if hashlib.sha256(dump(scope).encode()).hexdigest() != RETRY_SUCCESSOR_SCOPE_SHA256:
+        return None
+    return hashlib.sha256(dump(full).encode()).hexdigest()
+
+
 def write_json(path, value):
     atomic_write_text(path, dump(value) + "\n")
 
@@ -245,22 +292,417 @@ def shared_owner(path):
         yield owner.fileno()
 
 
+
+class WorkerStorage:
+    """Finite cooperative byte accounting; never a filesystem quota claim.
+
+    Every grant is charged before writing. SQLite's deliberately conservative
+    bound reserves a full dirty-page WAL plus bounded main-file growth, disables
+    cache spills and automatic checkpoints, and limits the database page count.
+    Unsupported browser buffering is refused before claiming a provider attempt.
+    """
+    REQUEST_OVERHEAD = 256 * 1024
+    KEYS = ("ingress_cap_bytes", "accepted_cap_bytes", "database_growth_cap_bytes", "control_cap_bytes")
+
+    def __init__(self, worker, lease, limits):
+        self.worker, self.lease, self.limits = worker, dict(lease), dict(limits)
+        self.ledger = BudgetLedger.attach(lease)
+        self.lock = threading.RLock()
+        for key in self.KEYS:
+            if type(limits.get(key)) is not int or limits[key] <= 0:
+                raise StorageBudgetError("finite_worker_storage_limits_required")
+        self.caps = dict(zip(("ingress", "accepted", "database", "control"), (limits[k] for k in self.KEYS)))
+        self.used = {key: 0 for key in self.caps}
+        self.reserved = dict(self.used)
+        self.requests, self.initial = {}, {}
+        self.completion = {}
+        self.host_requests = {}
+        self.local = threading.local()
+        self.response_cap = limits.get("response_cap_bytes", 50 * 1024 * 1024)
+        if type(self.response_cap) is not int or not 0 < self.response_cap <= 50 * 1024 * 1024:
+            raise StorageBudgetError("invalid_response_storage_limit")
+        self.transaction_growth = max(4096, self.caps["database"] // (16 * worker.max_tasks + 32))
+        for path in (worker.workspace, worker.db.path, worker.shared_policy.root, worker.shared_lock):
+            self.ledger.category_for(path)
+        self.validate_database_paths()
+
+    def validate_database_paths(self):
+        category = self.ledger.category_for(self.worker.db.path)
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            path = Path(str(self.worker.db.path) + suffix)
+            if path.is_symlink() or self.ledger.category_for(path) != category:
+                raise StorageBudgetError("database_sidecar_scope_differs")
+
+    def reserve(self, stage, count, path):
+        with self.lock:
+            if self.used[stage] + self.reserved[stage] + count > self.caps[stage]:
+                raise StorageBudgetDeferred(stage + "_cycle_limit_exhausted")
+            category = self.ledger.category_for(path)
+            grant = self.ledger.reserve(category, count, path=path)
+            self.reserved[stage] += count
+            return WorkerStorageGrant(self, stage, count, grant, category)
+
+    def ensure_directory(self, path, *, grant=None, exist_ok=True):
+        from jobagg.publication_storage import ensure_directory
+
+        path = Path(path).absolute()
+        with self.lock:
+            self.ledger.category_for(path)
+            if path.resolve() != path:
+                raise StorageBudgetError("directory_path_must_not_alias")
+            if path.exists() and not path.is_dir():
+                raise NotADirectoryError(path)
+            hosts = self.worker.shared_policy.root / "hosts"
+            if grant is None and (path == hosts or hosts in path.parents):
+                task_id = getattr(self.local, "task_id", None)
+                grant = self.completion.get(task_id, {}).get("first_host")
+
+            def charge_directory(directory, count):
+                category = self.ledger.category_for(directory)
+                if grant is not None and grant.category == category:
+                    grant.consume(count)
+                    return
+                # A parent can belong to another registered category. Its bytes
+                # must not be hidden in the child's already-admitted grant.
+                stage = grant.stage if grant is not None else self.stage_for(directory)
+                parent_grant = self.reserve(stage, count, directory)
+                try:
+                    parent_grant.consume(count)
+                finally:
+                    parent_grant.close()
+
+            ensure_directory(path, charge_directory=charge_directory, exist_ok=exist_ok)
+
+    def request_grant(self):
+        # The response limit includes room for gzip framing, receipts, directory
+        # allocation and an explicit bounded overflow receipt. It never expands.
+        limit = min(self.response_cap, (self.caps["ingress"] - self.REQUEST_OVERHEAD) * 1000 // 1001)
+        if limit <= 0:
+            raise StorageBudgetDeferred("ingress_receipt_envelope_unavailable")
+        grant = self.reserve("ingress", limit + limit // 1000 + self.REQUEST_OVERHEAD,
+                             self.worker.workspace / "captures")
+        grant.body_limit = limit
+        return grant
+
+    def host_paths(self, host):
+        lock = self.worker.shared_policy.root / "hosts" / ("host-" + hashlib.sha256(host.encode()).hexdigest()[:24] + ".lock")
+        return lock, lock.with_suffix(".json")
+
+    def host_grant(self, host):
+        lock, state = self.host_paths(host)
+        size = state.stat().st_size if state.exists() else 0
+        return self.reserve("control", 2 * self.allocation(size) + 65536, lock)
+
+    def bind_request(self, path, grant=None, *, host):
+        new = grant is None
+        grant = grant or self.request_grant()
+        task_id = getattr(self.local, "task_id", None)
+        resources = self.completion.get(task_id, {})
+        control = resources.pop("first_host", None)
+        try:
+            control = control or self.host_grant(host)
+        except BaseException:
+            if new:
+                grant.close()
+            raise
+        with self.lock:
+            self.requests[str(path.with_suffix(""))] = grant
+            grant.host_paths = self.host_paths(host)
+            grant.host_grant = control
+            for host_path in grant.host_paths:
+                self.host_requests[str(host_path)] = control
+        return grant
+
+    def release_request(self, path, grant):
+        with self.lock:
+            self.requests.pop(str(path.with_suffix("")), None)
+            for host_path in grant.host_paths:
+                self.host_requests.pop(str(host_path), None)
+        grant.host_grant.close()
+        grant.close()
+
+    def _request_for(self, path):
+        return self.requests.get(str(path.with_name(path.name.split(".")[0])))
+
+    @staticmethod
+    def allocation(count):
+        # Charge newly written file extents and a conservative metadata block;
+        # old bytes are already inventoried and are never credited back here.
+        return ((count + 4095) // 4096) * 4096 + 4096
+
+    def stage_for(self, path):
+        if self.worker.workspace in path.parents:
+            relative = path.relative_to(self.worker.workspace)
+            return "control" if relative.parts[0] in {"ticks", "worker_workspace.json", "storage_holds"} else "accepted"
+        return "control"
+
+    def charge_file(self, path, count):
+        path = Path(path).absolute()
+        self.ledger.category_for(path)  # Recheck symlink/scope before each write.
+        amount = self.allocation(count)
+        with self.lock:
+            grant = self._request_for(path) or self.host_requests.get(str(path))
+            if grant is not None:
+                grant.consume(amount)
+                return
+        task_id = getattr(self.local, "task_id", None)
+        if task_id in self.completion and (
+            "storage_holds" in path.parts or path.parent == self.worker.shared_policy.root / "attempts"
+            or path == self.worker.shared_policy.root / "attempt_index.json"
+        ):
+            category = self.ledger.category_for(path)
+            self.completion[task_id]["control"][category].consume(amount)
+            return
+        grant = self.reserve(self.stage_for(path), amount, path)
+        try:
+            grant.consume(amount)
+        finally:
+            grant.close()
+
+    @contextmanager
+    def file_write(self, path, count):
+        self.charge_file(path, count)
+        yield
+
+    def accepted(self, value):
+        # Count exact encoded acceptance payload before parsing results enter a
+        # transaction. File copies and SQLite's physical bound remain separate.
+        size = len(dump(value).encode())
+        grant = self.reserve("accepted", max(1, size), self.worker.db.path)
+        try:
+            grant.consume(size)
+        finally:
+            grant.close()
+
+    def database_bound(self, conn):
+        page = conn.execute("PRAGMA page_size").fetchone()[0]
+        pages = conn.execute("PRAGMA page_count").fetchone()[0]
+        growth_pages = max(1, self.transaction_growth // page)
+        maximum = pages + growth_pages
+        # Full dirty-page WAL (each page once with cache_spill OFF), main-file
+        # growth and WAL index allocation. This may defer a large legacy DB.
+        bound = (maximum * (page + 24) + 32 + growth_pages * page
+                 + ((maximum + 4095) // 4096) * 32768 + 65536)
+        return maximum, bound
+
+    def preclaim(self, task):
+        source = self.worker.by_id[task["source_id"]]
+        if source.extra.get("browser_render") and task["kind"] != "document":
+            raise StorageBudgetDeferred("bounded_browser_reader_unavailable")
+        with sqlite3.connect(self.worker.db.path.as_uri() + "?mode=ro", uri=True) as conn:
+            _, bound = self.database_bound(conn)
+        # Keep enough capacity for claim, acceptance or rollback, and the durable
+        # storage hold. A local shortage must occur before charging the attempt.
+        with self.lock:
+            if (self.used["database"] + self.reserved["database"] + 3 * bound
+                    + 4 * self.transaction_growth + 65536 > self.caps["database"]):
+                raise StorageBudgetDeferred("database_completion_envelope_unavailable")
+            index = self.worker.shared_policy.root / "attempt_index.json"
+            control = self.allocation(index.stat().st_size + 128) + 65536
+            if self.used["control"] + self.reserved["control"] + control > self.caps["control"]:
+                raise StorageBudgetDeferred("attempt_completion_envelope_unavailable")
+        task_id = task["task_id"]
+        grants = []
+        try:
+            request = self.request_grant()
+            grants.append(request)
+            controls = {}
+            paths = (self.worker.shared_policy.root / "attempt_index.json",
+                     self.worker.workspace / "storage_holds")
+            for path in paths:
+                category = self.ledger.category_for(path)
+                if category not in controls:
+                    grant = self.reserve("control", control, path)
+                    grants.append(grant)
+                    controls[category] = grant
+            emergency = self.reserve("database", bound + 4 * self.transaction_growth + 65536, self.worker.db.path)
+            grants.append(emergency)
+            claim_database = self.reserve("database", bound, self.worker.db.path)
+            grants.append(claim_database)
+            first_host = self.host_grant(self.worker.task_host(task))
+            grants.append(first_host)
+            self.initial[task_id] = request
+            self.completion[task_id] = {"control": controls, "database": emergency,
+                                        "claim_database": claim_database, "first_host": first_host}
+        except BaseException:
+            for grant in grants:
+                grant.close()
+            raise
+
+    @contextmanager
+    def task_scope(self, task_id):
+        previous = getattr(self.local, "task_id", None)
+        self.local.task_id = task_id
+        try:
+            yield
+        finally:
+            self.local.task_id = previous
+
+    def release_task(self, task_id):
+        initial = self.initial.pop(task_id, None)
+        if initial:
+            initial.close()
+        saved = self.completion.pop(task_id, None)
+        if saved:
+            for grant in [*saved["control"].values(), saved["database"],
+                          saved.get("claim_database"), saved.get("first_host")]:
+                if grant is not None:
+                    grant.close()
+
+    def activate(self, policy):
+        from jobagg.semantic_history import activate_semantic_history
+        if not isinstance(policy, dict) or set(policy) != {"policy_epoch", "max_history_bytes"}:
+            raise StorageBudgetError("explicit_semantic_history_policy_required")
+        if not self.worker.db.path.exists():
+            raise StorageBudgetError("storage_activation_requires_initialized_workspace")
+        self.ledger.validate_writer(expected_cycle_id=self.lease["cycle_id"],
+            expected_scope_hash=self.lease["scope_hash"], expected_ledger_path=self.lease["ledger_path"],
+            allowed_phases=("worker_admitted",), required_path=self.worker.db.path)
+        self.validate_database_paths()
+        conn = sqlite3.connect(self.worker.db.path)
+        conn.row_factory = sqlite3.Row
+        grant = None
+        try:
+            if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                raise StorageBudgetError("storage_worker_requires_existing_wal_database")
+            maximum, bound = self.database_bound(conn)
+            grant = self.reserve("database", bound, self.worker.db.path)
+            grant.consume(bound)
+            conn.execute("PRAGMA cache_spill=OFF")
+            conn.execute("PRAGMA wal_autocheckpoint=0")
+            conn.execute(f"PRAGMA max_page_count={maximum}")
+            conn.execute("BEGIN IMMEDIATE")
+            activate_semantic_history(conn, **policy, ledger_path=self.lease["ledger_path"],
+                                      scope_hash=self.lease["scope_hash"])
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+            if grant is not None:
+                grant.close()
+
+    @contextmanager
+    def database_write(self, conn):
+        from jobagg.semantic_history import admitted_semantic_write, semantic_history_enabled
+        if not semantic_history_enabled(conn):
+            raise StorageBudgetError("activated_semantic_history_required")
+        state = conn.execute("SELECT policy_epoch FROM semantic_history_state WHERE id=1").fetchone()
+        maximum, bound = self.database_bound(conn)
+        conn.execute("PRAGMA cache_spill=OFF")
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute(f"PRAGMA max_page_count={maximum}")
+        grant = None
+        admission_error = None
+        committing = False
+        writes = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}
+        denied = {sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_CREATE_TABLE,
+                  sqlite3.SQLITE_DROP_TABLE, sqlite3.SQLITE_ALTER_TABLE, sqlite3.SQLITE_CREATE_TEMP_TABLE,
+                  sqlite3.SQLITE_CREATE_INDEX, sqlite3.SQLITE_DROP_INDEX}
+        def authorize(action, first, second, database, trigger):
+            nonlocal grant, admission_error
+            if action in denied or action == sqlite3.SQLITE_SAVEPOINT:
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_TRANSACTION and first == "COMMIT" and not committing:
+                return sqlite3.SQLITE_DENY
+            if (action == sqlite3.SQLITE_PRAGMA and second is not None
+                    and first.lower() not in {"table_info", "table_xinfo", "index_list", "index_info", "index_xinfo", "foreign_key_list"}):
+                return sqlite3.SQLITE_DENY
+            if action in writes and grant is None:
+                try:
+                    task_id = getattr(self.local, "task_id", None)
+                    if getattr(self.local, "finishing_hold", False) and task_id in self.completion:
+                        grant = self.completion[task_id]["database"]
+                        if bound > grant.maximum:
+                            raise StorageBudgetDeferred("storage_hold_database_envelope_changed")
+                    else:
+                        grant = self.reserve("database", bound, self.worker.db.path)
+                    grant.consume(bound)
+                except StorageBudgetError as exc:
+                    admission_error = exc
+                    return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        try:
+            task_id = getattr(self.local, "task_id", None)
+            resources = self.completion.get(task_id, {})
+            grant = resources.pop("claim_database", None)
+            if grant is not None:
+                # The first task transaction owns its global reservation before
+                # shared_policy.reserve can charge a durable provider attempt.
+                if bound > grant.maximum:
+                    raise StorageBudgetDeferred("storage_claim_database_envelope_changed")
+                grant.consume(bound)
+            with admitted_semantic_write(conn, policy_epoch=state[0], run_id=self.lease["cycle_id"],
+                                         lease=self.lease, authorizer=authorize):
+                try:
+                    yield conn
+                except sqlite3.Error as exc:
+                    if admission_error is not None:
+                        raise admission_error from exc
+                    if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL:
+                        raise StorageBudgetDeferred("database_page_envelope_exhausted") from exc
+                    raise
+                committing = True
+                conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            if grant is not None:
+                grant.close()
+
+    def report(self):
+        return {"mode": "cooperative", "physical_hard_cap_enforced": False,
+                "limits": self.caps, "charged_bytes": dict(self.used),
+                "outstanding_bytes": dict(self.reserved), "cycle_id": self.lease["cycle_id"]}
+
+
+class WorkerStorageGrant:
+    def __init__(self, owner, stage, maximum, grant, category):
+        self.owner, self.stage, self.maximum, self.grant = owner, stage, maximum, grant
+        self.category = category
+        self.consumed, self.closed = 0, False
+
+    def consume(self, count):
+        with self.owner.lock:
+            if self.closed or self.consumed + count > self.maximum:
+                raise StorageBudgetDeferred(self.stage + "_write_limit_exceeded")
+            self.grant.consume(count)
+            self.consumed += count
+
+    def close(self):
+        with self.owner.lock:
+            if self.closed:
+                return
+            self.grant.settle(self.consumed)
+            self.owner.reserved[self.stage] -= self.maximum
+            self.owner.used[self.stage] += self.consumed
+            self.closed = True
+
 class SerializedWorkerDatabase(JobDatabase):
     """Per-thread database facade sharing one coordinator transaction lock."""
 
-    def __init__(self, path, lock):
+    def __init__(self, path, lock, worker=None):
         super().__init__(path)
-        self._worker_lock = lock
+        self._worker_lock, self.worker = lock, worker
 
     @contextmanager
     def connect(self):
-        with self._worker_lock, super().connect() as conn:
+        with self.connection_scope() as conn:
             yield conn
 
     @contextmanager
     def connection_scope(self):
-        with self._worker_lock, super().connection_scope() as conn:
-            yield conn
+        with self._worker_lock:
+            nested = self._persistent_conn is not None
+            storage = getattr(self.worker, "storage", None)
+            if storage is not None and not nested:
+                storage.validate_database_paths()
+            with super().connection_scope() as conn:
+                storage = getattr(self.worker, "storage", None)
+                with (storage.database_write(conn) if storage is not None and not nested else nullcontext()):
+                    yield conn
 
 
 def source_request_host(source):
@@ -330,7 +772,9 @@ class Worker:
             "implementation_sha256": implementation_hash(),
             "shared_lock": str(self.shared_lock),
         }
+        self._retry_compatible_successor = reviewed_retry_successor()
         self.tick_id = None
+        self.storage = None
 
     @property
     def db(self):
@@ -338,7 +782,7 @@ class Worker:
         # serializes readers: no SQLite connection is used across worker threads.
         if not hasattr(self._database_local, "database"):
             self._database_local.database = SerializedWorkerDatabase(
-                self.workspace / "jobs.sqlite3", self._database_lock
+                self.workspace / "jobs.sqlite3", self._database_lock, self
             )
         return self._database_local.database
 
@@ -387,6 +831,14 @@ class Worker:
 
     def initialize(self):
         self.preview()
+        if self.storage is not None:
+            if self.shared_policy.inspect()["status"] != "existing" or not self.db.path.exists():
+                raise StorageBudgetError("storage_activation_requires_initialized_workspace")
+            # Schema migrations and activation are separately admitted setup.
+            # Never implicitly commit DDL inside an activated worker transaction.
+            with self.db.connection_scope() as conn:
+                conn.execute("UPDATE remediation_tasks SET status='interrupted',last_error='Previous durable claim lacks an atomic completion; review required' WHERE status='inflight'")
+            return
         self.shared_policy.initialize()
         self.workspace.mkdir(parents=True, exist_ok=True)
         marker = self.workspace / "worker_workspace.json"
@@ -427,7 +879,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     (source_request_host(source), source.id),
                 )
 
-    def retry_input_fingerprint(self, payload):
+    def retry_input_fingerprint(self, payload, *, implementation_sha256=None):
         semantic = deepcopy(payload)
         # A fresh frame path/timestamp is not a parser or URL repair.
         semantic.pop("frame_path", None)
@@ -438,7 +890,19 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 listing.pop(key, None)
             if isinstance(listing.get("raw"), dict):
                 listing["raw"].pop("_jobagg_listing_verification", None)
-        return hashlib.sha256(dump({"payload": semantic, "binding": self.binding}).encode()).hexdigest()
+        binding = self.binding if implementation_sha256 is None else {
+            **self.binding, "implementation_sha256": implementation_sha256,
+        }
+        return hashlib.sha256(dump({"payload": semantic, "binding": binding}).encode()).hexdigest()
+
+    def retry_input_matches(self, saved, payload):
+        if saved == self.retry_input_fingerprint(payload):
+            return True
+        successor = getattr(self, "_retry_compatible_successor", None)
+        if successor is None or self.binding["implementation_sha256"] != successor:
+            return False
+        return any(saved == self.retry_input_fingerprint(payload, implementation_sha256=prior)
+                   for prior in RETRY_EQUIVALENT_IMPLEMENTATIONS)
 
     def enqueue(self, conn, source, kind, identity, payload, *, due=None, refresh=False):
         now = time.time()
@@ -481,7 +945,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     return key
                 release_hold(conn, key, {'kind': 'positive_future_deadline', 'deadline': proposed_deadline})
                 refresh = True
-        if old and old["status"] in {"inflight", "interrupted", *UNAVAILABLE_STATUSES}:
+        if old and old["status"] in {"inflight", "interrupted", "storage_held", *UNAVAILABLE_STATUSES}:
             return key
         if old and old["status"] in {"dead_letter", "blocked"}:
             receipt = json.loads(old["receipt"] or "{}")
@@ -490,7 +954,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if old["status"] == "blocked" and not receipt.get("retry_input_sha256"):
                 return key
             failed_input = receipt.get("retry_input_sha256") or self.retry_input_fingerprint(json.loads(old["payload"]))
-            if failed_input == self.retry_input_fingerprint(payload):
+            if self.retry_input_matches(failed_input, payload):
                 return key
             refresh = True
         if old and kind == "document" and old["status"] == "not_required":
@@ -786,6 +1250,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             phase=phase,
             deadline_at=deadline,
             source=source,
+            storage=self.storage,
+            # Task cleanup retains ownership even if capture/adapter setup fails.
+            first_storage_grant=(self.storage.initial.get(task["task_id"]) if self.storage else None),
         )
         capture.current_id = phase["job_id"]
         original_transport = capture.original
@@ -1053,6 +1520,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         if rendered := browser_receipt(capture):
             frame["browser_render_receipt"] = rendered
         frame_path = target / "listing.json"
+        if self.storage:
+            self.storage.accepted(frame)
         write_json(frame_path, frame)
         # upsert_job intentionally merges/mutates JobRecord objects. Dispatch must
         # retain the original listing shape, especially Workday externalPath.
@@ -1201,6 +1670,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             })
         candidates = document_inventory["candidates"]
         expected = json.loads(dump(asdict(detail)))
+        if self.storage:
+            self.storage.accepted(expected)
         body_sha = hashlib.sha256((detail.description or "").encode()).hexdigest()
         proof = {
             "version": VERSION,
@@ -1354,6 +1825,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         if response.status_code != 200:
             raise ValueError("Document did not return HTTP200")
         data = response.content
+        if self.storage:
+            self.storage.accepted({"document_bytes": len(data), "payload": payload})
         document = extract_document(data, response.headers.get("Content-Type", ""), response.url)
         digest = hashlib.sha256(data).hexdigest()
         blob = self.workspace / "blobs" / digest
@@ -1364,6 +1837,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if blob.exists() and sha(blob) != digest:
                 raise ValueError("Existing immutable binary differs")
             if not blob.exists():
+                if self.storage:
+                    self.storage.charge_file(blob, len(data))
                 with blob.open("xb") as out:
                     out.write(data)
                     out.flush()
@@ -1485,13 +1960,13 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
 
     def incomplete_response_count(self, task):
         receipt = json.loads(task.get("receipt") or "{}")
-        if receipt.get("retry_input_sha256") != self.retry_input_fingerprint(json.loads(task["payload"])):
+        if not self.retry_input_matches(receipt.get("retry_input_sha256"), json.loads(task["payload"])):
             return 0
         return int(receipt.get("incomplete_response_count", 0))
 
     def inventory_change_count(self, task):
         receipt = json.loads(task.get("receipt") or "{}")
-        if receipt.get("retry_input_sha256") != self.retry_input_fingerprint(json.loads(task["payload"])):
+        if not self.retry_input_matches(receipt.get("retry_input_sha256"), json.loads(task["payload"])):
             return 0
         return int(receipt.get("inventory_change_count", 0))
 
@@ -1631,7 +2106,15 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         minimum = max(6.0, minimum)
         if deadline is not None and deadline - time.time() < minimum:
             raise HostIneligible("Insufficient request budget before reservation", category="budget")
-        return self.claim(task, deadline=deadline)
+        if self.storage:
+            self.storage.preclaim(task)
+        try:
+            with (self.storage.task_scope(task["task_id"]) if self.storage else nullcontext()):
+                return self.claim(task, deadline=deadline)
+        except BaseException:
+            if self.storage:
+                self.storage.release_task(task["task_id"])
+            raise
 
     def perform(self, task, deadline):
         token = self.admit(task, deadline)
@@ -1647,13 +2130,19 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             "started_monotonic": time.monotonic(),
         }
         try:
-            result = self._perform_claimed(task, deadline, token)
+            with admitted_file_writes(self.storage.file_write if self.storage else None):
+                with (self.storage.task_scope(task["task_id"]) if self.storage else nullcontext()):
+                    result = self._perform_claimed(task, deadline, token)
             interval["outcome"] = result
             return result
         except BaseException as exc:
             interval["unhandled_error_type"] = type(exc).__name__
+            if isinstance(exc, StorageBudgetDeferred):
+                raise RuntimeError("Storage completion failed after a durable claim; retained evidence requires review") from exc
             raise
         finally:
+            if self.storage:
+                self.storage.release_task(task["task_id"])
             interval.update(finished_at=utc(), finished_monotonic=time.monotonic())
             with self._metrics_lock:
                 self._task_intervals.append(interval)
@@ -1665,9 +2154,15 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         configured = replace(
             source, extra={**source.extra, "fetch_details": task["kind"] != "listing"}
         )
+        capture = None
         try:
             self.check_deadline(deadline)
-            target.mkdir(parents=True)
+            if self.storage:
+                self.storage.ensure_directory(
+                    target, grant=self.storage.initial.get(task["task_id"]), exist_ok=False,
+                )
+            else:
+                target.mkdir(parents=True)
             adapter, client, capture = self.context(configured, target, task, deadline)
             if task["kind"] == "listing":
                 adapter.listing_checkpoint_path = self.workspace / "listing_checkpoints" / (source.id + ".json")
@@ -1679,6 +2174,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             # Preserve received bytes and durable attempt. Semantic errors block only
             # this task; transport host decisions are made by the HTTP checkpoint.
             reason = safe_error(exc)
+            if isinstance(exc, (ResponseTooLargeError, StorageBudgetError, SemanticCapacityError)):
+                return self.finish_storage_hold(task, token, target, exc)
             if isinstance(exc, ValueError):
                 unavailable = self.finish_unavailable(task, token, target, reason)
                 if unavailable:
@@ -1714,6 +2211,43 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 "eligible_at": retry["eligible_at"] if retry else None,
             }
 
+        finally:
+            if capture is not None and capture.first_storage_grant is not None:
+                capture.first_storage_grant.close()
+                capture.first_storage_grant = None
+
+    def finish_storage_hold(self, task, token, target, exc):
+        captures = []
+        partial = False
+        for path in sorted((target / "http").glob("*.json")):
+            meta = json.loads(path.read_text())
+            partial |= bool(meta.get("storage_limited"))
+            captures.append({"path": str(path), "sha256": sha(path),
+                             "body_complete": meta.get("body_complete", meta.get("body_captured", False)),
+                             "storage_limited": bool(meta.get("storage_limited"))})
+        outcome = ("partial_ingress_storage_held" if partial else
+                   "complete_capture_storage_held" if any(item["body_complete"] for item in captures)
+                   else "storage_admission_held")
+        receipt = {"schema_version": 1, "attempt_id": token, "task_id": task["task_id"],
+                   "source_id": task["source_id"], "outcome": outcome, "storage_limited": True,
+                   "captures": captures, "capture_directory": str(target), "error": safe_error(exc),
+                   "automatic_retry_allowed": False, "requires_explicit_storage_retry_grant": True,
+                   "prior_accepted_data_preserved": True}
+        # This small independent receipt survives a DB envelope failure too.
+        write_json(self.workspace / "storage_holds" / (token + ".json"), receipt)
+        if self.storage:
+            self.storage.local.finishing_hold = True
+        try:
+            with self.db.connection_scope() as conn:
+                self.finish(conn, task, token, "storage_held", receipt, safe_error(exc))
+                conn.execute("UPDATE remediation_attempts SET status=? WHERE attempt_id=?", (outcome, token))
+        finally:
+            if self.storage:
+                self.storage.local.finishing_hold = False
+        return {"status": "storage_held", "storage_outcome": outcome,
+                "task_id": task["task_id"], "automatic_retry_allowed": False,
+                "provider_failure": False, "retained_captures": len(captures)}
+
     def run_parallel(self, work_deadline):
         """Admit in one order; join every task before reporting or releasing owner."""
         outcomes, active = [], {}
@@ -1737,6 +2271,10 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                             stop_reason = "no_eligible_task_within_kind_budgets"
                             break
                         token = self.admit(task, work_deadline)
+                    except StorageBudgetDeferred:
+                        stop_reason = "storage_deferred"
+                        admission_open = False
+                        break
                     except HostIneligible as exc:
                         stop_reason = "work_deadline" if exc.category == "budget" else "selection_deferred"
                         admission_open = False
@@ -1882,7 +2420,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                         "blocking_examples": [
                             dict(row)
                             for row in conn.execute(
-                                "SELECT kind,external_id,status,last_error FROM remediation_tasks WHERE source_id=? AND status IN('blocked','interrupted','unavailable_pending_inventory','listing_detail_conflict') ORDER BY discovered_at LIMIT 20",
+                                "SELECT kind,external_id,status,last_error FROM remediation_tasks WHERE source_id=? AND status IN('blocked','interrupted','storage_held','unavailable_pending_inventory','listing_detail_conflict') ORDER BY discovered_at LIMIT 20",
                                 (source.id,),
                             )
                         ],
@@ -1924,6 +2462,22 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         }
 
     def tick(self, *, execute=False, request=None):
+        if not execute:
+            return self._tick_admitted(execute=False, request=request)
+        lease_raw = os.environ.get("JOBAGG_STORAGE_BUDGET_LEASE")
+        limits_raw = os.environ.get("JOBAGG_STORAGE_CYCLE_LIMITS")
+        requested = (request or {}).get("storage_limits")
+        if bool(lease_raw) != bool(limits_raw) or (requested is not None and not lease_raw):
+            raise StorageBudgetError("storage_lease_and_limits_required_together")
+        if lease_raw:
+            lease, limits = json.loads(lease_raw), json.loads(limits_raw)
+            if request and (request.get("run_id") != lease.get("cycle_id") or requested != limits):
+                raise StorageBudgetError("storage_request_lease_binding_differs")
+            self.storage = WorkerStorage(self, lease, limits)
+        with admitted_file_writes(self.storage.file_write if self.storage else None):
+            return self._tick_admitted(execute=True, request=request)
+
+    def _tick_admitted(self, *, execute=False, request=None):
         if request is not None and (
             type(request.get("parallel_sources", 1)) is not int
             or request.get("parallel_sources", 1) != self.parallel_sources
@@ -1944,6 +2498,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         if deadline <= time.time():
             raise ValueError("Request deadline already passed")
         with shared_owner(self.shared_lock):
+            if self.storage:
+                self.storage.activate((request or {}).get("semantic_history_policy"))
             self.initialize()
             register_builtin_adapters()
             self.seed_listings()
@@ -1968,6 +2524,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                             break
                         self.check_deadline(work_deadline)
                         outcome = self.perform(task, work_deadline)
+                    except StorageBudgetDeferred:
+                        stop_reason = "storage_deferred"
+                        break
                     except HostIneligible as exc:
                         # No durable reservation exists for a pre-claim deferral.
                         # Break rather than spinning on the same now-ineligible task.
@@ -1991,6 +2550,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             report["concurrency"] = concurrency
             report["concurrency_receipt"] = {"path": str(concurrency_path), "sha256": sha(concurrency_path)}
             report["tick_outcomes"] = outcomes
+            if self.storage:
+                report["storage"] = self.storage.report()
+                report["storage_held_tasks"] = sum(row.get("status") == "storage_held" for row in outcomes)
             report["tick_stop_reason"] = stop_reason
             report["deadline_at"] = datetime.fromtimestamp(deadline, UTC).isoformat()
             report["work_deadline_at"] = datetime.fromtimestamp(work_deadline, UTC).isoformat()
@@ -2076,7 +2638,8 @@ def main(argv=None):
         )
         result = worker.tick(execute=a.execute, request=request)
         if a.report and a.execute:
-            write_json(a.report, result)
+            with admitted_file_writes(worker.storage.file_write if worker.storage else None):
+                write_json(a.report, result)
         print(dump(result), flush=True)
         return 0  # Valid incomplete reports are mapped to exit2 by the outer dispatcher.
     except BlockingIOError:

@@ -10,23 +10,25 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import stat
+import sys
 import tempfile
-import time
+from pathlib import Path
 
-from jobagg.publication_deadline import expired
 from jobagg.atomic_files import atomic_write_text
 from jobagg.db import JobDatabase
 from jobagg.pipelines.exports import export_jobs
+from jobagg.publication_deadline import expired
+from jobagg.publication_storage import charge, ensure_directory
 from jobagg.retained_artifacts import archived_fingerprint, open_artifact
-
 
 JOURNAL_NAME = "export-checkpoints.json"
 
 
 def _save(path, value):
-    atomic_write_text(path, json.dumps(value, sort_keys=True, ensure_ascii=True) + "\n")
+    payload = json.dumps(value, sort_keys=True, ensure_ascii=True) + "\n"
+    charge(path, len(payload.encode()) + 4096)
+    atomic_write_text(path, payload)
     _sync_directory(Path(path).parent)
 
 
@@ -77,6 +79,51 @@ def _fault(fault, stage, key):
         fault(stage, key)
 
 
+def _clone_file(source, target):
+    """Create a distinct copy-on-write inode, or request the portable fallback.
+
+    The destination must not exist. macOS clones share data extents, never a
+    mutable inode: later writes to a live export cannot change sealed evidence.
+    Only unavailable cloning permits fallback; capacity/permission/I/O failures
+    must retain the normal publication hold rather than retry a larger copy.
+    """
+    if sys.platform != "darwin":
+        return False
+    import ctypes
+    import errno
+
+    clone = getattr(ctypes.CDLL(None, use_errno=True), "fclonefileat", None)
+    if clone is None:
+        return False
+    clone.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    clone.restype = ctypes.c_int
+    try:
+        source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        # Retained legacy evidence may exist only through open_artifact().
+        return False
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"export_clone_source_not_regular_file:{source}")
+        directory_fd = os.open(Path(target).parent, os.O_RDONLY)
+        try:
+            result = clone(source_fd, directory_fd, os.fsencode(Path(target).name), 0)
+            error = ctypes.get_errno() if result != 0 else 0
+        finally:
+            os.close(directory_fd)
+        if result != 0:
+            if error in {errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}:
+                return False
+            raise OSError(error, os.strerror(error), str(target))
+        after = os.fstat(source_fd)
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise ValueError(f"export_clone_source_changed:{source}")
+        return True
+    finally:
+        os.close(source_fd)
+
+
 def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fault=None):
     """Never use existence as evidence that a copy completed.
 
@@ -84,22 +131,32 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
     and any previously sealed target remain untouched until verification/fsync.
     """
     source, target = Path(source), Path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    charge(target, expected["size"] + 4096)
+    ensure_directory(target.parent)
     _require(source, expected, "export_copy_source_changed")
-    fd, temporary = tempfile.mkstemp(prefix="." + target.name + ".", dir=target.parent)
-    try:
-        digest = hashlib.sha256()
-        size = 0
-        with os.fdopen(fd, "wb") as output, open_artifact(source) as input_file:
-            for block in iter(lambda: input_file.read(1024 * 1024), b""):
-                output.write(block)
-                digest.update(block)
-                size += len(block)
-                _fault(fault, "during_" + stage + "_copy", key)
-            output.flush()
-            os.fsync(output.fileno())
-        if {"sha256": digest.hexdigest(), "size": size} != expected:
-            raise ValueError("export_copy_stream_hash_mismatch")
+    # Cloning requires an absent destination. A private staging directory keeps
+    # that name exclusive without unlinking/reusing a reserved temporary path.
+    with tempfile.TemporaryDirectory(prefix="." + target.name + ".", dir=target.parent) as staging:
+        temporary = Path(staging) / "copy"
+        if _clone_file(source, temporary):
+            _fault(fault, "during_" + stage + "_copy", key)
+            with temporary.open("rb") as output:
+                os.fchmod(output.fileno(), 0o600)
+                os.fsync(output.fileno())
+        else:
+            digest = hashlib.sha256()
+            size = 0
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as output, open_artifact(source) as input_file:
+                for block in iter(lambda: input_file.read(1024 * 1024), b""):
+                    output.write(block)
+                    digest.update(block)
+                    size += len(block)
+                    _fault(fault, "during_" + stage + "_copy", key)
+                output.flush()
+                os.fsync(output.fileno())
+            if {"sha256": digest.hexdigest(), "size": size} != expected:
+                raise ValueError("export_copy_stream_hash_mismatch")
         _require(temporary, expected, "export_copy_readback_failed")
         _fault(fault, "before_" + stage + "_seal", key)
         if _fingerprint(target) != target_before:
@@ -108,15 +165,26 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
         _sync_directory(target.parent)
         _fault(fault, "after_" + stage + "_seal", key)
         _require(target, expected, "export_sealed_copy_readback_failed")
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
-def _render(item, root, *, fault=None):
+def _render(item, root, *, fault=None, content_addressed=False, consume=None):
     # A separate directory avoids replacing unjournaled legacy preparation.
     prepared = root / "exports-v2" / Path(item["path"]).name
-    prepared.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(prepared.parent)
+    if content_addressed:
+        from jobagg.publication_artifacts import RecordWriter
+
+        writer = RecordWriter(prepared, translate_newlines=item["format"] == "json", consume=consume)
+        export_jobs(
+            JobDatabase(item["database"], read_only=True), output_path=prepared,
+            output_format=item["format"], status=item["status"],
+            history_only=item["history_only"], output_stream=writer,
+        )
+        _fault(fault, "before_export_prepared_seal", item["path"])
+        return str(prepared), writer.seal()
+    from jobagg.publication_storage import active
+    if active():
+        raise ValueError("admitted_publication_requires_record_chunk_exports")
     fd, temporary = tempfile.mkstemp(prefix="." + prepared.name + ".", dir=prepared.parent)
     os.close(fd)
     try:
@@ -207,7 +275,8 @@ def _initialize_checkpoint(plan, item, receipt, prior_hashes, *, fault=None):
             "legacy_backup": _legacy_backup(plan, item, prior_hashes),
             "phase": "replaced_verified" if old == new else "replace_intent",
         }
-    prepared, new = _render(item, root, fault=fault)
+    content_addressed = plan.get("publication_policy", {}).get("export_storage") == "record_chunks_v1"
+    prepared, new = _render(item, root, fault=fault, content_addressed=content_addressed, consume=charge)
     checkpoint = {
         "item": item,
         "prepared": prepared,
@@ -216,6 +285,7 @@ def _initialize_checkpoint(plan, item, receipt, prior_hashes, *, fault=None):
         "old_state_known": True,
         "legacy_receipt": False,
         "phase": "prepared_verified",
+        "content_addressed": content_addressed,
     }
     legacy_path = root / "before_exports" / target.name
     if legacy_path.exists() or legacy_path.is_symlink():
@@ -249,7 +319,19 @@ def _backup(checkpoint, root, *, fault=None):
             raise ValueError("verified_export_backup_hash_changed")
     if found is None:
         _require(target, old, "export_original_unavailable_for_backup")
-        _copy_sealed(target, backup, old, stage="export_backup", key=str(target), fault=fault)
+        if checkpoint.get("content_addressed"):
+            from jobagg.publication_artifacts import capture
+
+            candidates = []
+            for generation in sorted(root.parent.iterdir(), reverse=True):
+                if generation.is_dir() and not generation.is_symlink() and generation != root:
+                    candidates.append(generation / "exports-v2" / target.name)
+            _fault(fault, "during_export_backup_copy", str(target))
+            _fault(fault, "before_export_backup_seal", str(target))
+            capture(target, backup, old, candidates=candidates, consume=charge)
+            _fault(fault, "after_export_backup_seal", str(target))
+        else:
+            _copy_sealed(target, backup, old, stage="export_backup", key=str(target), fault=fault)
     _require(backup, old, "export_backup_readback_failed")
     checkpoint["backup_path"] = str(backup)
     checkpoint["backup_status"] = "verified"

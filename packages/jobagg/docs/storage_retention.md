@@ -41,19 +41,32 @@ Add this fragment to the deployment configuration to enable retention:
 }
 ```
 
-The default is disabled. Configuration validation limits maintenance to at most
-20 seconds and two groups per tick, with at least two newest completed groups.
-The dispatcher calls retention after the worker/publication phase is terminal,
-while it still owns the shared lock. Unresolved publication, maintenance, a busy
-owner or an unchanged-failure hold can prevent a cleanup attempt. The storage
-reserve check runs before the dispatcher acquires the owner lock; below the
-configured reserve, automatic pruning is inactive. A direct bounded retention
-command remains available after the operator checks the mounted volume. It
-writes receipts, so it also requires some free space. Maintenance errors and
-deadline deferrals are reported separately in `storage_retention` and the
-persistent dispatcher health record; they do not change publication health or
-activate the fetch failure hold. Dry-run reports the effective policy and
-performs no pruning.
+The default remains disabled, with a 20-second/two-group budget when enabled.
+Reviewed configurations may choose up to 120 seconds and eight groups per tick;
+at least two newest completed groups remain protected. For a measured backlog,
+a 60-second/four-group pass is a bounded starting point to validate, not an
+assumed sustainable setting. Worker and publication limits remain independent. As before, maintenance time
+is additional to `total_timeout_seconds` for worker/publication. Account for
+the sum when reviewing a schedule: a long invocation makes the next cron tick
+return `lock_busy`, not overlap. The larger allowance is an explicit tuning
+option, not a changed production setting.
+
+Normally retention runs after terminal worker/publication work under the shared
+owner lock. If the reserve is already exhausted, an enabled dispatcher may enter
+**maintenance only** after validating the mount, sentinel and runtime paths and
+acquiring that same lock. Operator maintenance and unresolved publication still
+block cleanup. Only a fresh storage check that meets the unchanged reserve can
+admit the worker. Otherwise the invocation reports its retention outcome and
+capacity failure without launching providers or establishing a fetch-failure
+hold. A prior fetch-failure hold is never cleared by maintenance. Each invocation
+uses at most one maintenance budget, before or after work.
+
+Retention still needs free space for its small durable receipts; this is not a
+zero-free-space guarantee. A direct bounded retention command remains available
+after the operator checks the mounted volume. Maintenance errors and deadline
+deferrals are reported separately in `storage_retention` and persistent health;
+post-publication maintenance failure does not change publication health. Dry-run
+retains the hard reserve check and performs no pruning.
 
 The current implementation expects the existing physical layout under a real
 Jobagg root:
@@ -97,12 +110,30 @@ intentional maintenance change correctly pauses fetching.
 
 New unique fetches, details, attachments, logs and publication evidence continue
 to accumulate. Cold compression is **not** run automatically by the dispatcher.
-Each pruning pass scans historical metadata and hashes selected copies; a group
-whose validation exceeds the time budget can repeatedly defer. Two groups per
-tick provide limited catch-up capacity after skipped ticks. Check retention
-status, eligible backlog and free-space trends; sustained deferrals require a
-separate bounded maintenance run or a future performance change. The earlier
-publication timeout and task backlog require separate fixes.
+The publisher still renders complete exports for affected datasets. On macOS,
+supported filesystems now use copy-on-write clones for sealed export copies,
+including rollback copies and live replacement. Each clone has its own inode;
+later writes cannot change another copy. Hash readback, fsync, atomic replacement
+and recovery journals remain required. Unsupported platforms/filesystems use
+verified streaming copies; capacity, permission and I/O failures remain errors.
+This reduces duplicate physical allocation, not unique export creation. Logical
+file sizes can therefore overstate reclaimable physical space.
+
+Each pruning pass scans historical metadata and hashes selected copies. Durable
+validation progress retains completed file hashes, bound to the exact group
+controls, expected manifest and file identity including ctime. Changed evidence
+invalidates progress, and the complete group is rechecked before deletion intent.
+This progress has the same trusted-local-owner assumption as existing retention
+journals; it is not protection against a writer forging both evidence and cache.
+An interrupted hash of a single file restarts; that file still needs to fit the
+configured budget. Check retained progress, eligible backlog, actual reclaimed
+space and creation rates over repeated cycles. Increase the bounded budget only
+through a reviewed configuration change when measured throughput requires it.
+
+A successful individual cleanup does not demonstrate sustainable retention.
+The [October recurrence evidence and validation plan](storage-recurrence-20261014.md)
+distinguishes created derivatives, removed copies and fresh fetched data. Provider
+task backlog and unrelated publication timeout fixes remain separate work.
 
 The older `jobagg.retained_artifacts` scanner accepts a completed and verified
 `storage-retention.json` retirement receipt and validates a cold archived plan

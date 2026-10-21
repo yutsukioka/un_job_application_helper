@@ -30,19 +30,35 @@ final class AtlasVaultPairingViewTests: XCTestCase {
         await owner.stopAndDrain()
     }
 
-    func testC30ExpiryTaskClearsComparisonWithStationaryWallClock() async throws {
+    func testC30ExpiryTaskClearsComparisonWithStationaryWallClock() async {
         let coordinator = PairingViewCancellationCoordinator(response: .init(
             disposition: .codesReady, stage: .acceptanceImported,
             sas: "ABCD-EF12-3456", transcriptSHA256: String(repeating: "a", count: 64),
             expiresAt: "1970-01-01T00:00:01Z", pendingTransaction: true))
         let owner = AtlasVaultTrustedPairingPresentationOwner(coordinator: coordinator,
             now: { Date(timeIntervalSince1970: 0.9) })
+        let comparisonDisplayed = expectation(description: "Comparison is displayed")
+        let comparisonExpired = expectation(description: "Displayed comparison expires")
+        let displayObservation = owner.$sas
+            .first(where: { $0 != nil })
+            .sink { _ in comparisonDisplayed.fulfill() }
+        let expiryObservation = owner.$sas
+            // Initial/reset nil values are not evidence that a displayed code expired.
+            .drop(while: { $0 == nil })
+            .first(where: { $0 == nil })
+            .sink { _ in comparisonExpired.fulfill() }
+        defer {
+            displayObservation.cancel()
+            expiryObservation.cancel()
+        }
+
         owner.resumePairing()
-        for _ in 0..<1000 { if !owner.isBusy { break }; await Task.yield() }
-        XCTAssertTrue(owner.sas != nil)
-        try await Task.sleep(for: .milliseconds(200))
-        XCTAssertTrue(owner.sas == nil)
+        // Observe expiry itself; a separate sleep does not order the MainActor tasks.
+        await fulfillment(of: [comparisonDisplayed, comparisonExpired],
+            timeout: 5, enforceOrder: true)
+        XCTAssertNil(owner.sas)
         owner.confirmCodesMatch()
+        XCTAssertFalse(owner.isBusy)
         let count = await coordinator.confirmationCount()
         XCTAssertEqual(count, 0)
         await owner.stopAndDrain()
