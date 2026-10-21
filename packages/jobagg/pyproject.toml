@@ -19,6 +19,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+compression = [
+  "zstandard>=0.25,<1"
+]
 browser = [
   "playwright>=1.51,<2"
 ]
