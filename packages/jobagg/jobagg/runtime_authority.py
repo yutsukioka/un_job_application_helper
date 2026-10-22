@@ -281,7 +281,7 @@ def controller(conn, *, run_id, owner_fd):
         yield
 
 
-def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result_sha256, reusable_projection=None, reusable_selection=None):
+def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result_sha256, reusable_projection=None, reusable_selection=None, no_write_resolution_sha256=None):
     value = validate(conn)
     if value['run_id'] != run_id or value['phase'] != 'publisher':
         raise RuntimeRepairRequired('runtime_continuation_phase_differs')
@@ -298,6 +298,9 @@ def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result
     target.mkdir(parents=True, exist_ok=True)
     control.pop('reusable_projection', None)
     control.pop('reusable_selection', None)
+    control.pop('previous_no_write_resolution_sha256',None)
+    if no_write_resolution_sha256 is not None:
+        control['previous_no_write_resolution_sha256']=no_write_resolution_sha256
     if reusable_projection is not None:
         control.update(reusable_projection=reusable_projection, reusable_selection=reusable_selection)
     control.update(publication_sequence=sequence, publication_control_dir=str(target),

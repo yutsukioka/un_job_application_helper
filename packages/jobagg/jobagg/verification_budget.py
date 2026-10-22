@@ -23,7 +23,8 @@ def scope(deadline_at=None, deadline_epoch=None, *, check_after=True):
         if deadline_epoch is None:
             check()
             yield
-            check()
+            if check_after:
+                check()
             return
         deadline_at = time.monotonic() + max(0, deadline_epoch - time.time())
     wall = time.time() + max(0, deadline_at - time.monotonic())

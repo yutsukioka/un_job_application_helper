@@ -279,7 +279,18 @@ def legacy_rejection(conn, job_key, proof):
     return None
 
 
-def record_event(conn, *, task, attempt_id, binding, run_id, acceptance_proof=None):
+def record_event(
+    conn,
+    *,
+    task,
+    attempt_id,
+    binding,
+    run_id,
+    acceptance_proof=None,
+    request_sha256=None,
+    request_hash_kind="canonical",
+    runtime_contract_sha256=None,
+):
     """Successful native acceptance, including listing/document, in its own TX.
 
     The object was durably captured before finish(); no process exit is inferred.
@@ -303,6 +314,11 @@ def record_event(conn, *, task, attempt_id, binding, run_id, acceptance_proof=No
     )
     if attempt["status"] != "done" or attempt["finished_at"] is None:
         raise ValueError("atomic_acceptance_requires_successful_attempt")
+    if active is not None:
+        from jobagg.remediation_worker import implementation_hash
+
+        if binding.get("implementation_sha256") != implementation_hash():
+            raise ValueError("Code changed before atomic acceptance reference")
     receipt = json.loads(attempt["evidence"])
     path_key, hash_key = {
         "detail": ("detail_path", "detail_sha256"),
@@ -325,6 +341,10 @@ def record_event(conn, *, task, attempt_id, binding, run_id, acceptance_proof=No
         "task_payload": json.loads(task["payload"]),
         "acceptance_proof": acceptance_proof,
         "run_id": run_id,
+        "request_sha256": request_sha256,
+        "request_hash_kind": request_hash_kind,
+        "runtime_contract_sha256": runtime_contract_sha256,
+        "runtime_epoch": active["epoch"] if active else None,
         "binding": binding,
         "transaction_id": active["source_transaction_id"] if active else None,
         "attempt": attempt,
@@ -373,10 +393,18 @@ def atomic_run(conn, run_id, *, limit, deadline_at):
     if len(rows) > limit:
         raise ValueError("atomic_acceptance_recovery_requires_larger_reviewed_bound")
     refs = []
+    request_sha = None
+    request_kind = None
     for row in rows:
         if time.monotonic() >= deadline_at:
             raise TimeoutError("atomic_acceptance_verification_deadline")
         proof = json.loads(row["reference_json"])
+        if request_sha is not None and request_sha != proof.get("request_sha256"):
+            raise ValueError("atomic_acceptance_request_conflict")
+        request_sha = proof.get("request_sha256")
+        if request_kind is not None and request_kind != proof.get("request_hash_kind", "canonical"):
+            raise ValueError("atomic_acceptance_request_hash_contract_conflict")
+        request_kind = proof.get("request_hash_kind", "canonical")
         attempt = cursor.execute(
             "SELECT * FROM remediation_attempts WHERE attempt_id=?", (row["attempt_id"],)
         ).fetchone()
@@ -404,6 +432,8 @@ def atomic_run(conn, run_id, *, limit, deadline_at):
         "versions": refs,
         "sha256": digest(refs),
         "worker_exit_verified": False,
+        "request_sha256": request_sha,
+        "request_hash_kind": request_kind,
     }
 
 

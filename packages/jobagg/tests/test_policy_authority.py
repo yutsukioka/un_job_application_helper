@@ -89,7 +89,7 @@ def test_import_includes_unindexed_and_missing_finish_charges(native):
         authority.due("example", time.time(), minimum=30, jitter=0, batch=0, pause=120)
         > time.time()
     )
-    with pytest.raises(ValueError, match="Malformed"):
+    with pytest.raises((ValueError, OSError)):
         policy.event_snapshot()
 
 
@@ -163,7 +163,7 @@ def test_checkpointed_migration_resumes_each_page_and_cutover_without_empty_char
     with authority.connect() as conn:
         assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 7
         assert conn.execute("SELECT sum(n) FROM sources").fetchone()[0] == 7
-    with pytest.raises(ValueError, match="Malformed"):
+    with pytest.raises((ValueError, OSError)):
         policy.event_snapshot()  # lagged JSON is never admission authority
 
 
@@ -221,4 +221,82 @@ def test_policy_commit_rechecks_actual_owner_lifetime_and_preserves_uncertainty(
             )
             fcntl.flock(owner, fcntl.LOCK_UN)
     with pytest.raises(ValueError, match="pending_repair"):
+        authority.revision()
+
+
+def test_directory_fence_stops_actual_legacy_reserve_before_provider_and_preserves_unknown_charge(
+    native,
+):
+    import hashlib
+
+    policy, owner = native
+    policy.reserve("known", "example", "detail", time.time(), policy.root, "known-task")
+    authority = activate(policy, owner)
+    assert (policy.root / "attempt_index.json").is_dir()
+    provider = []
+    # Exact old ordering: reserve bytes, then json.load/spread/rewrite index,
+    # then dispatch. An object index alone can be spread as keys by that code.
+    with pytest.raises(IsADirectoryError):
+        event = policy.root / "attempts" / (hashlib.sha256(b"old-writer").hexdigest() + ".json")
+        event.write_text(
+            json.dumps(
+                {
+                    "attempt_id": "old-writer",
+                    "source_id": "example",
+                    "kind": "detail",
+                    "started_at": time.time(),
+                }
+            )
+        )
+        index = json.loads((policy.root / "attempt_index.json").read_text())
+        (policy.root / "attempt_index.json").write_text(json.dumps(sorted({*index, event.name})))
+        provider.append("must not dispatch")
+    assert not provider and event.exists()
+    with pytest.raises(ValueError, match="boundary_changed"):
+        authority.revision()
+    with sqlite3.connect(authority.path) as conn:
+        assert (
+            conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
+        )  # known charges retained; new unknown file requires reconciliation
+
+
+def test_bootstrap_proofs_join_bounded_audit_and_source_hold_changes_require_review(
+    native, monkeypatch
+):
+    import hashlib
+
+    policy, owner = native
+    original = policy.root / "bootstrap.json"
+    value = json.loads(original.read_text())
+    proof = policy.root.parent / "reviewed-original.json"
+    proof.write_text("reviewed history")
+    value["evidence"] = [
+        {"path": str(proof), "sha256": hashlib.sha256(proof.read_bytes()).hexdigest()}
+    ]
+    original.write_text(json.dumps(value))
+    marker = json.loads(policy.marker.read_text())
+    marker["bootstrap_sha256"] = hashlib.sha256(original.read_bytes()).hexdigest()
+    policy.marker.write_text(json.dumps(marker))
+    monkeypatch.setattr(
+        policy, "inspect", lambda: pytest.fail("unbounded initial historical audit")
+    )
+    authority = activate(policy, owner)
+    authority.owner_fd = owner.fileno()
+    with authority.connect() as conn:
+        assert (
+            conn.execute("SELECT sha256 FROM evidence WHERE path=?", (str(proof),)).fetchone()[0]
+            == value["evidence"][0]["sha256"]
+        )
+    proof.write_text("changed historical proof")
+    with pytest.raises(ValueError, match="evidence_missing_or_changed"):
+        authority.audit(limit=1, now=time.time(), maximum_lag_seconds=100)
+
+
+def test_native_source_hold_file_cannot_silently_release_reviewed_gates(native):
+    policy, owner = native
+    authority = activate(policy, owner)
+    path = policy.root / "source_holds.json"
+    path.chmod(0o600)
+    path.write_text("{}")  # same content still changes the trusted boundary
+    with pytest.raises(ValueError, match="bootstrap_control_changed"):
         authority.revision()

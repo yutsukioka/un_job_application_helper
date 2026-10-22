@@ -25,7 +25,7 @@ from jobagg.policy_authority import (
 )
 from jobagg.publication_fence import _owner, _file_identity
 
-MIGRATION = "jobagg-policy-import-2"
+MIGRATION = "jobagg-policy-import-3"
 DDL = """
 CREATE TABLE IF NOT EXISTS authority(id INTEGER PRIMARY KEY,epoch TEXT,revision INTEGER,transaction_id TEXT,audit_cursor TEXT,audit_completed_at REAL);
 CREATE TABLE IF NOT EXISTS sources(source_id TEXT PRIMARY KEY,pause REAL,n INTEGER);
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS import_files(ordinal INTEGER PRIMARY KEY,path TEXT UN
 CREATE INDEX IF NOT EXISTS import_order ON import_files(imported,started_at,ordinal);
 CREATE INDEX IF NOT EXISTS import_unread ON import_files(sha256,ordinal);
 CREATE TABLE IF NOT EXISTS import_expected(name TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS import_audit(id INTEGER PRIMARY KEY,after_path TEXT);
 """
 
 
@@ -88,7 +89,7 @@ def step(
         or not epoch
         or not reviewed_writers
         or any(item.get("fenced") is not True for item in reviewed_writers)
-        or set(pauses) != set(policy.source_ids)
+        or not set(policy.source_ids).issubset(pauses)
     ):
         raise ValueError("complete_reviewed_writer_inventory_and_finite_page_required")
     authority = PolicyAuthority(policy)
@@ -100,7 +101,8 @@ def step(
         "pauses": pauses,
         "writers": reviewed_writers,
         "owner_identity": _signature(policy.owner),
-        "source_ids": sorted(policy.source_ids),
+        "source_ids": sorted(pauses),
+        "requested_source_ids": sorted(policy.source_ids),
     }
     if authority.head.exists():
         authority.revision()
@@ -110,9 +112,22 @@ def step(
         if checkpoint["contract"] != contract:
             raise ValueError("policy_import_contract_changed")
     else:
-        # This is the sole historical bootstrap audit, outside the tick path.
-        policy.inspect()
+        # Validate the retained structural seal here. Historical evidence is
+        # verified in resumable pages below, never a first-call full scan.
+        bootstrap = policy.root / "bootstrap.json"
+        marker = json.loads(policy.marker.read_text())
+        if bootstrap.stat().st_size > 16 * 1024**2:
+            raise ValueError("policy_import_bootstrap_oversized")
+        original_bootstrap = json.loads(bootstrap.read_text())
+        if (
+            marker.get("shared_lock") != str(policy.owner)
+            or marker.get("bootstrap_sha256") != _sha(bootstrap, check_deadline)
+            or not set(policy.source_ids).issubset(original_bootstrap.get("scope_source_ids", []))
+        ):
+            raise ValueError("policy_import_original_bootstrap_binding_changed")
         index = policy.root / "attempt_index.json"
+        if index.stat().st_size > 16 * 1024**2:
+            raise ValueError("policy_import_index_oversized")
         original = index.read_bytes()
         expected = json.loads(original)
         if (
@@ -154,9 +169,18 @@ def step(
         raise ValueError("policy_import_original_index_changed")
     # A migrated process and all supplied old writer APIs must refuse admission
     # throughout preparation. Unindexed files remain imported and charged.
-    atomic_write_text(
-        policy.root / "attempt_index.json", _dump({"schema": SCHEMA, "old_writers_fenced": True})
-    )
+    legacy = policy.root / "attempt_index.json"
+    if legacy.is_file():
+        if _sha(legacy, check_deadline) != checkpoint["legacy_index_sha256"]:
+            raise ValueError("policy_import_legacy_index_changed_before_fence")
+        legacy.unlink()
+    legacy.mkdir(exist_ok=True)
+    fence = legacy / "fence.json"
+    document = _dump({"schema": SCHEMA, "old_writers_fenced": True})
+    if fence.exists() and fence.read_text() != document:
+        raise ValueError("policy_import_legacy_fence_changed")
+    if not fence.exists():
+        atomic_write_text(fence, document)
     if (
         _directory(policy.root / "attempts") != checkpoint["legacy_directory"]
         or _sha(policy.root / "bootstrap.json", check_deadline) != checkpoint["bootstrap_sha256"]
@@ -169,6 +193,12 @@ def step(
         conn.executescript(DDL)
         with conn:
             conn.execute("INSERT OR IGNORE INTO import_state VALUES(1,'catalogue',0)")
+            conn.execute("INSERT OR IGNORE INTO import_audit VALUES(1,'')")
+            original_bootstrap = json.loads((policy.root / "bootstrap.json").read_text())
+            for item in original_bootstrap.get("evidence", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO evidence VALUES(?,?)", (item["path"], item["sha256"])
+                )
             conn.execute(
                 "INSERT OR IGNORE INTO authority VALUES(1,?,0,?,?,?)",
                 (epoch, "bootstrap", "", time.time()),
@@ -266,6 +296,22 @@ def step(
                     )
             if rows:
                 return {"complete": False, "phase": phase, "processed": len(rows)}
+            with conn:
+                conn.execute("UPDATE import_state SET phase='evidence' WHERE id=1")
+            return {"complete": False, "phase": "evidence"}
+        if phase == "evidence":
+            after = conn.execute("SELECT after_path FROM import_audit WHERE id=1").fetchone()[0]
+            rows = conn.execute(
+                "SELECT path,sha256 FROM evidence WHERE path>? ORDER BY path LIMIT ?",
+                (after, limit),
+            ).fetchall()
+            for row in rows:
+                if _sha(Path(row["path"]), check_deadline) != row["sha256"]:
+                    raise ValueError("policy_import_original_evidence_changed")
+                with conn:
+                    conn.execute("UPDATE import_audit SET after_path=? WHERE id=1", (row["path"],))
+            if rows:
+                return {"complete": False, "phase": phase, "processed": len(rows)}
             if _directory(policy.root / "attempts") != checkpoint["legacy_directory"]:
                 raise ValueError("policy_import_final_directory_changed")
             with conn:
@@ -291,6 +337,7 @@ def step(
                     "import_state",
                     "import_files",
                     "import_expected",
+                    "import_audit",
                 ):
                     for op in ("INSERT", "UPDATE", "DELETE"):
                         conn.execute(
@@ -302,11 +349,18 @@ def step(
             # Reverify evidence in pages; do not silently bless an orphan DB.
             with conn:
                 conn.execute("UPDATE import_state SET phase='verify',verified_ordinal=0 WHERE id=1")
+                conn.execute("UPDATE import_audit SET after_path='' WHERE id=1")
             return {"complete": False, "phase": "verify"}
         else:
             raise ValueError("policy_import_unknown_checkpoint")
     immutable = {}
-    for path in (policy.root / "bootstrap.json", policy.marker, archive):
+    for path in (
+        policy.root / "bootstrap.json",
+        policy.marker,
+        archive,
+        policy.root / "source_holds.json",
+        policy.root / "attempt_index.json" / "fence.json",
+    ):
         path.chmod(path.stat().st_mode & ~0o222)
         immutable[str(path)] = _file_identity(path)
     head = {

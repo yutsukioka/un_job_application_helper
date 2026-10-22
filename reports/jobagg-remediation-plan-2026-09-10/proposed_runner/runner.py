@@ -1228,13 +1228,18 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
                 if native_state['phase'] == 'idle' or control.get('publication_sequence', 0) > 0:
                     previous = Path(control['publication_control_dir'] if native_state['phase'] == 'idle' else control['previous_publication_control_dir'])
                     receipt = read_json(previous / 'outcome.json')
-                    require(receipt.get('publication_status') in {'published','noop','deferred'} and receipt.get('publication_result_sha256') == digest(previous / 'publication_result.json'),
-                            'native batch escrow close lacks exact prior publication proof')
-                    if receipt['publication_status'] == 'deferred':
-                        validate_publication(read_json(previous / 'publication_result.json'), read_json(previous / 'publication_request.json'))
-                        require(not (previous / 'publication_generation_binding.json').exists(), 'deferred batch has generation binding')
+                    if (previous/'publication_no_write_resolution.json').exists():
+                        proof_sha=runtime_no_write_evidence(config,previous)
+                        require(proof_sha==control.get('previous_no_write_resolution_sha256'),'native no-write escrow reference changed')
+                    else:
+                        require(receipt.get('publication_status') in {'published','noop','deferred'} and receipt.get('publication_result_sha256') == digest(previous / 'publication_result.json'),
+                                'native batch escrow close lacks exact prior publication proof')
+                        proof_sha=receipt['publication_result_sha256']
+                        if receipt['publication_status'] == 'deferred':
+                            validate_publication(read_json(previous / 'publication_result.json'), read_json(previous / 'publication_request.json'))
+                            require(not (previous / 'publication_generation_binding.json').exists(), 'deferred batch has generation binding')
                     with controller_scope(config, context):
-                        close_native_batch_escrow(config, context, previous, receipt['publication_result_sha256'])
+                        close_native_batch_escrow(config, context, previous, proof_sha)
                     return {**receipt, 'storage_cycle_reconciled':True, 'worker_reexecuted':False, 'publisher_reexecuted':False}
             if context is None:
                 if native_state['phase'] == 'accepted':
@@ -1720,6 +1725,23 @@ def runtime_acknowledge(config, run_id, result, request, descriptor):
                 'empty': vector['empty'], 'held': vector['held']}
 
 
+def runtime_no_write_evidence(config, controls):
+    resolution=read_json(controls/'publication_no_write_resolution.json')
+    proof=resolution.get('proof',{})
+    require(proof.get('kind')=='verified_unstarted_publication' and proof.get('generation_not_started') is True
+            and not (controls/'publication_generation_binding.json').exists(), 'native no-write proof missing or contradictory')
+    # Canonical validation is restricted to this active predecessor, never a
+    # completed-history census. Once advanced, retain only its sealed reference.
+    bounded={**config,'_runtime_active_control':str(controls),'_runtime_active_run':read_json(controls/'outcome.json')['run_id']}
+    require(not unresolved_publications(config['state_dir']/'runs',bounded,deadline_at=config.get('_entry_monotonic_deadline',config.get('_tick_monotonic_deadline'))),
+            'native no-write resolution did not close the exact original intent')
+    request=read_json(controls/'publication_request.json')
+    snapshot_helper(config).validate_publication_snapshot(request,config['publication_worker_database'],owner_held=True,
+        deadline_at=config.get('_entry_monotonic_deadline',config.get('_tick_monotonic_deadline')))
+    former_processes_absent(read_json(controls/'outcome.json'))
+    return digest(controls/'publication_no_write_resolution.json')
+
+
 def runtime_advance(config, run_id, controls, descriptor, *, reusable_request=None):
     with runtime_connection(config) as conn:
         authority = package_helper(config, 'runtime_authority')
@@ -1729,7 +1751,8 @@ def runtime_advance(config, run_id, controls, descriptor, *, reusable_request=No
                 outcome_sha256=digest(controls / 'outcome.json'),
                 worker_result_sha256=digest(files['worker_result']),
                 reusable_projection=(reusable_request or {}).get('publication_snapshot'),
-                reusable_selection=(reusable_request or {}).get('publication_selection'))
+                reusable_selection=(reusable_request or {}).get('publication_selection'),
+                no_write_resolution_sha256=digest(controls/'publication_no_write_resolution.json') if (controls/'publication_no_write_resolution.json').exists() else None)
     runtime_active(config)
 
 
@@ -1833,6 +1856,9 @@ def runtime_resume(config, descriptor):
                 proof=package_helper(config,'accepted_evidence').atomic_run(conn,value['run_id'],limit=bound,
                         deadline_at=config.get('_entry_monotonic_deadline',time.monotonic()+config['total_timeout_seconds']))
                 require(proof is not None,'failed worker has no independent committed acceptance; repair required')
+                original_request=read_json(accepted_dir/'request.json')
+                original_sha=digest(accepted_dir/'request.json') if proof.get('request_hash_kind')=='file' else hashlib.sha256(package_helper(config,'remediation_worker').dump(original_request).encode()).hexdigest()
+                require(proof['request_sha256']==original_sha,'atomic acceptance original request changed')
                 original={name:digest(accepted_dir/name) for name in ('request.json','acceptance.json','worker_result.json','outcome.json') if (accepted_dir/name).exists()}
                 package_helper(config,'runtime_authority').promote_atomic_acceptance(conn,value['run_id'],proof=proof,
                     original_controls=original,started_at=now().isoformat())
@@ -1843,6 +1869,9 @@ def runtime_resume(config, descriptor):
     proof_paths = pending.proof_paths(accepted_dir,control.get('proof_files'))
     if value['phase'] == 'accepted' and control.get('publication_only') and control.get('publication_sequence', 0) == 0:
         runtime_queue_controls(config, value['run_id'], descriptor)
+    if control.get('previous_no_write_resolution_sha256'):
+        require(digest(Path(control['previous_publication_control_dir'])/'publication_no_write_resolution.json')==control['previous_no_write_resolution_sha256'],
+                'native predecessor no-write reference changed')
     if control.get('publication_sequence', 0):
         previous = Path(control['previous_publication_control_dir'])
         require(digest(previous / 'outcome.json') == control['previous_outcome_sha256']
@@ -1886,6 +1915,16 @@ def runtime_resume(config, descriptor):
                 "pending_backlog_empty": drained['empty'], 'publication_held': drained['held']}}
         if (run / "outcome.json").exists():
             terminal = read_json(run / "outcome.json")
+            if (run/'publication_no_write_resolution.json').exists():
+                proof_sha=runtime_no_write_evidence(config,run)
+                request=read_json(run/'publication_request.json')
+                context=config.get('_storage_context')
+                runtime_advance(config,value['run_id'],run,descriptor,reusable_request=request)
+                if context and context['ledger'].snapshot()['phase']=='publication_admitted':
+                    close_native_batch_escrow(config,context,run,proof_sha)
+                return {'_runtime_completed':{**terminal,'status':'incomplete','publication_status':'deferred',
+                    'generation_not_started':True,'accepted_work_retained':True,'publication_continuation_prepared':True,
+                    'worker_reexecuted':False,'publisher_reexecuted':False}}
             if terminal.get('publication_status') == 'deferred':
                 request = read_json(run / 'publication_request.json')
                 result = read_json(run / 'publication_result.json')
@@ -1898,7 +1937,7 @@ def runtime_resume(config, descriptor):
                 validate_publication(result, request)
                 former_processes_absent(terminal)
                 snapshot_helper(config).validate_publication_snapshot(request, config['publication_worker_database'], owner_held=True,
-                    deadline_at=config.get('_entry_monotonic_deadline'))
+                    deadline_at=config.get('_entry_monotonic_deadline',config.get('_tick_monotonic_deadline')))
                 context = config.get('_storage_context')
                 runtime_advance(config, value['run_id'], run, descriptor, reusable_request=request)
                 if context and context['ledger'].snapshot()['phase'] == 'publication_admitted':
@@ -1979,6 +2018,7 @@ def tick(config, expected, recover_publication=False):
     config['_runtime_expected_source_ids'] = expected
     deadline_at = min(time.monotonic() + config['total_timeout_seconds'], config.get('_entry_monotonic_deadline', float('inf')))
     wall_at = min(time.time() + config['total_timeout_seconds'], config.get('_entry_wall_deadline', float('inf')))
+    config['_tick_monotonic_deadline']=deadline_at
     with (package_helper(config, 'publication_deadline').entry_deadlines(deadline_at, wall_at) if runtime_enabled(config) else nullcontext()):
         return _tick(config, expected, recover_publication=recover_publication)
 
@@ -2200,6 +2240,13 @@ def publication_request(
             config["state_dir"], config_sha256=config["_config_sha256"],
             database=config["publication_worker_database"],
             projection_target=runtime_projection_target(config, request['run_id'], config['_runtime_active_control']))
+    if runtime_enabled(config):
+        with runtime_connection(config) as conn:
+            work=package_helper(config,'publication_work')
+            if work.exists(conn):
+                vector=work.vector(conn,contract_sha256=runtime_publication_contract(config)['sha256'],now=time.time())
+                require(not any(reason!='time_transition_due' for reason in vector['revalidation_reasons']),
+                        'active publication requires reviewed contract revalidation')
     snapshot_fields = {}
     selection = pending_value.get('selection') if pending_value else None
     if runtime_enabled(config) and selection is None:
@@ -2258,6 +2305,7 @@ def publication_request(
             prior_boundary["previous_publication_boundary"] = boundary
     return {
         **prior_boundary,
+        **({'runtime_contract':runtime_publication_contract(config)} if runtime_enabled(config) else {}),
         "schema_version": 1,
         "run_id": request["run_id"],
         "generated_at": now().isoformat(),
@@ -2282,14 +2330,14 @@ def validate_publication(result, request):
         isinstance(result, dict) and result.get("schema_version") == 1,
         "invalid publication receipt",
     )
-    for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy", "previous_publication_boundary", "publication_selection"):
+    for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy", "previous_publication_boundary", "publication_selection", "runtime_contract"):
         require(
             (key in result) == (key in request),
             "publication " + key + " presence differs",
         )
     for key in PUBLICATION_BINDINGS + tuple(
         key
-        for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy", "previous_publication_boundary", "publication_selection")
+        for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy", "previous_publication_boundary", "publication_selection", "runtime_contract")
         if key in request
     ):
         require(
@@ -2811,7 +2859,9 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
     run_dir = Path(resume.get('publication_control_dir', accepted_dir)) if resume else accepted_dir
     if resume is None:
         run_dir.mkdir(parents=True, exist_ok=False)
-    proof_paths = package_helper(config,'pending_publication').proof_paths(accepted_dir, resume.get('proof_files') if resume else None)
+    proof_paths = {'acceptance':accepted_dir/'acceptance.json','worker_result':accepted_dir/'worker_result.json'}
+    if resume and resume.get('proof_files'):
+        proof_paths = package_helper(config,'pending_publication').proof_paths(accepted_dir,resume['proof_files'])
     request_path, report_path = accepted_dir / "request.json", proof_paths['acceptance']
     manifest_path = accepted_dir / "source_manifest.json"
     if resume is None:
@@ -2846,6 +2896,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
         request['policy_audit'] = config['policy_audit']
     if runtime_enabled(config) and 'jobagg.remediation_worker' in config.get('worker_argv',[]):
         request['expected_implementation_sha256']=runtime_publication_contract(config)['jobagg_implementation_sha256']
+        request['runtime_contract']=runtime_publication_contract(config)
     if resume is not None:
         request = read_json(request_path)
     elif storage_context:
@@ -3025,6 +3076,9 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                 "registry changed during tick",
             )
             status, reasons = validate_report(report_path, request, now())
+            if request.get('runtime_contract'):
+                require(read_json(report_path).get('runtime_contract_sha256')==request['runtime_contract']['sha256'],
+                        'Worker did not verify its admitted complete runtime contract')
             if timed_out:
                 status = "incomplete"
                 reasons.append(

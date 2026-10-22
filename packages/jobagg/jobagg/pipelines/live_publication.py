@@ -1404,7 +1404,7 @@ def publish_incremental(*args, publication_policy=None, storage_budget_lease=Non
             *args, publication_policy=publication_policy,
             storage_budget_lease=storage_budget_lease, **kwargs,
         )
-        if result.get('status') != 'deferred':
+        if result.get('status') not in {'deferred','publication_pending'}:
             verification_check()
         if escrow is not None and result.get("status") in {"publication_pending", "deferred"}:
             escrow.keep_open = True

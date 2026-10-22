@@ -64,6 +64,11 @@ def _request(args, *, owner_held=False, deadline_at=None, validation=None):
             0, float(request["deadline_epoch"]) - time.time()
         )
         deadline_at = min(deadline_at, requested_deadline) if deadline_at is not None else requested_deadline
+    if request.get('runtime_contract'):
+        from jobagg.runtime_contract import verify
+        from jobagg.verification_budget import scope
+        with scope(deadline_at,request.get('deadline_epoch')):
+            verify(request['runtime_contract'],package_root=Path(__file__).parent.parent)
     checked = validate_publication_snapshot(
         request, args.worker_database, owner_held=owner_held, deadline_at=deadline_at
     )
@@ -168,6 +173,11 @@ def main(argv=None):
                 "observation_set_sha256": result.get("observation_set_sha256"),
                 "whole_job_completeness_certified": False,
             }
+        if request.get('runtime_contract') and result.get('status') in {'published','noop'}:
+            from jobagg.runtime_contract import verify
+            from jobagg.verification_budget import scope
+            with scope(deadline,request.get('deadline_epoch')):
+                verify(request['runtime_contract'],package_root=Path(__file__).parent.parent)
         if args.report:
             _save(args.report, result)
         return result

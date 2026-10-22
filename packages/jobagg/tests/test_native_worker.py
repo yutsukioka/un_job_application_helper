@@ -15,7 +15,7 @@ from test_budgeted_dispatcher import configured  # noqa: F401
 # ruff: noqa: F811
 
 
-def _first_useful(setup, monkeypatch):
+def _first_useful(setup, monkeypatch, *, return_request=False, runtime_contract_value=None):
     worker, _, calls, _ = setup
     worker.initialize()
     with shared_owner(worker.shared_lock) as owner:
@@ -51,15 +51,20 @@ def _first_useful(setup, monkeypatch):
     monkeypatch.setattr(
         worker.shared_policy, "event_snapshot", lambda **_: pytest.fail("cold historical census")
     )
-    report = worker.tick(
-        execute=True,
-        request={
-            "run_id": "first-useful",
-            "deadline_at": datetime.fromtimestamp(time.time() + 30, UTC).isoformat(),
-            "source_manifest_sha256": worker.binding["registry_sha256"],
-            "policy_audit": {"max_objects": 2, "maximum_lag_seconds": 3600},
-        },
-    )
+    request = {
+        "run_id": "first-useful",
+        "deadline_at": datetime.fromtimestamp(time.time() + 30, UTC).isoformat(),
+        "source_manifest_sha256": worker.binding["registry_sha256"],
+        "policy_audit": {"max_objects": 2, "maximum_lag_seconds": 3600},
+    }
+    request["started_at"] = datetime.now(UTC).isoformat()
+    request["expected_source_ids"] = list(worker.by_id)
+    if runtime_contract_value:
+        request["runtime_contract"] = runtime_contract_value
+        request["expected_implementation_sha256"] = runtime_contract_value[
+            "jobagg_implementation_sha256"
+        ]
+    report = worker.tick(execute=True, request=request)
     assert len(calls) == 2
     assert report["concurrency"]["accepted_progress"] >= 1
     with worker.db.connect() as conn:
@@ -83,7 +88,7 @@ def _first_useful(setup, monkeypatch):
         assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 2
         assert conn.execute("SELECT count(*) FROM attempts WHERE kind='detail'").fetchone()[0] == 1
 
-    return report
+    return (report, request) if return_request else report
 
 
 def test_cold_first_useful_cycle_charges_sql_and_accepts_pointer_atomically(setup, monkeypatch):
@@ -99,7 +104,7 @@ def test_interrupted_native_worker_promotes_only_committed_evidence_and_retains_
 
     # Run the same real offline collector/verifier/acceptance fixture. Simulate a
     # process loss after acceptance commit, before any valid report/exit proof.
-    _first_useful(setup, monkeypatch)
+    _, original_request = _first_useful(setup, monkeypatch, return_request=True)
     worker, _, calls, _ = setup
     config, _ = configured
     config.pop("storage_budget")
@@ -125,12 +130,7 @@ def test_interrupted_native_worker_promotes_only_committed_evidence_and_retains_
     monkeypatch.setattr(pending_publication, "database_binding", actual.database_binding)
     root = config["state_dir"] / "runs" / "first-useful"
     root.mkdir(parents=True)
-    request = {
-        "run_id": root.name,
-        "source_manifest_sha256": config["_manifest_sha256"],
-        "expected_source_ids": list(worker.by_id),
-        "started_at": "2026-10-22T00:00:00+00:00",
-    }
+    request = original_request
     (root / "source_manifest.json").write_bytes(worker.registry.read_bytes())
     original = {
         "request.json": request,
@@ -158,6 +158,14 @@ def test_interrupted_native_worker_promotes_only_committed_evidence_and_retains_
             control = runtime_authority.publication_control(conn)
             control.update(publication_control_dir=str(root), publication_sequence=0)
             conn.execute("UPDATE jobagg_runtime_state SET control_json=?", (json.dumps(control),))
+        tampered = {
+            **original_request,
+            "policy_audit": {"max_objects": 999, "maximum_lag_seconds": 3600},
+        }
+        (root / "request.json").write_text(json.dumps(tampered))
+        with pytest.raises(runner.InvalidReport, match="original request changed"):
+            runner.runtime_resume(config, fd)
+        (root / "request.json").write_bytes(immutable["request.json"])
         resumed = runner.runtime_resume(config, fd)
     assert len(calls) == 2
     assert resumed["proof_files"] == {
@@ -239,3 +247,39 @@ def test_native_listing_reference_survives_failed_refresh_and_exact_reconciliati
         item.get("kind") == "listing" and item["exact_readback"]
         for item in reconciled["accepted_details"]
     )
+
+
+def test_native_worker_cannot_refetch_a_batch_that_already_mutated(setup, monkeypatch):
+    _, request = _first_useful(setup, monkeypatch, return_request=True)
+    worker, _, calls, _ = setup
+    original = list(calls)
+    with pytest.raises(ValueError, match="already mutated"):
+        worker.tick(execute=True, request=request)
+    assert calls == original
+    with worker.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM remediation_attempts").fetchone()[0] == 2
+
+
+def test_first_useful_native_child_verifies_complete_runtime_bytes_before_and_after_work(
+    setup, monkeypatch
+):
+    from pathlib import Path
+    from jobagg import runtime_contract
+
+    worker, _, _, _ = setup
+    root = Path(runtime_contract.__file__).parent.parent
+    dispatcher = (
+        root.parent.parent / "reports" / "jobagg-remediation-plan-2026-09-10" / "proposed_runner"
+    )
+    value = runtime_contract.build(
+        package_root=root,
+        dispatcher_files=[
+            dispatcher / name for name in ("runner.py", "runner_observability.py", "supervisor.py")
+        ],
+        config_sha256="a" * 64,
+        registry_sha256=worker.binding["registry_sha256"],
+        manifest_sha256=worker.binding["registry_sha256"],
+    )
+    report = _first_useful(setup, monkeypatch, runtime_contract_value=value)
+    assert report["runtime_contract_sha256"] == value["sha256"]
+    assert report["concurrency"]["accepted_progress"] > 0

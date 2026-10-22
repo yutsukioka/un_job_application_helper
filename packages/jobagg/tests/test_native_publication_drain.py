@@ -20,7 +20,17 @@ from test_publication_work import prepare
 
 
 @pytest.mark.parametrize(
-    "budget,fault", [(False, None), (True, None), (True, "after_ledger_receipt"), (False, "deferred"), (True, "deferred")]
+    "budget,fault",
+    [
+        (False, None),
+        (True, None),
+        (True, "after_ledger_receipt"),
+        (False, "deferred"),
+        (True, "deferred"),
+        (False, "no_write"),
+        (True, "no_write"),
+        (True, "no_write_after_receipt"),
+    ],
 )
 def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_projection(
     configured, setup, monkeypatch, budget, fault
@@ -133,7 +143,10 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
     add_detail(setup, external_id="003")
     prepare(setup, owner_path=config["shared_lock_path"], owner_fd=owner.fileno())
     with sqlite3.connect(setup["worker"].path) as conn:
-        conn.execute("UPDATE jobagg_dirty_state SET contract_sha256=?", (runner.runtime_publication_contract(config)['sha256'],))
+        conn.execute(
+            "UPDATE jobagg_dirty_state SET contract_sha256=?",
+            (runner.runtime_publication_contract(config)["sha256"],),
+        )
         if budget:
             history.activate_semantic_history(
                 conn,
@@ -216,22 +229,87 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
             return self.returncode
 
     monkeypatch.setattr(runner.subprocess, "Popen", Child)
-    if fault == 'deferred':
+    deferred_fault = fault in {"deferred", "no_write", "no_write_after_receipt"}
+    if deferred_fault:
         original_publish = publish_worker.publish_incremental
-        deferred = {'done':False}
+        deferred = {"done": False}
+
         def defer_once(*args, **kwargs):
-            if not deferred['done']:
-                deferred['done'] = True
-                return {'status':'deferred','generation_not_started':True,'observation_set_sha256':'a'*64,
-                        'budget_exhausted':True,'completeness_certified':False}
+            if not deferred["done"]:
+                deferred["done"] = True
+                return {
+                    "status": "deferred",
+                    "generation_not_started": True,
+                    "observation_set_sha256": "a" * 64,
+                    "budget_exhausted": True,
+                    "completeness_certified": False,
+                }
             return original_publish(*args, **kwargs)
-        monkeypatch.setattr(publish_worker,'publish_incremental',defer_once)
-        first = runner.tick(config, ['test_custom_html'])
-        assert first['publication_status']=='deferred', first
-        original_snapshot = calls[0]['publication_snapshot']
-        continued = runner.tick(config, ['test_custom_html'])
-        assert continued.get('publication_continuation_prepared'), continued
-    if fault == 'after_ledger_receipt':
+
+        monkeypatch.setattr(publish_worker, "publish_incremental", defer_once)
+        first = runner.tick(config, ["test_custom_html"])
+        assert first["publication_status"] == "deferred", first
+        original_snapshot = calls[0]["publication_snapshot"]
+        if fault in {"no_write", "no_write_after_receipt"}:
+            from jobagg.remediation_worker import shared_owner
+            from jobagg import publication_snapshot
+
+            controls = Path(first["run_dir"])
+            unknown = {
+                **runner.read_json(controls / "outcome.json"),
+                "publication_status": "unknown_requires_review_no_replay",
+                "publication_exit_code": None,
+                "publication_recovery_allowed": True,
+            }
+            runner.atomic_json(controls / "outcome.json", unknown)
+            runner.atomic_json(controls / "state.json", unknown)
+            (controls / "publication_result.json").unlink()
+            with monkeypatch.context() as clean_env:
+                clean_env.delenv("JOBAGG_SHARED_LOCK_FD", raising=False)
+                with shared_owner(config["shared_lock_path"]):
+                    proof = publication_snapshot.capture_unstarted_publication(
+                        runner.read_json(controls / "publication_request.json"),
+                        setup["output"],
+                        setup["state"],
+                        owner_held=True,
+                        deadline_at=runner.time.monotonic() + 5,
+                    )
+            runner.immutable_json(
+                controls / "publication_no_write_resolution.json",
+                {
+                    "run_id": first["run_id"],
+                    "previous_outcome_sha256": runner.digest(controls / "outcome.json"),
+                    "original_request_sha256": runner.digest(controls / "publication_request.json"),
+                    "original_intent_sha256": runner.digest(controls / "publication_intent.json"),
+                    "resolved_at": runner.now().isoformat(),
+                    "proof": proof,
+                },
+            )
+            if fault == "no_write_after_receipt":
+                from jobagg import atomic_files
+                from jobagg.storage_budget import StorageBudgetDeferred
+
+                original_write = atomic_files.atomic_write_text
+                injected = {"done": False}
+
+                def fail_after_receipt(path, payload, **kwargs):
+                    original_write(path, payload, **kwargs)
+                    if Path(path).name == "storage_cycle_completed.json" and not injected["done"]:
+                        injected["done"] = True
+                        raise StorageBudgetDeferred("injected no-write escrow close interruption")
+
+                monkeypatch.setattr(atomic_files, "atomic_write_text", fail_after_receipt)
+                interrupted = runner.tick(config, ["test_custom_html"])
+                assert interrupted["status"] == "storage_deferred", interrupted
+                reconciled = runner.tick(config, ["test_custom_html"])
+                assert reconciled.get("storage_cycle_reconciled"), reconciled
+        continued = (
+            runner.tick(config, ["test_custom_html"])
+            if fault != "no_write_after_receipt"
+            else {"publication_continuation_prepared": True}
+        )
+        assert continued.get("publication_continuation_prepared"), continued
+    if fault == "after_ledger_receipt":
         from jobagg import atomic_files
         from jobagg.storage_budget import StorageBudgetDeferred
 
@@ -260,9 +338,9 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
         name: (root / name).read_bytes()
         for name in ("request.json", "acceptance.json", "worker_result.json")
     }
-    assert len(calls) == (4 if fault == 'deferred' else 3)
-    if fault == 'deferred':
-        assert calls[1]['publication_snapshot'] == original_snapshot
+    assert len(calls) == (4 if deferred_fault else 3)
+    if deferred_fault:
+        assert calls[1]["publication_snapshot"] == original_snapshot
     assert all("worker_acceptance_sha256" in request for request in calls)
     assert all(record.get("worker_exit_code") is None for record in results)
     assert len({record["run_id"] for record in results}) == 1
@@ -272,10 +350,12 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
 
         assert storage_cycle.existing_context(config) is None
     assert (root / "outcome.json").exists()
-    assert len(list((root / "publication_batches").glob("*/outcome.json"))) == (3 if fault == 'deferred' else 2)
+    assert len(list((root / "publication_batches").glob("*/outcome.json"))) == (
+        3 if deferred_fault else 2
+    )
     with sqlite3.connect(setup["worker"].path) as conn:
         assert authority.validate(conn)["phase"] == "idle"
     quiet = runner.tick(config, ["test_custom_html"])
     assert quiet["publication_status"] == "proven_empty", quiet
-    assert len(calls) == (5 if fault == 'deferred' else 4)
+    assert len(calls) == (5 if deferred_fault else 4)
     assert all((root / name).read_bytes() == value for name, value in proof.items())

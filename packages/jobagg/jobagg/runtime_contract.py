@@ -118,3 +118,18 @@ def build(*, package_root, dispatcher_files, config_sha256, registry_sha256, man
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def verify(value, *, package_root):
+    if not isinstance(value, dict) or value.get("schema") != "runtime-publication-contract-1":
+        raise ValueError("admitted_runtime_contract_missing_or_unknown")
+    actual = build(
+        package_root=package_root,
+        dispatcher_files=value["dispatcher"].keys(),
+        config_sha256=value["config_sha256"],
+        registry_sha256=value["registry_sha256"],
+        manifest_sha256=value["manifest_sha256"],
+    )
+    if actual != value:
+        raise ValueError("admitted_runtime_contract_bytes_changed")
+    return value["sha256"]

@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "3849d74b7edad8d4440efe52020e0246cddc457dc8843b9bf61cf886dc419527"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "a5fbf3afffbc63299f868efab124c2151ef78339fdba4ca15f03c8a8cfed6426"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -1318,7 +1318,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         if status == 'done':
             from jobagg.accepted_evidence import record_event
             record_event(conn, task=task, attempt_id=token, binding=self.binding,
-                         run_id=getattr(self, '_runtime_run_id', None))
+                         run_id=getattr(self, '_runtime_run_id', None),
+                         request_sha256=getattr(self,'_runtime_request_sha256',None),
+                         request_hash_kind='file' if getattr(self,'_dispatcher_request_sha256',None) else 'canonical',
+                         runtime_contract_sha256=(getattr(self,'_runtime_contract_value',None) or {}).get('sha256'))
 
     def context(self, source, target, task, deadline):
         client = self.client_factory(source, self.policy)
@@ -2611,6 +2614,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self._elapsed_deadline = float("inf")
                 self._runtime_run_id = None
                 self._runtime_owner_fd = None
+                self._runtime_contract_value = None
+                self._runtime_request_sha256 = None
                 if getattr(self.shared_policy, '_native', None) is not None:
                     self.shared_policy._native.owner_fd = None
                     self.shared_policy._native.storage = None
@@ -2634,6 +2639,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         self._elapsed_deadline = min(time.monotonic() + self.max_seconds,
                                      getattr(self, "_entry_elapsed_deadline", float("inf")))
         self._runtime_run_id = (request or {}).get("run_id")
+        self._runtime_request_sha256=getattr(self,'_dispatcher_request_sha256',None) or hashlib.sha256(dump(request or {}).encode()).hexdigest()
         self.tick_id = str(uuid4())
         tick_started_at = utc()
         self._task_intervals = []
@@ -2650,8 +2656,22 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         self._sql_deadline = deadline
         with shared_owner(self.shared_lock) as owner_fd:
             self._runtime_owner_fd = owner_fd
+            self._runtime_contract_value=(request or {}).get('runtime_contract')
+            if self._runtime_contract_value:
+                from jobagg.runtime_contract import verify
+                from jobagg.verification_budget import scope
+                with scope(self._elapsed_deadline,deadline):
+                    verify(self._runtime_contract_value,package_root=Path(__file__).parent.parent)
             if self.storage:
                 self.storage.activate((request or {}).get("semantic_history_policy"))
+            if self.db.path.exists():
+                from jobagg.runtime_authority import state as runtime_state
+                with self.db.connect() as conn:
+                    active=runtime_state(conn)
+                    if active and json.loads(active['control_json']).get('publication_scope') is not None and (not self._runtime_contract_value or not getattr(self,'_dispatcher_request_sha256',None)):
+                        raise ValueError('Native dispatcher runtime contract required before fetching')
+                    if active and (active['phase']!='worker' or active['run_id']!=self._runtime_run_id or active['revision']!=active['start_revision']):
+                        raise ValueError('Native worker batch already mutated; controller must reconcile acceptance/claims before fetching')
             self.initialize()
             self.shared_policy.begin_batch(check_deadline=lambda: self.check_deadline(deadline),
                 owner_fd=owner_fd, audit=(request or {}).get('policy_audit'), storage=self.storage)
@@ -2701,11 +2721,18 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 or self.binding["implementation_sha256"] != implementation_hash()
             ):
                 raise ValueError("Input code/config changed during tick; no acceptance report")
+            if self._runtime_contract_value:
+                from jobagg.runtime_contract import verify
+                from jobagg.verification_budget import scope
+                with scope(self._elapsed_deadline,deadline):
+                    verify(self._runtime_contract_value,package_root=Path(__file__).parent.parent)
             self._sql_deadline = deadline
             self._report_policy_events = self.shared_policy.admission_events()
             self.shared_policy.finish_batch(check_deadline=lambda: self.check_deadline(deadline))
             self.check_deadline(deadline)
             report = self.report(request)
+            if self._runtime_contract_value:
+                report['runtime_contract_sha256']=self._runtime_contract_value['sha256']
             concurrency = self.concurrency_report(tick_started_at, deadline)
             concurrency_path = self.workspace / "ticks" / f"{self.tick_id}.concurrency.json"
             write_json(concurrency_path, concurrency)
@@ -2799,6 +2826,7 @@ def main(argv=None):
             parallel_sources=a.parallel_sources,
             max_requests_per_task=a.max_requests_per_task,
         )
+        worker._dispatcher_request_sha256=sha(a.request) if a.request else None
         worker._entry_elapsed_deadline = entered_monotonic + a.max_seconds
         worker._entry_wall_deadline = entered_wall + a.max_seconds
         result = worker.tick(execute=a.execute, request=request)

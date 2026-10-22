@@ -17,7 +17,7 @@ import uuid
 from jobagg.atomic_files import atomic_write_text
 from jobagg.publication_fence import _owner
 
-SCHEMA = "jobagg-policy-authority-1"
+SCHEMA = "jobagg-policy-authority-2"
 
 
 def _dump(value):
@@ -177,10 +177,18 @@ class PolicyAuthority:
         from jobagg.publication_fence import _file_identity
 
         for path, identity in head.get("immutable_controls", {}).items():
-            if _file_identity(path) != identity:
+            try:
+                actual = _file_identity(path)
+            except (OSError, ValueError) as exc:
+                raise ValueError("policy_bootstrap_control_changed") from exc
+            if actual != identity:
                 raise ValueError("policy_bootstrap_control_changed")
-        if (self.policy.root / "attempt_index.json").read_text() != _dump(
-            {"schema": SCHEMA, "old_writers_fenced": True}
+        legacy = self.policy.root / "attempt_index.json"
+        if (
+            not legacy.is_dir()
+            or legacy.resolve() != legacy
+            or (legacy / "fence.json").read_text()
+            != _dump({"schema": SCHEMA, "old_writers_fenced": True})
         ):
             raise ValueError("policy_legacy_writer_fence_changed")
         # Directory metadata detects a noncooperating new reservation. Cold

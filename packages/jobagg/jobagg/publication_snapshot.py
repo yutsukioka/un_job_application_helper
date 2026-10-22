@@ -511,7 +511,7 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
 _RECOVERY_IDENTITY = (
     "run_id", "source_manifest_sha256", "registry_sha256", "expected_source_ids",
     "worker_acceptance_path", "worker_acceptance_sha256", "worker_database",
-    "worker_database_files", "publication_snapshot", "publication_policy",
+    "worker_database_files", "publication_snapshot", "publication_policy", "runtime_contract",
 )
 
 

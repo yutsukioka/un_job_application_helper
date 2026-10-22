@@ -67,6 +67,8 @@ def configured(tmp_path, monkeypatch):
                            "whole_job_completeness_certified": False}
             else:
                 receipt = {"run_id": request["run_id"], "database": str(config["publication_worker_database"])}
+                if request.get('runtime_contract'):
+                    receipt['runtime_contract_sha256']=request['runtime_contract']['sha256']
             report.write_text(json.dumps(receipt))
 
         def wait(self, **_kwargs):

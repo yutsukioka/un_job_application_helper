@@ -207,3 +207,33 @@ keeps one active job while adding 0/1,024/8,192 retained versions; it records SQ
 work, projection bytes and separate lineage timing without claiming an OS-cold
 cache or external-volume performance. Compression, retirement enablement and
 dispatcher relocation remain separate deliverables.
+
+## Final handoff corrections
+
+The `e41475b1` immutable package run produced **3,787 passes, 9 skips and two
+failures** in controlled suspend/resume returns. A pending generation now returns
+its bounded resumable result without being replaced by a deadline exception.
+An initial dispatcher run exposed an unconditional new-helper dependency on
+legacy custom-worker paths; that compatibility path was corrected. Its complete
+separate rerun passed **166 tests and 17 subtests**. These are distinct scopes
+and are not summed.
+
+Worker and publisher children now independently check their admitted complete
+runtime contract; successful worker reports carry its digest. Original request
+identity is recorded in native atomic acceptance (exact file hash through the
+CLI), and a worker cannot restart a batch after its source revision changed.
+Existing recovery identities retain their old representation when the new
+optional contract field is absent. A verified no-write resolution can also
+continue a native batch with its sealed projection and original failed controls.
+An interruption after its final escrow receipt resumes that exact settlement.
+
+The explicit quota import now uses policy authority version 2 / import version 3.
+Its kernel-enforced legacy index directory stops the actual old reserve ordering
+before provider dispatch; an object marker alone was insufficient. Original
+bootstrap evidence joins the paged final verification and bounded audit. The
+source-hold file is part of the trusted immutable boundary: changing it requires
+review and cannot silently release gates. Additional migrated sources may be
+supplied with their reviewed pause contracts so disabled historical charges
+are retained. Earlier pre-release native schema/staging versions require an
+explicit compatible migration; normal startup never rebuilds them. No native
+M1 schema has been activated by this task.
