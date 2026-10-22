@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "cd3a9501fce6770ea1e826b91a5db11d52b1661e6579d2bf2453155f800b962f"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "091af9973bd8b348b75af3efd32d162fca73a494805397cba88aec4666da6e2f"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -1047,6 +1047,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             or policy.get("oracle_detail_batch_pause_seconds")
             or 0
         )
+        native_due = self.shared_policy.native_due(source.id, now, minimum=minimum,
+            jitter=jitter, batch=batch, pause=pause)
+        if native_due is not None:
+            return native_due
         if attempts is None:
             attempts = self.shared_policy.admission_events(source.id)
         if not attempts:
@@ -1096,6 +1100,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         return state
 
     def task_host(self, task):
+        if '_host' in task:
+            return task['_host']
         source = self.by_id[task["source_id"]]
         payload = json.loads(task["payload"])
         # Workday's public site and first API request can use different hosts.
@@ -1109,25 +1115,34 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         self.check_deadline(deadline)
         now = time.time()
         with self.db.connect() as conn:
-            rows = [
-                dict(row)
-                for row in conn.execute("""SELECT t.*,coalesce(
-                    (SELECT max(a.started_at) FROM remediation_attempts a WHERE a.task_id=t.task_id),0
-                    ) AS last_attempt_at FROM remediation_tasks t WHERE t.status='pending'""")
-                if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
-            ]
+            from jobagg.task_headers import exists as headers_exist, candidates
+            native_headers = headers_exist(conn)
+            if native_headers:
+                rows = candidates(conn, self, now, excluded_kinds=excluded_kinds,
+                    excluded_sources=excluded_sources, excluded_hosts=excluded_hosts)
+            else:
+                rows = [
+                    dict(row)
+                    for row in conn.execute("""SELECT t.*,coalesce(
+                        (SELECT max(a.started_at) FROM remediation_attempts a WHERE a.task_id=t.task_id),0
+                        ) AS last_attempt_at FROM remediation_tasks t WHERE t.status='pending'""")
+                    if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
+                ]
             source_states = {row["source_id"]: dict(row) for row in conn.execute(
                 "SELECT source_id,last_service,last_list_at,listing_proof FROM remediation_sources")}
             served = {key: state["last_service"] for key, state in source_states.items()}
-            kind_served = {
-                row["kind"]: row["last_service"]
-                for row in conn.execute(
-                    "SELECT 'listing' AS kind,max(started_at) AS last_service FROM remediation_attempts WHERE kind='listing' "
-                    "UNION ALL SELECT 'detail',max(started_at) FROM remediation_attempts WHERE kind='detail' "
-                    "UNION ALL SELECT 'document',max(started_at) FROM remediation_attempts WHERE kind='document'"
-                )
-            }
-            kind_served = {kind: stamp for kind, stamp in kind_served.items() if stamp is not None}
+            if native_headers:
+                kind_served = dict(conn.execute('SELECT kind,last_service FROM jobagg_kind_service'))
+            else:
+                kind_served = {
+                    row["kind"]: row["last_service"]
+                    for row in conn.execute(
+                        "SELECT 'listing' AS kind,max(started_at) AS last_service FROM remediation_attempts WHERE kind='listing' "
+                        "UNION ALL SELECT 'detail',max(started_at) FROM remediation_attempts WHERE kind='detail' "
+                        "UNION ALL SELECT 'document',max(started_at) FROM remediation_attempts WHERE kind='document'"
+                    )
+                }
+                kind_served = {kind: stamp for kind, stamp in kind_served.items() if stamp is not None}
             circuit_sources = {
                 row["source_id"] for row in conn.execute(
                     "SELECT source_id FROM source_circuit_breakers WHERE state IN('open','half_open')"
@@ -1204,7 +1219,12 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         )
         chosen = select_due(tasks, now=now, source_last_served=served, kind_last_served=kind_served)
         self.check_deadline(deadline)
-        return lookup.get(chosen.task_id) if chosen else None
+        if chosen is None:
+            return None
+        if native_headers:
+            with self.db.connect() as conn:
+                return dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (chosen.task_id,)).fetchone())
+        return lookup[chosen.task_id]
 
     def claim(self, task, *, deadline=None):
         self.check_deadline(deadline)
@@ -1830,6 +1850,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                     "scope_verified": False,
                 },
             )
+            from jobagg.accepted_evidence import record as record_accepted_evidence
+            record_accepted_evidence(conn, job_key=detail.identity_key(), task_id=task['task_id'],
+                attempt_id=token, artifact_path=target / 'detail.json', artifact_sha256=sha(target / 'detail.json'),
+                job=stored_expected, proof=proof, body_sha256=body_sha)
         return {"detail_stored": detail.identity_key(), "documents_queued": len(candidates)}
 
     def enqueue_document(self, conn, source_id, payload, *, refresh=False):
@@ -2533,6 +2557,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self._report_deadline = self._sql_deadline = None
                 self._elapsed_deadline = float("inf")
                 self._runtime_run_id = None
+                if getattr(self.shared_policy, '_native', None) is not None:
+                    self.shared_policy._native.owner_fd = None
+                    self.shared_policy._native.check_deadline = lambda: None
                 self._policy_due_cache = {}
                 if hasattr(self, "_report_policy_events"):
                     del self._report_policy_events
@@ -2564,11 +2591,12 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             raise ValueError("Request deadline already passed")
         self._report_deadline = deadline
         self._sql_deadline = deadline
-        with shared_owner(self.shared_lock):
+        with shared_owner(self.shared_lock) as owner_fd:
             if self.storage:
                 self.storage.activate((request or {}).get("semantic_history_policy"))
             self.initialize()
-            self.shared_policy.begin_batch(check_deadline=lambda: self.check_deadline(deadline))
+            self.shared_policy.begin_batch(check_deadline=lambda: self.check_deadline(deadline),
+                owner_fd=owner_fd, audit=(request or {}).get('policy_audit'))
             register_builtin_adapters()
             self.seed_listings()
             outcomes = []

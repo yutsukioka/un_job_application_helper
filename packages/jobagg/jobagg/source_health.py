@@ -230,10 +230,19 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         kind_counts.setdefault(row["kind"], {"states": {}, "eligible_pending": 0,
                                             "deferred_pending": 0, "held_pending": 0,
                                             "out_of_scope_pending": 0})["states"][row["status"]] = row["n"]
-    rows = [dict(row) for row in conn.execute(
-        "SELECT kind,status,eligible_at,payload,last_error FROM remediation_tasks "
-        "WHERE source_id=? AND (status='pending' OR kind='listing')", (source.id,),
-    )]
+    from jobagg.task_headers import exists as headers_exist
+    if headers_exist(conn):
+        rows = [{**dict(row), '_host': row['host'], 'last_error': None} for row in conn.execute(
+            "SELECT source_id,kind,host,status,eligible_at,count(*) AS weight FROM jobagg_task_headers "
+            "WHERE source_id=? AND status='pending' GROUP BY kind,host,status,eligible_at", (source.id,))]
+        listing = conn.execute("SELECT * FROM remediation_tasks WHERE source_id=? AND kind='listing' LIMIT 1",(source.id,)).fetchone()
+        if listing and listing['status'] != 'pending':
+            rows.append(dict(listing))
+    else:
+        rows = [dict(row) for row in conn.execute(
+            "SELECT kind,status,eligible_at,payload,last_error FROM remediation_tasks "
+            "WHERE source_id=? AND (status='pending' OR kind='listing')", (source.id,),
+        )]
     pending_reasons = Counter()
     pending_eligible_hosts = set()
     listing_task = None
@@ -244,18 +253,19 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         if task["status"] != "pending":
             continue
         counts = kind_counts[task["kind"]]
+        weight = task.get('weight', 1)
         if task["kind"] == "document" and source.extra.get("fetch_attachments", True) is False:
-            counts["out_of_scope_pending"] += 1
+            counts["out_of_scope_pending"] += weight
             continue
         admission = admission_for(task, due=task["eligible_at"])
-        pending_reasons.update(admission["reasons"])
+        pending_reasons.update({reason:weight for reason in admission["reasons"]})
         if admission["eligible"]:
-            counts["eligible_pending"] += 1
+            counts["eligible_pending"] += weight
             pending_eligible_hosts.add(admission["host"])
         elif admission["next_permitted_attempt_at"] is None:
-            counts["held_pending"] += 1
+            counts["held_pending"] += weight
         else:
-            counts["deferred_pending"] += 1
+            counts["deferred_pending"] += weight
         if admission["next_permitted_attempt_at"] is not None:
             pending_times.append(admission["next_permitted_attempt_at"])
 

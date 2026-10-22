@@ -70,7 +70,7 @@ def _sha(path, *, deadline_at=None, timings=None):
     return digest.hexdigest()
 
 
-def matching_detail_attempts(conn, row, proof, *, deadline_at=None, timings=None):
+def matching_detail_attempts(conn, row, proof, *, deadline_at=None, timings=None, legacy_only=False):
     """Return only exact successful lineage, never evidence from a failed attempt.
 
     Receipt/artifact failures are non-matches; the caller rejects acceptance when no
@@ -81,23 +81,29 @@ def matching_detail_attempts(conn, row, proof, *, deadline_at=None, timings=None
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
     sql_started = time.monotonic()
-    canonical = task_key(row["source_id"], "detail", str(row["external_id"]))
-    # Legacy IDs remain eligible only through the same exact immutable identity
-    # crosswalk. Orphan attempts cannot invent a task or borrow another source.
-    candidates = [item[0] for item in cursor.execute(
-        "SELECT task_id FROM remediation_tasks WHERE source_id=? AND kind='detail' AND external_id=?",
-        (row["source_id"], str(row["external_id"])))]
-    candidates.sort(key=lambda identity: (identity != canonical, identity))
-    matching = []
-    attempts = []
-    for identity in candidates:
-        _check(deadline_at)
-        attempts.extend(cursor.execute(
-            "SELECT * FROM remediation_attempts WHERE task_id=? AND source_id=? AND kind='detail' "
-            "AND status='done' AND finished_at IS NOT NULL ORDER BY finished_at DESC,attempt_id",
-            (identity, row["source_id"])).fetchall())
+    from jobagg.accepted_evidence import selected_attempts
+    bound = None if legacy_only else selected_attempts(conn, row, proof)
+    if bound is not None:
+        attempts = bound
+    else:
+        canonical = task_key(row["source_id"], "detail", str(row["external_id"]))
+        # Legacy IDs remain eligible only through the same exact immutable identity
+        # crosswalk. Orphan attempts cannot invent a task or borrow another source.
+        candidates = [item[0] for item in cursor.execute(
+            "SELECT task_id FROM remediation_tasks WHERE source_id=? AND kind='detail' AND external_id=?",
+            (row["source_id"], str(row["external_id"])))]
+        candidates.sort(key=lambda identity: (identity != canonical, identity))
+        matching = []
+        attempts = []
+        for identity in candidates:
+            _check(deadline_at)
+            attempts.extend(cursor.execute(
+                "SELECT * FROM remediation_attempts WHERE task_id=? AND source_id=? AND kind='detail' "
+                "AND status='done' AND finished_at IS NOT NULL ORDER BY finished_at DESC,attempt_id",
+                (identity, row["source_id"])).fetchall())
     attempts.sort(key=lambda attempt: (-attempt["finished_at"], attempt["attempt_id"]))
     _add(timings, "sql_seconds", sql_started)
+    matching = []
     for attempt in attempts:
         _check(deadline_at)
         try:

@@ -236,14 +236,40 @@ class SharedPolicy:
         # Callers must not be able to mutate future admission authority.
         return deepcopy(grouped)
 
+    def native_authority(self):
+        from jobagg.policy_authority import PolicyAuthority
+        if (self.root / 'authority.json').exists():
+            value = getattr(self, '_native', None)
+            if value is None:
+                value = self._native = PolicyAuthority(self)
+            return value
+        if (self.root / 'authority.sqlite3').exists():
+            raise ValueError('policy_authority_head_missing_review_required')
+        return None
+
+    def native_due(self, source_id, now, **policy):
+        authority = self.native_authority()
+        return authority.due(source_id, now, **policy) if authority else None
+
     @_synchronized
-    def begin_batch(self, *, check_deadline=None):
+    def begin_batch(self, *, check_deadline=None, owner_fd=None, audit=None):
         """One full audit under the shared owner; subsequent claims use this revision.
 
         Every cooperating writer uses reserve/finish, which update this same
         process-wide projection under the root lock. Final audit detects external
         history interference before a successful worker report can be emitted.
         """
+        authority = self.native_authority()
+        if authority:
+            authority.owner_fd = owner_fd
+            authority.check_deadline = check_deadline or (lambda: None)
+            if not audit:
+                raise ValueError('reviewed_policy_audit_bounds_required')
+            authority.audit(limit=audit['max_objects'], now=time.time(),
+                            maximum_lag_seconds=audit['maximum_lag_seconds'])
+            authority.revision()
+            self._batch_events = {}
+            return
         events = self.event_snapshot(check_deadline=check_deadline)
         self._batch_events = events
         self._batch_revisions = {}
@@ -258,6 +284,9 @@ class SharedPolicy:
 
     @_synchronized
     def admission_events(self, source_id=None):
+        if self.native_authority():
+            self._native.revision()
+            return () if source_id else MappingProxyType({})
         if not hasattr(self, '_batch_events'):
             return self.events(source_id) if source_id else self.event_snapshot()
         if self._inventory_signature() != self._batch_signature:
@@ -266,6 +295,8 @@ class SharedPolicy:
 
     @_synchronized
     def admission_revision(self, source_id):
+        if self.native_authority():
+            return self._native.revision()
         if not hasattr(self, '_batch_events'):
             return None
         if self._inventory_signature() != self._batch_signature:
@@ -274,6 +305,15 @@ class SharedPolicy:
 
     @_synchronized
     def finish_batch(self, *, check_deadline=None):
+        if self.native_authority():
+            try:
+                self._native.revision()
+            finally:
+                self._native.owner_fd = None
+                self._native.check_deadline = lambda: None
+                if hasattr(self, '_batch_events'):
+                    del self._batch_events
+            return
         if not hasattr(self, '_batch_events'):
             return
         try:
@@ -299,6 +339,11 @@ class SharedPolicy:
 
     @_synchronized
     def reserve(self, attempt_id, source_id, kind, started_at, workspace, task_id):
+        if self.native_authority():
+            self._native.reserve({'attempt_id': attempt_id, 'source_id': source_id,
+                'kind': kind, 'started_at': started_at, 'finished_at': None,
+                'workspace': str(workspace), 'task_id': task_id, 'status': 'reserved'})
+            return
         path = self.root / "attempts" / (hashlib.sha256(attempt_id.encode()).hexdigest() + ".json")
         if path.exists():
             raise ValueError("Durable shared attempt already exists")
@@ -321,6 +366,9 @@ class SharedPolicy:
 
     @_synchronized
     def finish(self, attempt_id, status):
+        if self.native_authority():
+            self._native.finish(attempt_id, status)
+            return
         path = self.root / "attempts" / (hashlib.sha256(attempt_id.encode()).hexdigest() + ".json")
         event = json.loads(path.read_text())
         event.update(finished_at=time.time(), status=status)

@@ -325,6 +325,9 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
         if projected is not None:
             plan["listing_only"] = projected["jobs_without_observations"]
             plan["publication_projection"] = projected
+            selection = projected.get('selection')
+            if selection is not None:
+                plan['publication_selection'] = selection
         observations = worker.execute(
             "SELECT * FROM remediation_observations ORDER BY checked_at,job_key"
         ).fetchall()
@@ -524,7 +527,7 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
             except (ValueError, KeyError, OSError, sqlite3.DatabaseError) as exc:
                 plan["rejected"].append({"job_key": observation["job_key"], "reason": str(exc)})
     plan["pending_backlog_empty_after_generation"] = (
-        job_keys is None and listing_diagnostics.get("complete") is True
+        'publication_selection' not in plan and job_keys is None and listing_diagnostics.get("complete") is True
         and not plan["budget_exhausted"] and not plan["rejected"])
     return plan
 
@@ -1228,6 +1231,8 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=
     gate.update(
         state="complete",
         publication_boundary=publication_boundary,
+        publication_selection=plan.get('publication_selection'),
+        rejected=plan.get('rejected', []),
         status="published",
         readback_verified=True,
         pending_backlog_empty=(plan.get("pending_backlog_empty_after_generation") is True and
@@ -1297,6 +1302,7 @@ def _publish_incremental(
         return {
             "status": "deferred" if plan["budget_exhausted"] else "no_changes",
             "generation_not_started": True,
+            "publication_selection": plan.get('publication_selection'),
             "pending_backlog_empty": plan.get("pending_backlog_empty_after_generation") is True,
             "unchanged": plan["unchanged"],
             "rejected": plan["rejected"],

@@ -24,7 +24,7 @@ def _quote(name):
 def _tables(conn):
     excluded = {row[1] for row in conn.execute('PRAGMA table_list') if row[2] in {'virtual', 'shadow'}}
     return sorted(row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                  if row[0] not in excluded and row[0] not in {'semantic_history_state', 'jobagg_runtime_state'} and not row[0].startswith('sqlite_'))
+                  if row[0] not in excluded and row[0] not in {'semantic_history_state', 'jobagg_runtime_state'} and not row[0].startswith(('sqlite_', 'jobagg_dirty_')))
 
 
 def _triggers(tables):
@@ -111,6 +111,11 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
                  (SCHEMA, epoch, str(Path(owner_path).absolute()), 0, json.dumps(tables), json.dumps(bootstrap_receipt, sort_keys=True)))
     for sql in _triggers(tables).values():
         conn.execute(sql)
+    for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'jobagg_dirty_%'").fetchall():
+        for operation in ('INSERT', 'UPDATE', 'DELETE'):
+            name = 'runtime_control_' + hashlib.sha256((row[0] + operation).encode()).hexdigest()
+            conn.execute(f'CREATE TRIGGER {_quote(name)} BEFORE {operation} ON {_quote(row[0])} BEGIN '
+                "SELECT CASE WHEN jobagg_runtime_write_allowed()!=1 THEN RAISE(ABORT,'runtime_control_not_admitted') END; END")
     if bootstrap_receipt.get('publication_boundary') is not None:
         from jobagg.publication_fence import verify_boundary
         if not verify_boundary(bootstrap_receipt['publication_boundary']):
@@ -185,7 +190,10 @@ def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=Non
     if publication_empty_check is not None:
         return publication_empty_check(value) is True
     from jobagg.publication_fence import verify_boundary
+    from jobagg.publication_work import exists as work_exists, vector
     control = json.loads(value['control_json'])
+    if work_exists(conn) and not vector(conn, contract_sha256=value['config_sha256'], now=__import__('time').time())['empty']:
+        return False
     return (control.get('publication_scope') is not None and
             verify_boundary(control.get('publication_cursor'), expected_scope=control['publication_scope']))
 
@@ -225,3 +233,17 @@ def remember_publication_boundary(conn, run_id, boundary):
         raise RuntimeRepairRequired('runtime_publication_boundary_not_verified')
     control['publication_cursor'] = boundary
     conn.execute('UPDATE jobagg_runtime_state SET control_json=? WHERE id=1', (json.dumps(control, sort_keys=True),))
+
+
+@contextmanager
+def controller(conn, *, run_id, owner_fd):
+    from jobagg.publication_fence import _owner
+    value = validate(conn)
+    if value['run_id'] != run_id:
+        raise RuntimeRepairRequired('runtime_controller_run_differs')
+    _owner(owner_fd, value['owner_path'])
+    conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 1)
+    try:
+        yield
+    finally:
+        conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 0)

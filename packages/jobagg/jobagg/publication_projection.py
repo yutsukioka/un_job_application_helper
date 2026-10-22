@@ -29,6 +29,10 @@ FILTERS = {
 }
 
 
+SELECTED_VERSION = 'publication-projection-3'
+SELECTED_FILTERS = {**FILTERS, 'jobagg_accepted_evidence': 'immutable_selected_accepted_versions_v1'}
+
+
 def _dump(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
@@ -60,14 +64,14 @@ def _row_digest(row):
 
 
 def validate_manifest(manifest):
-    expected_filters = (
+    expected_filters = SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == SELECTED_VERSION else (
         LEGACY_FILTERS
         if isinstance(manifest, dict) and manifest.get("version") == "publication-projection-1"
         else FILTERS
     )
     if (
         not isinstance(manifest, dict)
-        or manifest.get("version") not in {VERSION, "publication-projection-1"}
+        or manifest.get("version") not in {VERSION, SELECTED_VERSION, "publication-projection-1"}
         or manifest.get("filters") != expected_filters
     ):
         raise ValueError("Unknown publication projection schema or filters")
@@ -97,17 +101,20 @@ def validate_manifest(manifest):
     return manifest
 
 
-def _accepted_attempt_ids(origin, deadline_at, timings=None):
+def _accepted_attempt_ids(origin, deadline_at, timings=None, job_keys=None):
     """Retain accepted evidence, not every historical refresh attempt."""
     if not _exists(origin, "remediation_attempts") or not _exists(origin, "remediation_tasks"):
         return set()
     cursor = origin.cursor()
     cursor.row_factory = sqlite3.Row
     identifiers = set()
-    for row in cursor.execute(
-        "SELECT j.*,o.proof AS accepted_proof FROM jobs j "
-        "JOIN remediation_observations o ON o.job_key=j.job_key ORDER BY j.job_key"
-    ):
+    query = ("SELECT j.*,o.proof AS accepted_proof FROM jobs j "
+             "JOIN remediation_observations o ON o.job_key=j.job_key")
+    params = ()
+    if job_keys is not None:
+        query += ' WHERE j.job_key IN (' + ','.join('?' for _ in job_keys) + ')'
+        params = tuple(job_keys)
+    for row in cursor.execute(query + ' ORDER BY j.job_key', params):
         _check(deadline_at)
         try:
             proof = json.loads(row["accepted_proof"])
@@ -118,7 +125,7 @@ def _accepted_attempt_ids(origin, deadline_at, timings=None):
     return identifiers
 
 
-def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
+def build_projection(origin, destination, *, deadline_at=None, max_bytes=None, selection=None):
     """Copy only declared read dependencies within a single pinned source TX."""
     if origin.in_transaction or destination.in_transaction:
         raise ValueError("Publication projection requires connections without active transactions")
@@ -130,9 +137,10 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
     def progress():
         return int(deadline_at is not None and time.monotonic() >= deadline_at)
 
+    filters = SELECTED_FILTERS if selection is not None else FILTERS
     manifest = {
-        "version": VERSION,
-        "filters": FILTERS,
+        "version": SELECTED_VERSION if selection is not None else VERSION,
+        "filters": filters,
         "tables": {},
         "original_diagnostics": {},
         "freshness_or_completeness_certified": False,
@@ -157,24 +165,32 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
         if not _exists(origin, "jobs") or not _exists(origin, "remediation_observations"):
             raise ValueError("Publication projection requires jobs and observations schema")
         phase = "original_diagnostics"
-        manifest["original_diagnostics"] = {
-            "worker_jobs": origin.execute("SELECT count(*) FROM jobs").fetchone()[0],
-            "jobs_without_observations": origin.execute(
-                "SELECT count(*) FROM jobs j LEFT JOIN remediation_observations o ON o.job_key=j.job_key WHERE o.job_key IS NULL"
-            ).fetchone()[0],
-            "baseline_archived_jobs": origin.execute(
-                "SELECT count(*) FROM baseline_inventory_jobs"
-            ).fetchone()[0]
-            if _exists(origin, "baseline_inventory_jobs")
-            else 0,
-        }
+        if selection is not None:
+            job_keys = sorted({row['job_key'] for row in selection['units'] if row['job_key']})
+            listing_sources = sorted({row['source_id'] for row in selection['units'] if row['kind'] == 'listing'})
+            manifest['selection'] = selection
+            manifest['diagnostics_scope'] = 'selected_dependencies_only'
+            manifest['original_diagnostics'] = {'worker_jobs': len(job_keys), 'jobs_without_observations': 0, 'baseline_archived_jobs': 0}
+        else:
+            job_keys = None
+            manifest["original_diagnostics"] = {
+                "worker_jobs": origin.execute("SELECT count(*) FROM jobs").fetchone()[0],
+                "jobs_without_observations": origin.execute(
+                    "SELECT count(*) FROM jobs j LEFT JOIN remediation_observations o ON o.job_key=j.job_key WHERE o.job_key IS NULL"
+                ).fetchone()[0],
+                "baseline_archived_jobs": origin.execute(
+                    "SELECT count(*) FROM baseline_inventory_jobs"
+                ).fetchone()[0]
+                if _exists(origin, "baseline_inventory_jobs")
+                else 0,
+            }
         timings["original_diagnostics_seconds"] = time.monotonic() - started
         phase = "accepted_detail_lineage"
         lineage_started = time.monotonic()
         timings["lineage_components"] = {}
-        accepted_attempt_ids = _accepted_attempt_ids(origin, deadline_at, timings["lineage_components"])
+        accepted_attempt_ids = _accepted_attempt_ids(origin, deadline_at, timings["lineage_components"], job_keys=job_keys)
         timings["accepted_detail_lineage_seconds"] = time.monotonic() - lineage_started
-        for table, predicate in FILTERS.items():
+        for table, predicate in filters.items():
             phase = "copy_table:" + table
             table_started = time.monotonic()
             _check(deadline_at)
@@ -206,6 +222,27 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
                     where = " WHERE 0"
                 else:
                     where = " WHERE " + predicate
+            params = ()
+            if selection is not None:
+                def placeholders(values):
+                    return '(' + ','.join('?' for _ in values) + ')'
+                if table in {'jobs', 'remediation_observations', 'remediation_documents', 'jobagg_accepted_evidence'}:
+                    where = ' WHERE job_key IN ' + placeholders(job_keys)
+                    params = tuple(job_keys)
+                elif table == 'remediation_sources':
+                    where = ' WHERE source_id IN ' + placeholders(listing_sources)
+                    params = tuple(listing_sources)
+                elif table == 'remediation_attempts':
+                    where = ' WHERE attempt_id IN ' + placeholders(accepted_attempt_ids)
+                    params = tuple(accepted_attempt_ids)
+                elif table == 'remediation_tasks':
+                    where = (' WHERE task_id IN (SELECT task_id FROM jobagg_accepted_evidence WHERE job_key IN ' + placeholders(job_keys) +
+                        ') OR task_id IN (SELECT task_id FROM remediation_documents WHERE job_key IN ' + placeholders(job_keys) +
+                        ") OR (kind='listing' AND source_id IN " + placeholders(listing_sources) + ')')
+                    params = tuple(job_keys) + tuple(job_keys) + tuple(listing_sources)
+                elif table == 'attachment_blobs':
+                    where = ' WHERE content_sha256 IN (SELECT content_sha256 FROM remediation_documents WHERE job_key IN ' + placeholders(job_keys) + ')'
+                    params = tuple(job_keys)
             query = "SELECT " + quoted + ' FROM "' + table + '"' + where + " ORDER BY " + order_sql
             digest, count = hashlib.sha256(), 0
             insert = (
@@ -217,7 +254,7 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
                 + ",".join("?" for _ in columns)
                 + ")"
             )
-            for row in origin.execute(query):
+            for row in origin.execute(query, params):
                 _check(deadline_at)
                 values = tuple(row)
                 if (
@@ -244,7 +281,7 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
                 "schema_sha256": hashlib.sha256(sql.encode()).hexdigest(),
                 "columns": columns,
                 "rows": count,
-                "source_rows": origin.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0],
+                "source_rows": count if selection is not None else origin.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0],
                 "sha256": digest.hexdigest(),
             }
             readback_finished = time.monotonic()
@@ -316,6 +353,7 @@ def projection_diagnostics(conn):
             raise ValueError("Publication projection table count differs")
     return {
         **manifest["original_diagnostics"],
+        **({'selection': manifest['selection'], 'diagnostics_scope': manifest['diagnostics_scope']} if 'selection' in manifest else {}),
         "projection_version": manifest["version"],
         "manifest_sha256": values[0][1],
     }

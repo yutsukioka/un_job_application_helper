@@ -338,7 +338,7 @@ def _finish_budgeted_projection(binding, target, temporary, receipt_path, budget
     return snapshot
 
 
-def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_bytes, *, deadline_at):
+def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_bytes, *, deadline_at, selection=None):
     """Resume only a sealed, hashed inode and its original durable operation."""
     import sqlite3
 
@@ -362,6 +362,8 @@ def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_b
                "main_cap_bytes": ((max_bytes - PROJECTION_CONTROL_BYTES) // 2 // 4096) * 4096,
                "cycle_id": budget.cycle_id, "scope_hash": budget.scope_hash,
                "ledger_path": str(budget.path), "writer_id": budget.writer_id}
+    if selection is not None:
+        binding['selection'] = selection
     operation_id = _projection_operation(binding)
     temporary = target.with_name("." + target.name + "." + operation_id + ".sqlite3")
     receipt_path = target.with_name(target.name + ".sealed.json")
@@ -389,7 +391,7 @@ def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_b
     try:
         origin = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=1)
         copy = sqlite3.connect(temporary, timeout=1)
-        projection_receipt = build_projection(origin, copy, deadline_at=deadline_at, max_bytes=binding["main_cap_bytes"])
+        projection_receipt = build_projection(origin, copy, deadline_at=deadline_at, max_bytes=binding["main_cap_bytes"], selection=selection)
         _check(deadline_at)
         copy.set_progress_handler(lambda: int(deadline_at is not None and time.monotonic() >= deadline_at), 1000)
         if copy.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() != "delete":
@@ -418,7 +420,7 @@ def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_b
     return _finish_budgeted_projection(binding, target, temporary, receipt_path, budget, deadline_at=deadline_at)
 
 
-def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, shared_lock, *, deadline_at=None, projection=False, budget=None, max_bytes=None):
+def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, shared_lock, *, deadline_at=None, projection=False, budget=None, max_bytes=None, selection=None):
     """Create one fsynced, read-only SQLite backup; never overwrite an old backup."""
     import sqlite3
 
@@ -434,7 +436,7 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
         from jobagg.storage_budget import StorageBudgetError
         if not projection:
             raise StorageBudgetError("Finite projection allocation bound required")
-        return _create_budgeted_projection(source, target, acceptance_sha256, budget, max_bytes, deadline_at=deadline_at)
+        return _create_budgeted_projection(source, target, acceptance_sha256, budget, max_bytes, deadline_at=deadline_at, selection=selection)
     if _exists(target):
         raise ValueError("Publication snapshot target exists or aliases its source")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -450,7 +452,7 @@ def create_publication_snapshot(source, target, acceptance_sha256, owner_fd, sha
                 if projection:
                     from jobagg.publication_projection import build_projection
                     projection_receipt = build_projection(origin, copy, deadline_at=deadline_at,
-                                                          max_bytes=max_bytes // 2 if budget is not None else None)
+                                                          max_bytes=max_bytes, selection=selection)
                 else:
                     origin.backup(copy, pages=256, progress=progress, sleep=0.05)
                 _check(deadline_at)

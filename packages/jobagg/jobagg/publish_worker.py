@@ -149,6 +149,7 @@ def main(argv=None):
             from jobagg.publication_fence import publication_scope, verify_boundary
             if verify_boundary(request["previous_publication_boundary"], expected_scope=publication_scope(args.registry, args.output_dir)):
                 result["publication_boundary"] = request["previous_publication_boundary"]
+                result["readback_verified"] = True
         if request:
             status = {"published": "published", "no_changes": "noop", "deferred": "deferred"}.get(
                 result["status"], "incomplete"

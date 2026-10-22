@@ -2,7 +2,7 @@
 
 M1 is in progress and is **not activation-ready**. Preserve the immutable
 [M0 baseline](runtime-m0-baseline.md), its JSON manifest and commit `30ea183c`.
-Implementation stages are committed as `d1a3273f` and `db542499`.
+Implementation stages include `d1a3273f`, `db542499` and `685c2a85`.
 
 ## Development and production separation
 
@@ -50,6 +50,13 @@ Restored live-path SHA-256 values:
 - A real local fixture runs worker and publisher for three cycles, selects limits
   `[1,1,2]` through qualified controller history, verifies actual overlap and text
   readback, then verifies conservative pressure downshift and duplicate callbacks.
+
+The next prepared stage adds indexed persistent quota authority, explicit
+all-writer import, conservative restore/head fencing, bounded evidence audit,
+scheduling headers, immutable accepted-evidence references and a versioned
+selected publication projection. Its focused worker/lineage/snapshot/policy
+regression batch passed 134 tests. These APIs still require end-to-end dispatcher
+continuation, migration and fault-boundary validation before activation.
 
 ## Remaining immediate scope
 
