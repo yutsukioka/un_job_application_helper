@@ -101,7 +101,7 @@ def _mutation_tables(conn):
     # whose name merely starts with jobs_fts must still invalidate the fence.
     excluded = {r[1] for r in conn.execute("PRAGMA table_list") if r[2] in {"virtual", "shadow"}}
     return sorted(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                  if not r[0].startswith("sqlite_") and r[0] != "semantic_history_state"
+                  if not r[0].startswith("sqlite_") and r[0] not in {"semantic_history_state", "jobagg_runtime_state"}
                   and r[0] not in excluded)
 
 

@@ -1214,6 +1214,7 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=
     gate.update(
         state="complete",
         status="published",
+        readback_verified=True,
         completed_at=_now(),
         changed_jobs=len(plan["changes"]),
         published_listing_frames=len(plan["listing_frames"]),

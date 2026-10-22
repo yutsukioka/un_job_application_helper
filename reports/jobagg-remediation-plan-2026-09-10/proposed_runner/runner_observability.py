@@ -42,10 +42,14 @@ def write(path, value):
             os.unlink(temporary)
 
 
+DEADLINE_CHECK = lambda: None
+
+
 def sha(path):
     value = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            DEADLINE_CHECK()
             value.update(chunk)
     return value.hexdigest()
 
@@ -235,6 +239,8 @@ def update_health(directory, value):
             if value.get("finished_at"):
                 health["last_attempt_finished_at"] = value["finished_at"]
             health["last_reasons"] = result.get("reasons", [])[:5]
+            health["accepted_work_pending"] = result.get("status") == "accepted_work_pending"
+            health["pending_accepted_run_id"] = result.get("run_id") if health["accepted_work_pending"] else None
             if isinstance(result.get("storage_budget"), dict):
                 health["storage_budget"] = result["storage_budget"]
             retention = result.get("storage_retention")
@@ -271,6 +277,7 @@ def update_health(directory, value):
         health["publication_currently_confirmed"] = (
             bool(health.get("last_publication_complete_at"))
             and not health.get("unresolved_publication", False)
+            and not health.get("accepted_work_pending", False)
             and health.get("last_attempt_status")
             not in {"process_failure", "unchanged_failure_hold", "storage_deferred", "accepted_work_pending", "publication_held"}
         )
@@ -310,8 +317,20 @@ def condition_fingerprint(config, runner_path):
     for arg in config["worker_argv"] + config["publication_argv"]:
         if arg.endswith(".py") and Path(arg).is_file():
             paths.add(Path(arg))
-    refs = [file_condition(p, contents=True) for p in sorted(paths)]
-    for p in sorted((config["state_dir"] / "runs").glob("*/publication_intent.json")):
+    refs = []
+    for path in sorted(paths):
+        DEADLINE_CHECK()
+        refs.append(file_condition(path, contents=True))
+    config["_stable_release_sha256"] = hashlib.sha256(json.dumps(
+        [{"path": row["path"], "sha256": row.get("sha256")} for row in refs], sort_keys=True).encode()).hexdigest()
+    intents = ([config["state_dir"] / "runs" / config["_runtime_active_run"] / "publication_intent.json"]
+               if config.get("_runtime_active_run") else
+               ([] if config.get("runtime_control") or "jobagg.remediation_worker" in config.get("worker_argv", [])
+                else sorted((config["state_dir"] / "runs").glob("*/publication_intent.json"))))
+    for p in intents:
+        DEADLINE_CHECK()
+        if not p.exists():
+            continue
         outcome = p.with_name("outcome.json")
         if not outcome.exists():
             continue
@@ -369,63 +388,69 @@ def condition_fingerprint(config, runner_path):
     return hashlib.sha256(payload).hexdigest()
 
 
-def failure_hold(config, fingerprint):
+def stable_failure_scope(config, stage):
+    # Configuration/release provenance stays distinct from mutable evidence.
+    return {"config_sha256": config.get("_config_sha256"),
+            "release_sha256": config.get("_stable_release_sha256"),
+            "worker_cwd": str(config.get("worker_cwd")),
+            "publication_cwd": str(config.get("publication_cwd")), "stage": stage}
+
+
+def failure_hold(config, fingerprint, *, stage=None):
     path = config["attempt_state_dir"] / "failure_condition.json"
     if not path.exists():
         return None
     prior = json.loads(path.read_text())
-    if (
-        prior.get("condition_sha256") == fingerprint
-        and prior.get("unchanged_failures", 0) >= 3
-    ):
-        return {
-            "status": "unchanged_failure_hold",
-            "condition_sha256": fingerprint,
-            "unchanged_failures": prior["unchanged_failures"],
-            "reasons": prior["reasons"],
-            "unresolved_publication": prior.get("unresolved_publication", False),
-            "reason": "Three unchanged failures; awaiting changed config/code/evidence/storage condition before retry.",
-        }
+    selected = stage or prior.get("stage", "worker")
+    circuit = prior.get("circuits", {}).get(selected)
+    # Preserve pre-M1 holds until explicitly reviewed; a release change isn't recovery.
+    if circuit is None and prior.get("unchanged_failures", 0) >= 3:
+        circuit = prior
+    if circuit and circuit.get("unchanged_failures", 0) >= 3:
+        return {"status": "unchanged_failure_hold", "stage": selected,
+                "condition_sha256": fingerprint, "unchanged_failures": circuit["unchanged_failures"],
+                "reasons": circuit.get("reasons", []), "next_eligible_at": None,
+                "review_required": True, "retry_ceiling": 3,
+                "first_occurrence_at": circuit.get("first_occurrence_at"),
+                "last_occurrence_at": circuit.get("updated_at"),
+                "unresolved_publication": circuit.get("unresolved_publication", False),
+                "reason": "Repeated stage failure; explicit reviewed recovery required, no automatic probe."}
     return None
 
 
 def record_failure(config, fingerprint, result):
-    if result.get("status") in {"storage_deferred", "accepted_work_pending", "publication_held"}:
-        return
     path = config["attempt_state_dir"] / "failure_condition.json"
     previous = json.loads(path.read_text()) if path.exists() else {}
-    if result["status"] != "process_failure":
-        if result["status"] not in {
-            "unchanged_failure_hold",
-            "lock_busy",
-            "maintenance_paused",
-        }:
-            write(
-                path,
-                {
-                    "condition_sha256": fingerprint,
-                    "unchanged_failures": 0,
-                    "updated_at": utc(),
-                },
-            )
-        return
-    reasons = result.get("reasons", [])
-    same = (
-        previous.get("condition_sha256") == fingerprint
-        and previous.get("reasons") == reasons
-    )
-    write(
-        path,
-        {
-            "condition_sha256": fingerprint,
-            "unchanged_failures": previous.get("unchanged_failures", 0) + 1
-            if same
-            else 1,
-            "reasons": reasons,
-            "unresolved_publication": result.get("unresolved_publication", False),
-            "updated_at": utc(),
-        },
-    )
+    circuits = previous.get("circuits", {})
+    stamp = utc()
+    # Reset only stages that actually reached their validated success boundary.
+    successful = []
+    if result.get("worker_exit_code") == 0 and result.get("worker_status") in {"complete", "incomplete"}:
+        successful.append("worker")
+    if result.get("publication_status") in {"published", "noop"} and result.get("publication_exit_code") == 0:
+        successful.extend(["projection", "publication"])
+    for stage in successful:
+        circuits.pop(stage, None)
+    if (result.get("status") == "process_failure" or
+            (result.get("status") == "accepted_work_pending" and
+             any(str(reason).startswith("TimeoutError:") for reason in result.get("reasons", [])))):
+        raw_stage = result.get("failure_stage", "worker")
+        stage = ("publication" if raw_stage.startswith("publication") else
+                 "projection" if raw_stage in {"projection", "worker_validated"} else "worker")
+        prior = circuits.get(stage, {})
+        count = prior.get("unchanged_failures", 0) + 1
+        circuit = {"stage": stage, "scope": stable_failure_scope(config, stage),
+                   "condition_sha256": fingerprint, "unchanged_failures": count,
+                   "first_occurrence_at": prior.get("first_occurrence_at", stamp),
+                   "updated_at": stamp, "reasons": result.get("reasons", []),
+                   "retry_ceiling": 3, "next_eligible_at": None if count >= 3 else stamp,
+                   "recovery_path": "reviewed correction and explicit stage reset",
+                   "unresolved_publication": result.get("unresolved_publication", False)}
+        circuits[stage] = circuit
+    else:
+        stage = previous.get("stage", "worker")
+        circuit = circuits.get(stage, {"condition_sha256": fingerprint, "unchanged_failures": 0, "updated_at": stamp})
+    write(path, {**circuit, "schema_version": 2, "stage": stage, "circuits": circuits})
 
 
 def health_view(directory, *, max_age_seconds=1800):

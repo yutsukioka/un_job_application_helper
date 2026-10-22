@@ -240,6 +240,7 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         "WHERE source_id=? AND (status='pending' OR kind='listing')", (source.id,),
     )]
     pending_reasons = Counter()
+    pending_eligible_hosts = set()
     listing_task = None
     for task in rows:
         task["source_id"] = source.id
@@ -255,6 +256,7 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         pending_reasons.update(admission["reasons"])
         if admission["eligible"]:
             counts["eligible_pending"] += 1
+            pending_eligible_hosts.add(admission["host"])
         elif admission["next_permitted_attempt_at"] is None:
             counts["held_pending"] += 1
         else:
@@ -296,6 +298,7 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         "task_eligibility": kind_counts,
         "deadline_holds": hold_summaries(conn, source.id),
         "eligible_pending_tasks": sum(counts["eligible_pending"] for counts in kind_counts.values()),
+        "pending_eligible_hosts": sorted(pending_eligible_hosts),
         "next_pending_attempt_at": min(pending_times) if pending_times else None,
         "pending_exclusion_reasons": dict(pending_reasons),
         "source_policy_hold": source_hold,

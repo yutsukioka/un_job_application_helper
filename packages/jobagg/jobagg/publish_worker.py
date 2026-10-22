@@ -155,6 +155,7 @@ def main(argv=None):
                 "publication_snapshot_validation": checked["validation_receipt"],
                 "status": status,
                 "publication": result,
+                "readback_verified": result.get("readback_verified") is True,
                 "observation_set_sha256": result.get("observation_set_sha256"),
                 "whole_job_completeness_certified": False,
             }

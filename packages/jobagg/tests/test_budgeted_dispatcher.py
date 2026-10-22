@@ -22,7 +22,7 @@ SPEC.loader.exec_module(runner)
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
     config = config_fixture(tmp_path)
-    config.update(timeout_seconds=5, total_timeout_seconds=15, publication_timeout_seconds=5,
+    config.update(runtime_control=False, timeout_seconds=5, total_timeout_seconds=15, publication_timeout_seconds=5,
                   terminate_grace_seconds=0.1, listing_max_age_seconds=3600,
                   detail_max_age_seconds=86400, sealed_publication_snapshots=True,
                   publication_snapshot_mode="projection", concurrency=None,

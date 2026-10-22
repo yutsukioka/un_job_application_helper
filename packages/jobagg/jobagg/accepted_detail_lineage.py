@@ -13,10 +13,12 @@ from pathlib import Path
 import sqlite3
 import time
 
+from jobagg.remediation_scheduling import task_key
+
 
 DETAIL_ATTEMPTS_QUERY = (
-    "SELECT a.* FROM remediation_attempts a JOIN remediation_tasks t "
-    "ON t.task_id=a.task_id WHERE t.source_id=? AND t.kind='detail' "
+    "SELECT a.* FROM remediation_tasks t CROSS JOIN remediation_attempts a "
+    "WHERE t.task_id=a.task_id AND t.source_id=? AND t.kind='detail' "
     "AND t.external_id=? AND a.source_id=t.source_id AND a.kind=t.kind "
     "AND a.status='done' AND a.finished_at IS NOT NULL "
     "ORDER BY a.finished_at DESC,a.attempt_id"
@@ -63,11 +65,22 @@ def matching_detail_attempts(conn, row, proof, *, deadline_at=None):
     _check(deadline_at)
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
-    attempts = cursor.execute(
-        DETAIL_ATTEMPTS_QUERY,
-        (row["source_id"], str(row["external_id"])),
-    )
+    canonical = task_key(row["source_id"], "detail", str(row["external_id"]))
+    # Legacy IDs remain eligible only through the same exact immutable identity
+    # crosswalk. Orphan attempts cannot invent a task or borrow another source.
+    candidates = [item[0] for item in cursor.execute(
+        "SELECT task_id FROM remediation_tasks WHERE source_id=? AND kind='detail' AND external_id=?",
+        (row["source_id"], str(row["external_id"])))]
+    candidates.sort(key=lambda identity: (identity != canonical, identity))
     matching = []
+    attempts = []
+    for identity in candidates:
+        _check(deadline_at)
+        attempts.extend(cursor.execute(
+            "SELECT * FROM remediation_attempts WHERE task_id=? AND source_id=? AND kind='detail' "
+            "AND status='done' AND finished_at IS NOT NULL ORDER BY finished_at DESC,attempt_id",
+            (identity, row["source_id"])).fetchall())
+    attempts.sort(key=lambda attempt: (-attempt["finished_at"], attempt["attempt_id"]))
     for attempt in attempts:
         _check(deadline_at)
         try:

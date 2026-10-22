@@ -66,7 +66,8 @@ def database_binding(path: Path) -> dict:
                       "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns})
     from jobagg import semantic_history
 
-    semantic = semantic_history.semantic_database_binding(path)
+    from jobagg.runtime_authority import binding as runtime_binding
+    semantic = runtime_binding(path) or semantic_history.semantic_database_binding(path)
     return {"files": files, "semantic": semantic}
 
 

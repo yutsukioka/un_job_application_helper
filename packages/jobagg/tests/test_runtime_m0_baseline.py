@@ -126,7 +126,8 @@ def test_eight_timeout_cycles_mutating_wal_reset_identical_condition_guard(confi
         wal.write_bytes(b"bounded synthetic WAL metadata" * (cycle + 1))
         shm.write_bytes(b"synthetic SHM" * (cycle + 1))
         fingerprint = obs.condition_fingerprint(config, Path(runner.__file__))
-        assert obs.failure_hold(config, fingerprint) is None
+        held = obs.failure_hold(config, fingerprint)
+        assert (held is not None) == (cycle >= 3)
         obs.record_failure(
             config,
             fingerprint,
@@ -140,7 +141,9 @@ def test_eight_timeout_cycles_mutating_wal_reset_identical_condition_guard(confi
         fingerprints.append(fingerprint)
         chronology.append(prior["unchanged_failures"])
     assert len(set(fingerprints)) == 8
-    assert chronology == [1] * 8  # Known M1 recurrence defect; six-run subset also resets.
+    # The immutable M0 JSON retains the original [1]*8 observation. M1 now
+    # recognizes all eight failures (including the original six-run subset).
+    assert chronology == list(range(1, 9))
     # Negative control: the same condition reaches the existing three-failure hold.
     for _ in range(2):
         obs.record_failure(
@@ -152,7 +155,7 @@ def test_eight_timeout_cycles_mutating_wal_reset_identical_condition_guard(confi
                 "unresolved_publication": False,
             },
         )
-    assert obs.failure_hold(config, fingerprints[-1])["unchanged_failures"] == 3
+    assert obs.failure_hold(config, fingerprints[-1])["unchanged_failures"] == 10
 
 
 def test_joint_worker_publisher_schema_bounded_sql_and_exact_outputs(

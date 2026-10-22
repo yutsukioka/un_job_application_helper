@@ -51,7 +51,7 @@ from jobagg.pipelines.sync_source import (
     load_sources,
     register_builtin_adapters,
 )
-from jobagg.remediation_scheduling import Task, select_due
+from jobagg.remediation_scheduling import Task, select_due, task_key
 from jobagg.remediation_concurrency import HARD_CEILING
 from jobagg.source_health import worker_source_health, listing_recovery_pending
 from jobagg.robots import load_policy
@@ -66,6 +66,8 @@ VERSION = "deterministic-fetch-v1"
 # startup integrity and every new receipt still use the full current binding.
 # Registry, robots, owner and semantic-input changes are never aliased.
 RETRY_EQUIVALENT_IMPLEMENTATIONS = (
+    # M0 reconciled production predecessor; M1 preserves charged retry semantics.
+    "4642596ad8c19900a6d2cf474c144d22907df89b90e26ee78aa7d0c709f70c39",
     # Exact active local repair; standalone compression preserves task retry meaning.
     "48f37af1a7b4e674547cc10a8d6db13cf3b27bf70c65cb2d4da3a31f5acda903",
     # Exact deployed predecessor: local scheduling repair preserves retry accounting.
@@ -80,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "7dc2c0261e714b644b0a546163fd1d3a10566076ad3916dfdaeb511e6e00027c"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "375e26de20c5ea6bc774f7cb34d743c91718454a2e30301180b8e8d89e476163"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -131,10 +133,6 @@ def record(payload):
             if key in {f.name for f in fields(JobRecord)}
         }
     )
-
-
-def task_key(source, kind, identity=""):
-    return hashlib.sha256(f"{source}\0{kind}\0{identity}".encode()).hexdigest()
 
 
 def document_disposition_changed(prior, current):
@@ -704,9 +702,17 @@ class SerializedWorkerDatabase(JobDatabase):
             if storage is not None and not nested:
                 storage.validate_database_paths()
             with super().connection_scope() as conn:
+                deadline = getattr(self.worker, "_report_deadline", None)
+                if deadline is not None and not nested:
+                    self.worker.check_deadline(deadline)
+                    conn.execute("PRAGMA busy_timeout=" + str(max(1, int(min(1, max(0, deadline-time.time()))*1000))))
+                    conn.set_progress_handler(lambda: int(time.time() >= deadline or time.monotonic() >= self.worker._elapsed_deadline), 256)
                 storage = getattr(self.worker, "storage", None)
+                from jobagg.runtime_authority import writer
                 with (storage.database_write(conn) if storage is not None and not nested else nullcontext()):
-                    yield conn
+                    with writer(conn, run_id=getattr(self.worker, "_runtime_run_id", None),
+                                owner_path=self.worker.shared_lock):
+                        yield conn
 
 
 def source_request_host(source):
@@ -872,6 +878,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_attempts_task_started
  ON remediation_attempts(task_id,started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_remediation_attempts_kind_started
  ON remediation_attempts(kind,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_source_started
+ ON remediation_attempts(source_id,started_at DESC,attempt_id DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_source_status_finished
+ ON remediation_attempts(source_id,status,finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_remediation_tasks_status_kind_source
  ON remediation_tasks(status,kind,source_id);
 CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
@@ -1026,7 +1036,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             or 0
         )
         if attempts is None:
-            attempts = self.shared_policy.events(source.id)
+            attempts = self.shared_policy.admission_events(source.id)
         if not attempts:
             return now
         finishes = [
@@ -1049,9 +1059,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 due = max(due, active[len(active) - 10] + 3600)
         return max(now, due)
 
-    @staticmethod
-    def check_deadline(deadline):
-        if deadline is not None and time.time() >= deadline:
+    def check_deadline(self, deadline):
+        if ((deadline is not None and time.time() >= deadline)
+                or time.monotonic() >= getattr(self, "_elapsed_deadline", float("inf"))):
             raise HostIneligible(
                 "Work budget exhausted; preserving final-report time", category="budget"
             )
@@ -1097,9 +1107,12 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             kind_served = {
                 row["kind"]: row["last_service"]
                 for row in conn.execute(
-                    "SELECT kind,max(started_at) AS last_service FROM remediation_attempts GROUP BY kind"
+                    "SELECT 'listing' AS kind,max(started_at) AS last_service FROM remediation_attempts WHERE kind='listing' "
+                    "UNION ALL SELECT 'detail',max(started_at) FROM remediation_attempts WHERE kind='detail' "
+                    "UNION ALL SELECT 'document',max(started_at) FROM remediation_attempts WHERE kind='document'"
                 )
             }
+            kind_served = {kind: stamp for kind, stamp in kind_served.items() if stamp is not None}
             circuit_sources = {
                 row["source_id"] for row in conn.execute(
                     "SELECT source_id FROM source_circuit_breakers WHERE state IN('open','half_open')"
@@ -1110,7 +1123,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         # unchanged parsed bytes are reused only inside this process. Claims
         # still validate again, so a selection cannot authorize a later request.
         events = (
-            self.shared_policy.event_snapshot(check_deadline=lambda: self.check_deadline(deadline))
+            self.shared_policy.admission_events()
             if any(row["kind"] == "detail" for row in rows)
             else {}
         )
@@ -2347,11 +2360,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 and item.get("opener_entries") == 0
             )
             captures.append(meta)
-        snapshot_complete = True
-        try:
-            self.choose(deadline=deadline)
-        except HostIneligible:
-            snapshot_complete = False
+        # The last revisioned selection is observational only. A report must
+        # never select work or repeat admission/history validation.
+        snapshot_complete = getattr(self, "_report_eligibility_complete", False)
         access = [
             meta for meta in captures
             if (meta.get("status_code") in {401, 403, 429}
@@ -2375,7 +2386,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             "dead_letter_tasks": sum(item.get("outcome", {}).get("status") == "dead_letter" for item in tasks),
             "accepted_progress": sum(any(key in item.get("outcome", {}) for key in
                 ("listing_observed", "detail_stored", "document_captured")) for item in tasks),
-            "eligible_backlog_remaining": self._eligible_counts[2] if snapshot_complete else 0,
+            "eligible_backlog_remaining": self._eligible_counts[2] if snapshot_complete else None,
+            "last_selection_eligible_tasks": self._eligible_counts[2],
             "eligibility_snapshot_complete": snapshot_complete,
             "new_access_blocks": len(access),
             "transport_failures": sum(meta.get("state") == "failed" and meta not in access
@@ -2388,6 +2400,13 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             "integrity_errors": sum(item.get("outcome", {}).get("error_type") in
                 {"ValueError", "KeyError", "TypeError", "DetailIdentityMismatch"} for item in failed),
             "database_errors": sum(item.get("outcome", {}).get("database_error", False) for item in failed),
+            "failure_classes": {
+                "source_identity_rejection": sum(item.get("outcome", {}).get("error_type") == "DetailIdentityMismatch" for item in failed),
+                "suspected_integrity_failure": sum(item.get("outcome", {}).get("error_type") in
+                    {"ValueError", "KeyError", "TypeError", "DetailIdentityMismatch"} for item in failed),
+                "database_pressure": sum(item.get("outcome", {}).get("database_error", False) for item in failed),
+                "controller_disposition": "retain_conservative_pressure_until_reviewed",
+            },
             "control_cycle_complete": snapshot_complete,
             "killed": False, "publication_status": "not_run",
             "task_intervals": sorted(tasks, key=lambda item: item["started_monotonic"]),
@@ -2400,7 +2419,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         sources = []
         source_holds = json.loads((self.shared_policy.root / "source_holds.json").read_text())
         report_now = time.time()
-        events = self.shared_policy.event_snapshot()
+        events = getattr(self, "_report_policy_events", None)
+        if events is None:
+            events = self.shared_policy.admission_events()
         host_cache = {}
         with self.db.connect() as conn:
             for source in self.by_id.values():
@@ -2451,6 +2472,11 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                         "capability": source_capability(source),
                     }
                 )
+        eligible_sources = [row for row in sources if row["health"]["eligible_pending_tasks"] > 0]
+        self._eligible_counts = (len(eligible_sources),
+            len({host for row in eligible_sources for host in row["health"].get("pending_eligible_hosts", [])}),
+            sum(row["health"]["eligible_pending_tasks"] for row in sources))
+        self._report_eligibility_complete = True
         return {
             "schema_version": 1,
             "run_id": request["run_id"] if request else self.tick_id,
@@ -2497,9 +2523,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             or request.get("parallel_sources", 1) != self.parallel_sources
         ):
             raise ValueError("Dispatcher request and worker parallel source limit differ")
-        preview = self.preview()
         if not execute:
-            return preview
+            return self.preview()
+        self._elapsed_deadline = time.monotonic() + self.max_seconds
+        self._runtime_run_id = (request or {}).get("run_id")
         self.tick_id = str(uuid4())
         tick_started_at = utc()
         self._task_intervals = []
@@ -2511,10 +2538,12 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             deadline = min(deadline, epoch(request["deadline_at"]))
         if deadline <= time.time():
             raise ValueError("Request deadline already passed")
+        self._report_deadline = deadline
         with shared_owner(self.shared_lock):
             if self.storage:
                 self.storage.activate((request or {}).get("semantic_history_policy"))
             self.initialize()
+            self.shared_policy.begin_batch(check_deadline=lambda: self.check_deadline(deadline))
             register_builtin_adapters()
             self.seed_listings()
             outcomes = []
@@ -2557,10 +2586,13 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 or self.binding["implementation_sha256"] != implementation_hash()
             ):
                 raise ValueError("Input code/config changed during tick; no acceptance report")
+            self._report_policy_events = self.shared_policy.admission_events()
+            self.shared_policy.finish_batch(check_deadline=lambda: self.check_deadline(deadline))
+            self.check_deadline(deadline)
+            report = self.report(request)
             concurrency = self.concurrency_report(tick_started_at, deadline)
             concurrency_path = self.workspace / "ticks" / f"{self.tick_id}.concurrency.json"
             write_json(concurrency_path, concurrency)
-            report = self.report(request)
             report["concurrency"] = concurrency
             report["concurrency_receipt"] = {"path": str(concurrency_path), "sha256": sha(concurrency_path)}
             report["tick_outcomes"] = outcomes

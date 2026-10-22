@@ -235,6 +235,53 @@ class SharedPolicy:
         # Callers must not be able to mutate future admission authority.
         return deepcopy(grouped)
 
+    @_synchronized
+    def begin_batch(self, *, check_deadline=None):
+        """One full audit under the shared owner; subsequent claims use this revision.
+
+        Every cooperating writer uses reserve/finish, which update this same
+        process-wide projection under the root lock. Final audit detects external
+        history interference before a successful worker report can be emitted.
+        """
+        events = self.event_snapshot(check_deadline=check_deadline)
+        self._batch_events = events
+        self._batch_revisions = {}
+        self._batch_signature = self._inventory_signature()
+
+    def _inventory_signature(self):
+        return tuple((path.stat().st_ino, path.stat().st_size,
+                      path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+                     for path in (self.root / 'attempts', self.root / 'attempt_index.json'))
+
+    @_synchronized
+    def admission_events(self, source_id=None):
+        if not hasattr(self, '_batch_events'):
+            return self.events(source_id) if source_id else self.event_snapshot()
+        if self._inventory_signature() != self._batch_signature:
+            raise ValueError('Shared policy changed outside the owner batch; review required')
+        return deepcopy(self._batch_events.get(source_id, [])) if source_id else deepcopy(self._batch_events)
+
+    @_synchronized
+    def finish_batch(self, *, check_deadline=None):
+        if not hasattr(self, '_batch_events'):
+            return
+        try:
+            actual = self.event_snapshot(check_deadline=check_deadline)
+            if actual != self._batch_events:
+                raise ValueError('Shared policy evidence changed during owner batch')
+        finally:
+            del self._batch_events
+
+    def _batch_update(self, event):
+        if hasattr(self, '_batch_events'):
+            if event['kind'] == 'detail':
+                rows = self._batch_events.setdefault(event['source_id'], [])
+                rows[:] = [row for row in rows if row['attempt_id'] != event['attempt_id']]
+                rows.append(event)
+                rows.sort(key=lambda row: row['started_at'])
+                self._batch_revisions[event['source_id']] = self._batch_revisions.get(event['source_id'], 0) + 1
+            self._batch_signature = self._inventory_signature()
+
     def events(self, source_id):
         return self.event_snapshot().get(source_id, [])
 
@@ -258,6 +305,7 @@ class SharedPolicy:
         )
         index = self.root / "attempt_index.json"
         save(index, sorted({*json.loads(index.read_text()), path.name}))
+        self._batch_update(json.loads(path.read_text()))
 
     @_synchronized
     def finish(self, attempt_id, status):
@@ -265,6 +313,7 @@ class SharedPolicy:
         event = json.loads(path.read_text())
         event.update(finished_at=time.time(), status=status)
         save(path, event)
+        self._batch_update(event)
 
     @_synchronized
     def source_hold(self, source_id):

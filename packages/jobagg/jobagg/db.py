@@ -72,6 +72,7 @@ class JobDatabase:
         conn.row_factory = sqlite3.Row
         from jobagg.semantic_history import register_denied_writer
         register_denied_writer(conn)
+        conn.create_function("jobagg_runtime_write_allowed", 0, lambda: 0)
         try:
             if not self.read_only:
                 self._apply_pragmas(conn)

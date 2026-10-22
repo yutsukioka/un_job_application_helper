@@ -27,6 +27,15 @@ import time
 import uuid
 
 _CONTROL_WRITER = None
+_ENTRY_DEADLINES = None
+
+
+def check_entry_budget():
+    if _ENTRY_DEADLINES is not None:
+        mono, wall = _ENTRY_DEADLINES
+        if time.monotonic() >= mono or time.time() >= wall:
+            raise TimeoutError("Entry-anchored invocation budget exhausted")
+
 
 NORMALIZATION = "jobtext-v1-whitespace-known-boilerplate"
 EXIT = {
@@ -291,6 +300,13 @@ def finish_concurrency(context, record, report_path):
     record["concurrency"].update(
         {key: value for key, value in decision.items() if key != "state"}
     )
+    if isinstance(metrics, dict):
+        record["concurrency"].update(
+            peak_active_sources=metrics.get("peak_active_sources"),
+            controller_approved=metrics.get("limit_used") == context["inflight"]["limit"],
+            safe_downshift_verified=(decision.get("action") == "decrease" and
+                                     decision.get("limit", 0) < context["inflight"]["limit"]),
+            failure_classes=metrics.get("failure_classes"))
     # The caller must first commit the terminal outcome journal. Otherwise a
     # crash could award health credit to a control cycle with no final receipt.
     return {"schema_version": 1, "controller_state": decision["state"], "inflight": None}
@@ -951,7 +967,10 @@ def recover_stale_runs(config, descriptor, allow_publication_recovery=False, *, 
     root = config["state_dir"] / "runs"
     if not root.exists():
         return recovered
-    for state_path in sorted(root.glob("*/state.json")):
+    state_paths = ([root / config["_runtime_active_run"] / "state.json"]
+                   if runtime_enabled(config) and config.get("_runtime_active_run") else
+                   ([] if runtime_enabled(config) else sorted(root.glob("*/state.json"))))
+    for state_path in state_paths:
         record = read_json(state_path)
         if record.get("status") != "running":
             continue
@@ -1184,6 +1203,8 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
             return {"status": "maintenance_paused", "worker_dispatched": False}
         OBSERVABILITY.storage_check(config, require_reserve=False)
         context = bridge.existing_context(config)
+        if runtime_enabled(config):
+            runtime_active(config)
         accepted = pending.inspect(config["state_dir"])
         if context:
             interrupted_run = config["state_dir"] / "runs" / context["ledger"].cycle_id
@@ -1455,8 +1476,84 @@ def settle_unstarted_publication(config, context, run, *, deadline_at=None):
         publisher.resume(operation_id).settle(proof_sha256=proof_sha)
 
 
+def runtime_enabled(config):
+    return bool(config.get("runtime_control", "jobagg.remediation_worker" in config.get("worker_argv", [])))
+
+
+@contextmanager
+def runtime_connection(config):
+    import sqlite3
+    database = config["publication_worker_database"]
+    require(database.exists(), "runtime authority missing; explicit bootstrap required")
+    with sqlite3.connect(database, timeout=1) as conn:
+        yield conn
+
+
+def runtime_active(config):
+    helper = package_helper(config, "runtime_authority")
+    with runtime_connection(config) as conn:
+        value = helper.validate(conn)
+    config["_runtime_active_run"] = value["run_id"] if value["phase"] != "idle" else None
+    return value
+
+
+def runtime_resume(config):
+    """Reconcile only the authoritative active run under the exact shared owner."""
+    pending = package_helper(config, "pending_publication")
+    value = runtime_active(config)
+    if value["phase"] == "idle":
+        require(pending.inspect(config["state_dir"]) is None, "idle authority has an unresolved accepted marker")
+        return None
+    run = config["state_dir"] / "runs" / value["run_id"]
+    require(value["config_sha256"] == config["_config_sha256"], "active runtime configuration differs; explicit repair required")
+    if (run / "publication_intent.json").exists():
+        # Existing publication recovery owns this exact run, including uncertain commits.
+        marker = pending.inspect(config["state_dir"])
+        if marker:
+            pending.release_after_intent(config["state_dir"], run_id=run.name)
+        return None
+    state = read_json(run / "state.json")
+    former_processes_absent(state)
+    proof = read_json(run / "worker_result.json")
+    require(proof.get("worker_exit_code") == 0
+            and proof.get("request_sha256") == digest(run / "request.json")
+            and proof.get("config_sha256") == config["_config_sha256"]
+            and proof.get("database_binding") == pending.database_binding(config["publication_worker_database"]),
+            "active worker lacks exact successful exit/configuration/database proof; repair required")
+    marker = pending.inspect(config["state_dir"])
+    if marker is None:
+        marker = pending.seal(config["state_dir"], run.name, config_sha256=config["_config_sha256"],
+                              database=config["publication_worker_database"], lease={"runtime_epoch": value["epoch"]})
+    pending.validate(config["state_dir"], config_sha256=config["_config_sha256"], database=config["publication_worker_database"])
+    pending.prepare_resume(config["state_dir"], process_evidence=former_processes_absent(state))
+    return marker
+
+
+def phase_remaining(config, hard_end, wall_end, phase):
+    """Missing measured admission values defer safely, never invent a viable unit."""
+    policy = config.get("phase_budgets")
+    if not policy:
+        require(not runtime_enabled(config), "phase budgets require reviewed viable-unit measurements")
+        return min(config["publication_timeout_seconds"], hard_end-time.monotonic(), wall_end-time.time())
+    require(set(policy) == {"projection_max_seconds", "projection_min_seconds", "publisher_min_seconds", "cleanup_report_seconds", "measurement_sha256"}, "phase budget fields differ")
+    for key in ("projection_max_seconds", "projection_min_seconds", "publisher_min_seconds", "cleanup_report_seconds"):
+        require(type(policy[key]) in (int, float) and 0 < policy[key] < config["total_timeout_seconds"], "invalid phase budget")
+    require(isinstance(policy["measurement_sha256"], str) and re.fullmatch(r"[a-f0-9]{64}", policy["measurement_sha256"]), "phase budget lacks measurement seal")
+    remaining = min(hard_end-time.monotonic(), wall_end-time.time()) - policy["cleanup_report_seconds"]
+    if phase == "projection":
+        available = min(policy["projection_max_seconds"], remaining-policy["publisher_min_seconds"])
+        require(available >= policy["projection_min_seconds"], "insufficient viable projection/publisher budget; accepted work retained")
+    else:
+        available = min(config["publication_timeout_seconds"], remaining)
+        require(available >= policy["publisher_min_seconds"], "insufficient viable publisher budget; accepted work retained")
+    return available
+
+
 def tick(config, expected, recover_publication=False):
-    deadline_at = time.monotonic() + config["total_timeout_seconds"]
+    deadline_at = min(time.monotonic() + config["total_timeout_seconds"],
+                      config.get("_entry_monotonic_deadline", float("inf")))
+    require(time.monotonic() < deadline_at and time.time() < config.get("_entry_wall_deadline", float("inf")),
+            "entry budget expired before ownership/admission")
     if config.get("storage_budget", {}).get("enabled"):
         return budgeted_tick(config, expected, recover_publication=recover_publication, deadline_at=deadline_at)
     # Identity/mount/path checks still precede every guarded-volume write. Only
@@ -1521,8 +1618,14 @@ def tick(config, expected, recover_publication=False):
                         "reasons": ["Storage maintenance did not safely complete"],
                         "storage_retention": prior_retention,
                     }
+        try:
+            resume = runtime_resume(config) if runtime_enabled(config) else None
+        except (ValueError, OSError) as exc:
+            return {"status": "accepted_work_pending", "review_required": True,
+                    "worker_dispatched": False, "publisher_dispatched": False,
+                    "reasons": ["Runtime authority requires repair: " + str(exc)]}
         condition = OBSERVABILITY.condition_fingerprint(config, Path(__file__))
-        held = OBSERVABILITY.failure_hold(config, condition)
+        held = OBSERVABILITY.failure_hold(config, condition, stage="projection" if resume else "worker")
         if held:
             if prior_retention is not None:
                 held["storage_retention"] = prior_retention
@@ -1540,7 +1643,7 @@ def tick(config, expected, recover_publication=False):
             ):
                 result = resume_publication(config, expected, descriptor, deadline_at=deadline_at)
             else:
-                result = locked_tick(config, expected, descriptor, recovered, deadline_at=deadline_at)
+                result = locked_tick(config, expected, descriptor, recovered, resume=resume, deadline_at=deadline_at)
         except Exception as exc:
             try:
                 unresolved = bool(unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at))
@@ -1638,6 +1741,10 @@ def publication_request(
             config["state_dir"], config_sha256=config["_config_sha256"],
             database=config["publication_worker_database"],
             projection_target=Path(context["limits"]["scratch_dir"]) / request["run_id"] / "publication_snapshot.sqlite3")
+    if runtime_enabled(config) and not context:
+        pending_value = package_helper(config, "pending_publication").validate(
+            config["state_dir"], config_sha256=config["_config_sha256"],
+            database=config["publication_worker_database"])
     snapshot_fields = {}
     if config["sealed_publication_snapshots"]:
         snapshot = pending_value.get("projection") if pending_value else None
@@ -1653,7 +1760,7 @@ def publication_request(
                 projection=config["publication_snapshot_mode"] == "projection",
                 **({"budget": context["ledger"], "max_bytes": context["projection_cap_bytes"]} if context else {}),
             )
-        if context and pending_value.get("projection") is None:
+        if (context or runtime_enabled(config)) and pending_value.get("projection") is None:
             package_helper(config, "pending_publication").record_projection(config["state_dir"], snapshot)
         files = [{"path": snapshot["path"], "sha256": snapshot["sha256"]}]
         snapshot_fields["publication_snapshot"] = snapshot
@@ -1786,8 +1893,13 @@ def unresolved_publications(root, config=None, *, deadline_at=None):
     unknown = []
     history = closure = None
     history_root = root.parent.parent
-    for outcome in root.glob("*/outcome.json"):
+    outcomes = ([root / config["_runtime_active_run"] / "outcome.json"]
+                if config and runtime_enabled(config) and config.get("_runtime_active_run") else
+                ([] if config and runtime_enabled(config) else root.glob("*/outcome.json")))
+    for outcome in outcomes:
         check_deadline()
+        if not outcome.exists():
+            continue
         if (outcome.parent / "terminal-history-retirement.json").exists():
             require(config is not None, "Retired history requires the canonical classifier")
             if history is None:
@@ -2193,13 +2305,15 @@ def resume_publication(config, expected, descriptor, *, deadline_at=None):
 def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_context=None, resume=None,
                 deadline_at=None):
     OBSERVABILITY.storage_check(config)
-    run_id = storage_context["ledger"].cycle_id if storage_context else str(uuid.uuid4())
+    run_id = resume["run_id"] if resume else (storage_context["ledger"].cycle_id if storage_context else str(uuid.uuid4()))
     started = now()
     hard_end = time.monotonic() + config["total_timeout_seconds"]
     if deadline_at is not None:
         hard_end = min(hard_end, deadline_at)
     require(hard_end > time.monotonic(), "no tick budget remains after admission")
-    wall_end = started + timedelta(seconds=max(0, hard_end - time.monotonic()))
+    wall_end = datetime.fromtimestamp(min(
+        time.time() + max(0, hard_end - time.monotonic()),
+        config.get("_entry_wall_deadline", float("inf"))), timezone.utc)
     run_dir = config["state_dir"] / "runs" / run_id
     if resume is None:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -2242,6 +2356,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
     record = {
         "schema_version": 1,
         "run_id": run_id,
+        "origin": config.get("_invocation_origin", "manual"),
         "status": "running",
         "phase": "preparing",
         "started_at": started.isoformat(),
@@ -2257,12 +2372,18 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
         **({"accepted_work_resumed": True, "original_started_at": request["started_at"]} if resume else {}),
     }
 
+    if runtime_enabled(config) and resume is None:
+        with runtime_connection(config) as conn:
+            package_helper(config, "runtime_authority").begin(conn, run_id, config["_config_sha256"])
+        config["_runtime_active_run"] = run_id
+
     def save():
         atomic_json(run_dir / "state.json", record)
         atomic_json(config["state_dir"] / "state.json", record)
 
     previous, process = {}, None
     concurrency_context = None
+    skip_publication = False
 
     def interrupted(signum, _frame):
         raise InterruptedError(f"wrapper received signal {signum}")
@@ -2425,18 +2546,27 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                     **({"request_sha256": digest(request_path),
                         "config_sha256": config["_config_sha256"],
                         "database_binding": package_helper(config, "pending_publication").database_binding(
-                        config["publication_worker_database"])} if storage_context else {}),
+                        config["publication_worker_database"])} if storage_context or runtime_enabled(config) else {}),
                 },
             )
             save()
-            if storage_context:
+            if runtime_enabled(config) and not storage_context:
+                accepted_progress = read_json(report_path).get("concurrency", {}).get("accepted_progress")
+                with runtime_connection(config) as conn:
+                    skip_publication = package_helper(config, "runtime_authority").proven_empty(
+                        conn, run_id, accepted_progress=accepted_progress)
+                if skip_publication:
+                    record.update(publication_status="proven_empty", backlog_authoritatively_empty=True,
+                                  accepted_progress=0)
+            if storage_context or (runtime_enabled(config) and not skip_publication):
                 pending = package_helper(config, "pending_publication")
                 pending.seal(config["state_dir"], run_id,
                              config_sha256=config["_config_sha256"],
                              database=config["publication_worker_database"],
-                             lease=storage_context["ledger"].wire(),
-                             projection_target=Path(storage_context["limits"]["scratch_dir"]) / run_id / "publication_snapshot.sqlite3")
-                storage_context["ledger"].transition("worker_admitted", "accepted_pending")
+                             lease=storage_context["ledger"].wire() if storage_context else {"runtime_epoch": runtime_active(config)["epoch"]},
+                             projection_target=(Path(storage_context["limits"]["scratch_dir"]) / run_id / "publication_snapshot.sqlite3" if storage_context else None))
+                if storage_context:
+                    storage_context["ledger"].transition("worker_admitted", "accepted_pending")
         else:
             proof = read_json(run_dir / "worker_result.json")
             status, reasons = proof["status"], list(proof["reasons"])
@@ -2445,12 +2575,15 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             save()
         replacements = {"{request_path}": str(request_path), "{report_path}": str(report_path),
                         "{run_id}": run_id, "{parallel_sources}": str(request.get("parallel_sources", 1))}
-        if config["publication_argv"]:
+        if config["publication_argv"] and not skip_publication:
+            record["phase"] = "projection"
             remaining = min(
                 config["publication_timeout_seconds"],
                 hard_end - time.monotonic() - config["terminate_grace_seconds"],
             )
             require(remaining > 0, "no publication budget remains")
+            if runtime_enabled(config):
+                remaining = phase_remaining(config, hard_end, wall_end.timestamp(), "projection")
             publication_deadline = now() + timedelta(seconds=remaining)
             pub_request = publication_request(
                 config,
@@ -2462,6 +2595,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             )
             remaining = min(config["publication_timeout_seconds"],
                             hard_end - time.monotonic() - config["terminate_grace_seconds"])
+            if runtime_enabled(config):
+                remaining = phase_remaining(config, hard_end, wall_end.timestamp(), "publisher")
             require(remaining > 0, "snapshot preparation exhausted total publication budget")
             publication_deadline = now() + timedelta(seconds=remaining)
             pub_request.update(generated_at=now().isoformat(),
@@ -2491,8 +2626,13 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                     "cwd": str(config["publication_cwd"]),
                 },
             )
-            if storage_context:
+            if storage_context or runtime_enabled(config):
                 package_helper(config, "pending_publication").release_after_intent(config["state_dir"], run_id=run_id)
+            if runtime_enabled(config):
+                with runtime_connection(config) as conn:
+                    helper = package_helper(config, "runtime_authority")
+                    helper.transition(conn, run_id, "worker", "accepted")
+                    helper.transition(conn, run_id, "accepted", "publisher")
             record["publication_status"] = "intent_recorded"
             record["publication_recovery_allowed"] = True
             save()
@@ -2530,6 +2670,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             immutable_json(pub_result_path, result)
             record.update(
                 publication_status=result["status"],
+                readback_verified=result.get("readback_verified") is True,
                 publication_result_sha256=digest(pub_result_path),
                 publication_recovery_allowed=result["status"] == "incomplete",
             )
@@ -2542,13 +2683,14 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             exc, package_helper(config, "storage_budget").StorageBudgetDeferred)
         record.update(
             status="storage_deferred" if storage_deferred else "process_failure",
-            reasons=[f"{type(exc).__name__}: {exc}"]
+            reasons=[f"{type(exc).__name__}: {exc}"],
+            failure_stage=record.get("phase", "unknown"),
         )
         if storage_deferred:
             record["storage_deferral"] = True
         if record["publication_status"] == "intent_recorded" or (run_dir / "publication_intent.json").exists():
             record["publication_status"] = "unknown_requires_review_no_replay"
-        elif storage_context and (package_helper(config, "pending_publication").inspect(config["state_dir"])
+        elif (storage_context or runtime_enabled(config)) and (package_helper(config, "pending_publication").inspect(config["state_dir"])
                                   or (storage_deferred and (run_dir / "worker_result.json").exists())):
             record.update(status="accepted_work_pending", publication_status="not_started",
                           worker_reexecuted=False)
@@ -2592,6 +2734,12 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             if concurrency_terminal is not None:
                 atomic_json(concurrency_context["path"], concurrency_terminal)
             save()
+            if runtime_enabled(config) and record.get("publication_status") == "proven_empty":
+                with runtime_connection(config) as conn:
+                    package_helper(config, "runtime_authority").close_empty(conn, run_id, accepted_progress=0)
+            if runtime_enabled(config) and record.get("publication_status") in {"published", "noop"}:
+                with runtime_connection(config) as conn:
+                    package_helper(config, "runtime_authority").transition(conn, run_id, "publisher", "idle")
             if record["status"] == "complete":
                 atomic_json(config["state_dir"] / "last_complete.json", record)
         finally:
@@ -2600,9 +2748,12 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
     return record
 
 
-def main(argv=None):
+def _main(argv=None):
+    global _ENTRY_DEADLINES
+    entry_monotonic, entry_wall = time.monotonic(), time.time()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--invocation-origin", choices=("manual", "natural"), default="manual")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--execute",
@@ -2645,10 +2796,21 @@ def main(argv=None):
             budgeted_regular_output = bool(raw.get("storage_budget", {}).get("enabled")) and stat.S_ISREG(os.fstat(sys.stdout.fileno()).st_mode)
             if not raw.get("storage_budget", {}).get("enabled"):
                 attempt, intent = OBSERVABILITY.start_attempt(config_path, raw)
+        raw_entry = read_json(config_path)
+        entry_limit = raw_entry.get("total_timeout_seconds", 840)
+        require(type(entry_limit) in (int, float) and 0 < entry_limit <= 86400, "invalid entry budget")
+        _ENTRY_DEADLINES = (
+            min(entry_monotonic + entry_limit, float(os.environ.get("JOBAGG_ENTRY_MONOTONIC_DEADLINE", "inf"))),
+            min(entry_wall + entry_limit, float(os.environ.get("JOBAGG_ENTRY_WALL_DEADLINE", "inf"))))
+        OBSERVABILITY.DEADLINE_CHECK = check_entry_budget
+        check_entry_budget()
         config, expected = load_config(
             config_path, record_storage_health=args.execute and not raw.get("storage_budget", {}).get("enabled") if args.execute else False,
             allow_storage_maintenance=args.execute,
         )
+        config["_invocation_origin"] = args.invocation_origin
+        config["_entry_monotonic_deadline"], config["_entry_wall_deadline"] = _ENTRY_DEADLINES
+        check_entry_budget()
         if not args.execute:
             result = {
                 "status": "dry_run",
@@ -2705,7 +2867,18 @@ def main(argv=None):
             }
     if not budgeted_regular_output:
         print(json.dumps(result, indent=2))
+    _ENTRY_DEADLINES = None
+    OBSERVABILITY.DEADLINE_CHECK = lambda: None
     return EXIT[result["status"]]
+
+
+def main(argv=None):
+    global _ENTRY_DEADLINES
+    try:
+        return _main(argv)
+    finally:
+        _ENTRY_DEADLINES = None
+        OBSERVABILITY.DEADLINE_CHECK = lambda: None
 
 
 if __name__ == "__main__":
