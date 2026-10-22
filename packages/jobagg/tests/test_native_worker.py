@@ -15,7 +15,15 @@ from test_budgeted_dispatcher import configured  # noqa: F401
 # ruff: noqa: F811
 
 
-def _first_useful(setup, monkeypatch, *, return_request=False, runtime_contract_value=None):
+def _first_useful(
+    setup,
+    monkeypatch,
+    *,
+    return_request=False,
+    runtime_contract_value=None,
+    storage_request=None,
+    ledger=None,
+):
     worker, _, calls, _ = setup
     worker.initialize()
     with shared_owner(worker.shared_lock) as owner:
@@ -40,6 +48,15 @@ def _first_useful(setup, monkeypatch, *, return_request=False, runtime_contract_
             )
             publication_work.prepare(conn, contract_sha256="configuration", epoch="native")
             assert publication_work.bootstrap(conn, limit=10, deadline_at=time.monotonic() + 10)
+            if storage_request:
+                from jobagg.semantic_history import activate_semantic_history
+
+                activate_semantic_history(
+                    conn,
+                    **storage_request["semantic_history_policy"],
+                    ledger_path=ledger.path,
+                    scope_hash=ledger.scope_hash,
+                )
             runtime_authority.activate(
                 conn,
                 epoch="native",
@@ -47,7 +64,12 @@ def _first_useful(setup, monkeypatch, *, return_request=False, runtime_contract_
                 owner_fd=owner,
                 bootstrap_receipt={"reconciled": True, "source_sha256": "a" * 64},
             )
-            runtime_authority.begin(conn, "first-useful", "configuration", owner_fd=owner)
+            runtime_authority.begin(
+                conn,
+                (storage_request or {}).get("run_id", "first-useful"),
+                "configuration",
+                owner_fd=owner,
+            )
     monkeypatch.setattr(
         worker.shared_policy, "event_snapshot", lambda **_: pytest.fail("cold historical census")
     )
@@ -57,6 +79,7 @@ def _first_useful(setup, monkeypatch, *, return_request=False, runtime_contract_
         "source_manifest_sha256": worker.binding["registry_sha256"],
         "policy_audit": {"max_objects": 2, "maximum_lag_seconds": 3600},
     }
+    request.update(storage_request or {})
     request["started_at"] = datetime.now(UTC).isoformat()
     request["expected_source_ids"] = list(worker.by_id)
     if runtime_contract_value:
@@ -283,3 +306,25 @@ def test_first_useful_native_child_verifies_complete_runtime_bytes_before_and_af
     report = _first_useful(setup, monkeypatch, runtime_contract_value=value)
     assert report["runtime_contract_sha256"] == value["sha256"]
     assert report["concurrency"]["accepted_progress"] > 0
+
+
+def test_real_native_worker_charges_sql_under_storage_and_semantic_fences(setup, monkeypatch):
+    from test_worker_storage_ingress import enable_storage
+
+    worker, _, calls, _, request, ledger = enable_storage(
+        setup, monkeypatch, policy_transaction_cap_bytes=256 * 1024
+    )
+    worker.max_tasks = 2
+    # Preparation is an offline fixture operation. Runtime writes use the real
+    # source/semantic owner fence and the admitted per-cycle storage escrow.
+    report = _first_useful(setup, monkeypatch, storage_request=request, ledger=ledger)
+    assert len(calls) == 2
+    assert report["storage"]["physical_hard_cap_enforced"] is False
+    assert not ledger.snapshot()["operations"]
+    assert ledger.snapshot()["settled"]["essential"] > 0
+    with worker.db.connect() as conn:
+        assert (
+            conn.execute("SELECT policy_epoch FROM semantic_history_state").fetchone()[0]
+            == "fixture-epoch"
+        )
+        assert conn.execute("SELECT count(*) FROM jobagg_accepted_events").fetchone()[0] == 2

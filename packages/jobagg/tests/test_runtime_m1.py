@@ -23,7 +23,7 @@ def runtime(configured, monkeypatch):
     monkeypatch.setattr(runner,'runtime_publication_contract',lambda cfg:{'sha256':cfg['_config_sha256'],'jobagg_implementation_sha256':'f'*64})
     config['_fixture_storage_budget'] = config.pop('storage_budget')
     config['runtime_control'] = True
-    config['native_publication_escrow'] = 'per_bounded_batch' 
+    config['native_publication_escrow'] = 'per_bounded_batch'
     config['phase_budgets'] = dict(projection_max_seconds=3, projection_min_seconds=.01,
                                     publisher_min_seconds=.01, cleanup_report_seconds=.01,
                                     measurement_sha256='a'*64)
