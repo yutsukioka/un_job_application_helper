@@ -6,6 +6,10 @@ constant disk footprint or certify that every source is current or complete.
 Older attachment evidence may remain in historical archives rather than the live
 database; those archives must remain available.
 
+The separate [artifact compression API](storage_compression.md) adds a versioned
+resolver and explicit migration tools. Existing retention and publication readers
+have not adopted that manifest; committing the API does not enable migration.
+
 ## What is retained
 
 | Data | Policy |
