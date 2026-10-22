@@ -143,6 +143,9 @@ def _capture(path, expected_sha=None):
 
 def _accepted_detail(conn, row, observation):
     proof = json.loads(observation["proof"])
+    from jobagg.accepted_evidence import legacy_rejection
+    if reason := legacy_rejection(conn, row['job_key'], proof):
+        raise ValueError(reason)
     body_hash = hashlib.sha256((row["description"] or "").encode()).hexdigest()
     if (
         proof.get("source_id") != row["source_id"]
@@ -336,7 +339,7 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
         listing_diagnostics = {}
         if job_keys is None:
             plan["listing_frames"], listing_rejected = plan_frames(
-                worker, consolidated, sources, targets, limit=5, deadline_at=deadline_at, diagnostics=listing_diagnostics
+                worker, consolidated, sources, targets, limit=5, deadline_at=deadline_at, diagnostics=listing_diagnostics, selection=plan.get('publication_selection')
             )
         else:
             selected = set(job_keys)

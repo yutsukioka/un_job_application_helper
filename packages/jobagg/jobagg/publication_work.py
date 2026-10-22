@@ -12,7 +12,7 @@ from pathlib import Path
 import sqlite3
 import time
 
-SCHEMA = "publication-work-2"
+SCHEMA = "publication-work-3"
 CONTROL_TABLES = {
     "jobagg_dirty_state",
     "jobagg_dirty_versions",
@@ -20,6 +20,8 @@ CONTROL_TABLES = {
     "jobagg_dirty_bootstrap",
     "jobagg_dirty_cohorts",
     "jobagg_dirty_transitions",
+    "jobagg_dirty_revalidation",
+    "jobagg_dirty_contract",
 }
 EXCLUDED = {
     "jobagg_runtime_state",
@@ -29,7 +31,10 @@ EXCLUDED = {
     "jobagg_kind_service",
     "jobagg_source_hosts",
     "jobagg_header_contract",
+    "jobagg_accepted_events",
     "jobagg_evidence_backfill",
+    "jobagg_accepted_exits",
+    "jobagg_accepted_exit_runs",
 }
 
 
@@ -134,7 +139,7 @@ def validate(conn):
         raise ValueError("publication_work_schema_or_fence_changed")
 
 
-def prepare(conn, *, contract_sha256, epoch):
+def prepare(conn, *, contract_sha256, epoch, freshness=None):
     """Explicit staged schema preparation before runtime fence activation."""
     if exists(conn):
         validate(conn)
@@ -170,6 +175,32 @@ def prepare(conn, *, contract_sha256, epoch):
     conn.execute(
         "CREATE INDEX jobagg_dirty_due ON jobagg_dirty_transitions(fired,due_at,object_key)"
     )
+    conn.execute(
+        "CREATE TABLE jobagg_dirty_revalidation(id INTEGER PRIMARY KEY,contract_sha256 TEXT,receipt_sha256 TEXT,after_unit TEXT,complete INTEGER)"
+    )
+    conn.execute("CREATE TABLE jobagg_dirty_contract(id INTEGER PRIMARY KEY,freshness_json TEXT)")
+    conn.execute(
+        "INSERT INTO jobagg_dirty_contract VALUES(1,?)", (_dump(freshness) if freshness else None,)
+    )
+    if freshness:
+        for kind, table, key, timestamp in (
+            ("detail", "remediation_observations", "job_key", "checked_at"),
+            ("listing", "remediation_sources", "source_id", "last_list_at"),
+        ):
+            age = freshness[kind + "_max_age_seconds"]
+            if not isinstance(age, (int, float)) or not 0 < age < float("inf"):
+                raise ValueError("finite_freshness_transition_contract_required")
+            job = "new.job_key" if kind == "detail" else "NULL"
+            for operation in ("INSERT", "UPDATE"):
+                conn.execute(f"""CREATE TRIGGER jobagg_dirty_freshness_{kind}_{operation} AFTER {operation} ON {table} BEGIN
+                    INSERT INTO jobagg_dirty_transitions VALUES('freshness:{kind}:'||new.{key},new.source_id,{job},new.{timestamp}+{float(age)},0)
+                    ON CONFLICT(object_key) DO UPDATE SET due_at=excluded.due_at,
+                    fired=CASE WHEN due_at IS excluded.due_at THEN fired ELSE 0 END; END""")
+            job = "job_key" if kind == "detail" else "NULL"
+            conn.execute(
+                f"INSERT INTO jobagg_dirty_transitions SELECT 'freshness:{kind}:'||{key},source_id,{job},{timestamp}+?,0 FROM {table} WHERE {timestamp} IS NOT NULL",
+                (age,),
+            )
     for operation in ("INSERT", "UPDATE"):
         conn.execute(f"""CREATE TRIGGER jobagg_dirty_closing_{operation.lower()} AFTER {operation} ON jobs BEGIN
             INSERT INTO jobagg_dirty_transitions VALUES('closing:'||new.job_key,new.source_id,new.job_key,
@@ -216,6 +247,13 @@ def prepare(conn, *, contract_sha256, epoch):
                     first_changed_at=CASE WHEN disposition='acknowledged' THEN excluded.first_changed_at ELSE first_changed_at END,
                     disposition='pending',reason=NULL,acknowledgement_sha256=NULL; END''')
 
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='remediation_documents'").fetchone():
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS jobagg_documents_by_job ON remediation_documents(job_key,task_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS jobagg_documents_by_content ON remediation_documents(content_sha256,job_key)"
+        )
     conn.execute("UPDATE jobagg_dirty_state SET schema_sha256=? WHERE id=1", (_schema_hash(conn),))
 
 
@@ -486,6 +524,62 @@ def advance_time(conn, *, now, limit):
         (now, limit),
     ).fetchall()
     for key, source, job in rows:
-        _mark(conn, "job:" + job, source, job, "job", "time_transition_revalidation")
+        _mark(
+            conn,
+            ("job:" + job) if job else ("listing:" + source),
+            source,
+            job,
+            "job" if job else "listing",
+            "time_transition_revalidation",
+        )
         conn.execute("UPDATE jobagg_dirty_transitions SET fired=1 WHERE object_key=?", (key,))
     return len(rows)
+
+
+def revalidate_contract(conn, *, contract_sha256, receipt_sha256, limit, deadline_at):
+    """Explicit reviewed epoch change; page all active units before switching.
+
+    The old epoch remains nonempty/repair until the final page. Concurrent N+1
+    is retained because each revalidation itself creates a new dirty version.
+    """
+    validate(conn)
+    if type(limit) is not int or limit <= 0 or not contract_sha256 or not receipt_sha256:
+        raise ValueError("reviewed_contract_revalidation_page_required")
+    row = conn.execute(
+        "SELECT contract_sha256,receipt_sha256,after_unit,complete FROM jobagg_dirty_revalidation WHERE id=1"
+    ).fetchone()
+    if row and row[:2] != (contract_sha256, receipt_sha256) and not row[3]:
+        raise ValueError("another_contract_revalidation_is_pending")
+    if row is None or row[:2] != (contract_sha256, receipt_sha256):
+        conn.execute(
+            "INSERT OR REPLACE INTO jobagg_dirty_revalidation VALUES(1,?,?,?,0)",
+            (contract_sha256, receipt_sha256, ""),
+        )
+        after = ""
+    else:
+        after = row[2]
+        if row[3]:
+            return {"complete": True, "processed": 0}
+    rows = conn.execute(
+        "SELECT unit,source_id,job_key,kind FROM jobagg_dirty_current WHERE unit>? ORDER BY unit LIMIT ?",
+        (after, limit),
+    ).fetchall()
+    for unit, source, job, kind in rows:
+        if time.monotonic() >= deadline_at:
+            raise TimeoutError("contract_revalidation_deadline")
+        _mark(conn, unit, source, job, kind, "contract_revalidation")
+        conn.execute("UPDATE jobagg_dirty_revalidation SET after_unit=? WHERE id=1", (unit,))
+    complete = len(rows) < limit
+    if complete:
+        conn.execute(
+            "UPDATE jobagg_dirty_state SET contract_sha256=? WHERE id=1", (contract_sha256,)
+        )
+        conn.execute("UPDATE jobagg_dirty_revalidation SET complete=1 WHERE id=1")
+    return {"complete": complete, "processed": len(rows)}
+
+
+def validate_freshness(conn, config):
+    expected = {key: config[key] for key in ("listing_max_age_seconds", "detail_max_age_seconds")}
+    row = conn.execute("SELECT freshness_json FROM jobagg_dirty_contract WHERE id=1").fetchone()
+    if row is None or row[0] is None or json.loads(row[0]) != expected:
+        raise ValueError("publication_freshness_contract_requires_preparation")

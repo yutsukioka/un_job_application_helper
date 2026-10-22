@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "f5ca4e1752a4b6298ea17e3fe00d4c244338c9d07ab315c6da1cad6f57f0ed8a"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "f2dbe097c3b833bad0f246845322e294fdec907670efbcc446da0025b55ac35d"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -1315,6 +1315,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             "UPDATE remediation_attempts SET finished_at=?,status=?,evidence=? WHERE attempt_id=?",
             (time.time(), status, dump(receipt), token),
         )
+        if status == 'done':
+            from jobagg.accepted_evidence import record_event
+            record_event(conn, task=task, attempt_id=token, binding=self.binding,
+                         run_id=getattr(self, '_runtime_run_id', None))
 
     def context(self, source, target, task, deadline):
         client = self.client_factory(source, self.policy)
@@ -1875,9 +1879,17 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 },
             )
             from jobagg.accepted_evidence import record as record_accepted_evidence
+            from jobagg.runtime_authority import state as runtime_state
+            active = runtime_state(conn)
+            acceptance = None
+            if active is not None:
+                if self.binding['implementation_sha256'] != implementation_hash():
+                    raise ValueError('Code changed before atomic acceptance reference')
+                acceptance = {'kind':'native_atomic_acceptance','run_id':self._runtime_run_id,
+                              'binding':self.binding,'transaction_id':active['source_transaction_id']}
             record_accepted_evidence(conn, job_key=detail.identity_key(), task_id=task['task_id'],
                 attempt_id=token, artifact_path=target / 'detail.json', artifact_sha256=sha(target / 'detail.json'),
-                job=stored_expected, proof=proof, body_sha256=body_sha)
+                job=stored_expected, proof=proof, body_sha256=body_sha, acceptance_proof=acceptance)
         return {"detail_stored": detail.identity_key(), "documents_queued": len(candidates)}
 
     def enqueue_document(self, conn, source_id, payload, *, refresh=False):

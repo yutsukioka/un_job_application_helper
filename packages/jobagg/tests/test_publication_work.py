@@ -1,3 +1,6 @@
+from contextlib import nullcontext
+import hashlib
+import json
 import sqlite3
 import time
 
@@ -9,12 +12,73 @@ from test_live_publication import setup, add_detail, run  # noqa: F401
 # ruff: noqa: F811
 
 
-def prepare(fixture):
-    with fixture["worker"].connect() as conn:
+def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
+    from jobagg import acceptance_catalog
+    from jobagg.remediation_worker import shared_owner
+
+    owner_path = owner_path or fixture["root"] / "migration-owner.lock"
+    with (
+        shared_owner(owner_path) if owner_fd is None else nullcontext(owner_fd) as fd,
+        fixture["worker"].connect() as conn,
+    ):
         conn.execute(
             "CREATE TABLE remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
         )
         accepted_evidence.prepare(conn)
+        if import_exits:
+            run_dir = fixture["root"] / "verified-old-worker"
+            run_dir.mkdir(exist_ok=True)
+            request = {
+                "run_id": run_dir.name,
+                "source_manifest_sha256": "a" * 64,
+                "expected_source_ids": ["test_custom_html"],
+            }
+            attempts = [
+                dict(row)
+                for row in conn.execute("SELECT * FROM remediation_attempts WHERE status='done'")
+            ]
+            report = {
+                "run_id": run_dir.name,
+                "status": "incomplete",
+                "source_manifest_sha256": "a" * 64,
+                "binding": {"implementation_sha256": "f" * 64, "shared_lock": str(owner_path)},
+                "concurrency": {
+                    "task_intervals": [
+                        {
+                            **{
+                                key: row[key]
+                                for key in ("attempt_id", "task_id", "source_id", "kind")
+                            },
+                            "outcome": {"detail_stored": "fixture"},
+                        }
+                        for row in attempts
+                    ]
+                },
+            }
+            (run_dir / "request.json").write_text(json.dumps(request))
+            (run_dir / "acceptance.json").write_text(json.dumps(report))
+            (run_dir / "worker_result.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": run_dir.name,
+                        "worker_exit_code": 0,
+                        "report_sha256": hashlib.sha256(
+                            (run_dir / "acceptance.json").read_bytes()
+                        ).hexdigest(),
+                        "request_sha256": hashlib.sha256(
+                            (run_dir / "request.json").read_bytes()
+                        ).hexdigest(),
+                    }
+                )
+            )
+            acceptance_catalog.import_run(
+                conn,
+                run_dir,
+                owner_fd=fd,
+                owner_path=owner_path,
+                reviewed_implementations={"f" * 64},
+                deadline_at=time.monotonic() + 10,
+            )
         accepted_evidence.backfill(conn, limit=100, deadline_at=time.monotonic() + 10)
         work.prepare(conn, contract_sha256="contract", epoch="epoch")
         while not work.bootstrap(conn, limit=10, deadline_at=time.monotonic() + 10):
@@ -58,7 +122,7 @@ def test_selected_projection_reads_only_admitted_dependencies_and_preserves_outp
             deadline_at=time.monotonic() + 10,
             max_bytes=2_000_000,
         )
-        assert receipt["manifest"]["version"] == "publication-projection-3"
+        assert receipt["manifest"]["version"] == "publication-projection-4"
         assert (
             destination.execute("SELECT count(*) FROM remediation_observations").fetchone()[0] == 1
         )
@@ -112,19 +176,119 @@ def test_oversized_unit_remains_explicit_hold_and_cannot_clear_backlog(setup):
 def test_time_and_delete_invalidation_never_disappear_behind_old_acknowledgement(setup):
     add_detail(setup)
     prepare(setup)
-    with setup['worker'].connect() as conn:
-        selection=select(setup,conn)
-        key=selection['units'][0]['job_key']
-        work.acknowledge(conn,selection,result_sha256='a'*64)
-        conn.execute("UPDATE jobs SET closes_at='2000-01-01T00:00:00+00:00' WHERE job_key=?",(key,))
-        metadata=select(setup,conn)
-        work.acknowledge(conn,metadata,result_sha256='b'*64)
-        assert work.vector(conn,contract_sha256='contract',now=time.time())['empty'] is False
-        assert work.advance_time(conn,now=time.time(),limit=1)==1
-        timed=select(setup,conn)
-        assert timed['units'][0]['operation']=='time_transition_revalidation'
-        work.acknowledge(conn,metadata,result_sha256='c'*64)
-        assert work.vector(conn,contract_sha256='contract',now=time.time())['pending']
-        conn.execute('DELETE FROM remediation_observations WHERE job_key=?',(key,))
-        missing=select(setup,conn)
-        assert any(item['reason']=='unknown_or_disabled_scope_requires_review' for item in missing['held'])
+    with setup["worker"].connect() as conn:
+        selection = select(setup, conn)
+        key = selection["units"][0]["job_key"]
+        work.acknowledge(conn, selection, result_sha256="a" * 64)
+        conn.execute(
+            "UPDATE jobs SET closes_at='2000-01-01T00:00:00+00:00' WHERE job_key=?", (key,)
+        )
+        metadata = select(setup, conn)
+        work.acknowledge(conn, metadata, result_sha256="b" * 64)
+        assert work.vector(conn, contract_sha256="contract", now=time.time())["empty"] is False
+        assert work.advance_time(conn, now=time.time(), limit=1) == 1
+        timed = select(setup, conn)
+        assert timed["units"][0]["operation"] == "time_transition_revalidation"
+        work.acknowledge(conn, metadata, result_sha256="c" * 64)
+        assert work.vector(conn, contract_sha256="contract", now=time.time())["pending"]
+        conn.execute("DELETE FROM remediation_observations WHERE job_key=?", (key,))
+        missing = select(setup, conn)
+        assert any(
+            item["reason"] == "unknown_or_disabled_scope_requires_review"
+            for item in missing["held"]
+        )
+
+
+def test_done_rows_without_exit_proof_remain_rejected(setup, tmp_path):
+    add_detail(setup)
+    prepare(setup, import_exits=False)
+    with setup["worker"].connect() as conn:
+        assert conn.execute("SELECT count(*) FROM jobagg_accepted_evidence").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT disposition FROM jobagg_evidence_backfill").fetchone()[0]
+            == "missing_successful_exit_proof"
+        )
+        selection = select(setup, conn)
+        destination = sqlite3.connect(tmp_path / "killed.sqlite3")
+        build_projection(
+            conn,
+            destination,
+            selection=selection,
+            deadline_at=time.monotonic() + 10,
+            max_bytes=2_000_000,
+        )
+        destination.close()
+    from jobagg.pipelines.live_publication import plan_publication
+
+    plan = plan_publication(tmp_path / "killed.sqlite3", setup["registry"], setup["output"])
+    assert plan["changes"] == []
+    assert plan["rejected"]
+
+
+def test_imported_exit_controls_are_rechecked_and_failed_exit_cannot_backfill(setup):
+    import pytest
+    from jobagg import acceptance_catalog
+    from jobagg.remediation_worker import shared_owner
+
+    add_detail(setup)
+    prepare(setup)
+    controls = setup["root"] / "verified-old-worker"
+    result = json.loads((controls / "worker_result.json").read_text())
+    result["worker_exit_code"] = -9
+    (controls / "worker_result.json").write_text(json.dumps(result))
+    owner = setup["root"] / "migration-owner.lock"
+    with shared_owner(owner) as fd, setup["worker"].connect() as conn:
+        attempt = dict(conn.execute("SELECT * FROM remediation_attempts").fetchone())
+        with pytest.raises(ValueError, match="successful_bound_report"):
+            acceptance_catalog.verified_attempt(
+                conn, attempt, deadline_at=time.monotonic() + 10, cache={}
+            )
+        with pytest.raises(ValueError, match="successful_bound_report"):
+            acceptance_catalog.import_run(
+                conn,
+                controls,
+                owner_fd=fd,
+                owner_path=owner,
+                reviewed_implementations={"f" * 64},
+                deadline_at=time.monotonic() + 10,
+            )
+
+
+def test_freshness_transition_and_checkpointed_contract_revalidation_never_noop(setup):
+    add_detail(setup)
+    with setup["worker"].connect() as conn:
+        conn.execute(
+            "CREATE TABLE remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
+        )
+        accepted_evidence.prepare(conn)
+        freshness = {"detail_max_age_seconds": 60, "listing_max_age_seconds": 120}
+        work.prepare(conn, contract_sha256="old", epoch="test", freshness=freshness)
+        while not work.bootstrap(conn, limit=5, deadline_at=time.monotonic() + 5):
+            pass
+        work.validate_freshness(conn, freshness)
+        due = conn.execute(
+            "SELECT due_at FROM jobagg_dirty_transitions WHERE object_key LIKE 'freshness:%'"
+        ).fetchone()[0]
+        assert work.vector(conn, contract_sha256="old", now=due + 1)["empty"] is False
+        assert work.advance_time(conn, now=due + 1, limit=1) == 1
+        first = work.revalidate_contract(
+            conn,
+            contract_sha256="new",
+            receipt_sha256="a" * 64,
+            limit=1,
+            deadline_at=time.monotonic() + 5,
+        )
+        assert not first["complete"]
+        assert (
+            "contract_epoch_changed"
+            in work.vector(conn, contract_sha256="new", now=time.time())["revalidation_reasons"]
+        )
+        second = work.revalidate_contract(
+            conn,
+            contract_sha256="new",
+            receipt_sha256="a" * 64,
+            limit=1,
+            deadline_at=time.monotonic() + 5,
+        )
+        assert second["complete"]
+        assert work.vector(conn, contract_sha256="new", now=time.time())["pending"]

@@ -64,6 +64,8 @@ class SharedPolicy:
             if not self.source_ids.issubset(covered):
                 raise ValueError('Source scope not covered by native policy migration')
             return {'status':'existing', 'path':str(self.root), 'authority':'indexed_sql'}
+        if (self.root / 'authority_migration.json').exists():
+            raise ValueError('policy_authority_migration_incomplete_review_required')
         if (self.root / 'authority.sqlite3').exists():
             raise ValueError('Native policy authority head missing; explicit repair required')
         if self.marker.exists():
@@ -253,6 +255,8 @@ class SharedPolicy:
             if value is None:
                 value = self._native = PolicyAuthority(self)
             return value
+        if (self.root / 'authority_migration.json').exists():
+            raise ValueError('policy_authority_migration_incomplete_review_required')
         if (self.root / 'authority.sqlite3').exists():
             raise ValueError('policy_authority_head_missing_review_required')
         return None

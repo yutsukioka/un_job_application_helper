@@ -1222,8 +1222,11 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
                 if native_state['phase'] == 'idle' or control.get('publication_sequence', 0) > 0:
                     previous = Path(control['publication_control_dir'] if native_state['phase'] == 'idle' else control['previous_publication_control_dir'])
                     receipt = read_json(previous / 'outcome.json')
-                    require(receipt.get('publication_status') in {'published','noop'} and receipt.get('publication_result_sha256') == digest(previous / 'publication_result.json'),
+                    require(receipt.get('publication_status') in {'published','noop','deferred'} and receipt.get('publication_result_sha256') == digest(previous / 'publication_result.json'),
                             'native batch escrow close lacks exact prior publication proof')
+                    if receipt['publication_status'] == 'deferred':
+                        validate_publication(read_json(previous / 'publication_result.json'), read_json(previous / 'publication_request.json'))
+                        require(not (previous / 'publication_generation_binding.json').exists(), 'deferred batch has generation binding')
                     with controller_scope(config, context):
                         close_native_batch_escrow(config, context, previous, receipt['publication_result_sha256'])
                     return {**receipt, 'storage_cycle_reconciled':True, 'worker_reexecuted':False, 'publisher_reexecuted':False}
@@ -1584,6 +1587,7 @@ def require_native_capabilities(config, conn):
     if 'jobagg.remediation_worker' in config.get('worker_argv', []):
         work = package_helper(config, 'publication_work')
         require(work.exists(conn), 'native publication-work migration required before fetching')
+        work.validate_freshness(conn, config)
         require(package_helper(config, 'accepted_evidence').exists(conn)
                 and package_helper(config, 'task_headers').exists(conn), 'native evidence/header migration required')
         require(isinstance(config.get('policy_audit'), dict) and isinstance(config.get('publication_admission'), dict),
@@ -1660,6 +1664,10 @@ def settle_native_publication(config, context, proof_sha256):
 
 
 def runtime_projection_target(config, run_id, controls):
+    with runtime_connection(config) as conn:
+        reused = package_helper(config, 'runtime_authority').publication_control(conn).get('reusable_projection')
+    if reused is not None:
+        return Path(reused['path'])
     context = config.get('_storage_context')
     if context is None:
         return Path(controls) / 'publication_snapshot.sqlite3'
@@ -1690,13 +1698,15 @@ def runtime_acknowledge(config, run_id, result, request, descriptor):
                 'empty': vector['empty'], 'held': vector['held']}
 
 
-def runtime_advance(config, run_id, controls, descriptor):
+def runtime_advance(config, run_id, controls, descriptor, *, reusable_request=None):
     with runtime_connection(config) as conn:
         authority = package_helper(config, 'runtime_authority')
         with authority.controller(conn, run_id=run_id, owner_fd=descriptor):
             authority.advance_publication(conn, run_id=run_id, controls=controls,
                 outcome_sha256=digest(controls / 'outcome.json'),
-                worker_result_sha256=digest(config['state_dir'] / 'runs' / run_id / 'worker_result.json'))
+                worker_result_sha256=digest(config['state_dir'] / 'runs' / run_id / 'worker_result.json'),
+                reusable_projection=(reusable_request or {}).get('publication_snapshot'),
+                reusable_selection=(reusable_request or {}).get('publication_selection'))
     runtime_active(config)
 
 
@@ -1756,6 +1766,11 @@ def runtime_resume(config, descriptor):
         work = package_helper(config, 'publication_work')
         with runtime_connection(config) as conn:
             vector = work.vector(conn, contract_sha256=config['_config_sha256'], now=time.time()) if work.exists(conn) else None
+            if vector:
+                control = package_helper(config, 'runtime_authority').publication_control(conn)
+                require(package_helper(config, 'publication_fence').verify_boundary(control.get('publication_cursor'),
+                        expected_scope=runtime_publication_scope(config)),
+                        'publication/export cursor requires explicit reconstruction before fetching')
             if vector and (vector['pending'] or vector['revalidation_reasons']):
                 require(not any(reason != 'time_transition_due' for reason in vector['revalidation_reasons']),
                         'publication contract requires explicit dirty-epoch migration before fetching')
@@ -1772,7 +1787,7 @@ def runtime_resume(config, descriptor):
     run = Path(config['_runtime_active_control'])
     with runtime_connection(config) as conn:
         control = package_helper(config, 'runtime_authority').publication_control(conn)
-    if control.get('publication_only') and control.get('publication_sequence', 0) == 0:
+    if value['phase'] == 'accepted' and control.get('publication_only') and control.get('publication_sequence', 0) == 0:
         runtime_queue_controls(config, value['run_id'], descriptor)
     if control.get('publication_sequence', 0):
         previous = Path(control['previous_publication_control_dir'])
@@ -1800,6 +1815,25 @@ def runtime_resume(config, descriptor):
                 "pending_backlog_empty": drained['empty'], 'publication_held': drained['held']}}
         if (run / "outcome.json").exists():
             terminal = read_json(run / "outcome.json")
+            if terminal.get('publication_status') == 'deferred':
+                request = read_json(run / 'publication_request.json')
+                result = read_json(run / 'publication_result.json')
+                require(read_json(run / 'publication_intent.json').get('request_sha256') == digest(run / 'publication_request.json')
+                        and terminal.get('publication_result_sha256') == digest(run / 'publication_result.json')
+                        and terminal.get('publication_exit_code') == 0
+                        and result.get('status') == 'deferred'
+                        and not (run / 'publication_generation_binding.json').exists(),
+                        'deferred native publication lacks exact no-generation proof')
+                validate_publication(result, request)
+                former_processes_absent(terminal)
+                snapshot_helper(config).validate_publication_snapshot(request, config['publication_worker_database'], owner_held=True,
+                    deadline_at=config.get('_entry_monotonic_deadline'))
+                context = config.get('_storage_context')
+                runtime_advance(config, value['run_id'], run, descriptor, reusable_request=request)
+                if context and context['ledger'].snapshot()['phase'] == 'publication_admitted':
+                    close_native_batch_escrow(config, context, run, terminal['publication_result_sha256'])
+                return {'_runtime_completed':{**terminal, 'accepted_work_retained':True,
+                    'publication_continuation_prepared':True, 'worker_reexecuted':False}}
             if terminal.get("publication_status") in {"published", "noop"}:
                 request = read_json(run / "publication_request.json")
                 require(read_json(run / "publication_intent.json").get("request_sha256") == digest(run / "publication_request.json")
@@ -1839,6 +1873,10 @@ def runtime_resume(config, descriptor):
         marker = pending.seal(config["state_dir"], value['run_id'], config_sha256=config["_config_sha256"],
                               database=config["publication_worker_database"], lease={"runtime_epoch": value["epoch"]},
                               publication_control_dir=run, projection_target=runtime_projection_target(config, value['run_id'], run))
+    if control.get('reusable_projection') is not None and marker.get('projection') is None:
+        require(control.get('reusable_selection') is not None, 'deferred projection selection missing')
+        pending.record_selection(config['state_dir'], control['reusable_selection'])
+        pending.record_projection(config['state_dir'], control['reusable_projection'])
     pending.validate(config["state_dir"], config_sha256=config["_config_sha256"], database=config["publication_worker_database"],
                      projection_target=runtime_projection_target(config, value['run_id'], run))
     pending.prepare_resume(config["state_dir"], process_evidence=former_processes_absent(state))
@@ -2088,7 +2126,8 @@ def publication_request(
     if runtime_enabled(config) and not context:
         pending_value = package_helper(config, "pending_publication").validate(
             config["state_dir"], config_sha256=config["_config_sha256"],
-            database=config["publication_worker_database"])
+            database=config["publication_worker_database"],
+            projection_target=runtime_projection_target(config, request['run_id'], config['_runtime_active_control']))
     snapshot_fields = {}
     selection = pending_value.get('selection') if pending_value else None
     if runtime_enabled(config) and selection is None:

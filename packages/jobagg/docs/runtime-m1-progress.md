@@ -113,3 +113,27 @@ actual production control roots have been reconciled or are activation-ready.
 No production A8 or 24-hour observation has been started. No claim is made about
 current all-source completeness, capacity compliance, production throughput or
 external-volume scale performance.
+
+## Acceptance and migration continuation
+
+The next stage replaces legacy done-row inference with an exact successful-exit
+catalogue and immutable observation snapshots. Native successful listing, detail
+and document occurrences also record independent acceptance in the same source
+transaction. Selected projection version 4 carries explicit backfill dispositions;
+versions 1–3 retain their original validator contracts.
+
+Quota preparation now commits finite payload/replay/verification pages, imports
+unindexed reservations, fences legacy APIs throughout preparation and journals
+cutover before rename. A fault after rename resumes the same charged authority.
+Task/shared-policy reconciliation retains orphan charges and flags unmatched task
+attempts. An overdue audit holds read-only; explicit bounded catch-up retains its
+old completion timestamp until the complete evidence pass finishes.
+
+Freshness transitions and reviewed, checkpointed contract revalidation invalidate
+empty-work truth. A full destination/export cursor is checked before fetching.
+Proven no-generation publisher deferrals keep the original sealed projection and
+selection, preserve old intent/outcome and resume in a new bounded publisher batch
+with unchanged storage ceilings. The real native drain fixture passes five
+profiles, including deferral with storage budget disabled/enabled and the prior
+escrow-receipt interruption. Policy migration/audit/reconciliation passes eight
+focused cases; these are separate scopes, not a package-wide result.

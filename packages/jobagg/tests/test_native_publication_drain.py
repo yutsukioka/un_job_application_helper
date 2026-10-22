@@ -20,7 +20,7 @@ from test_publication_work import prepare
 
 
 @pytest.mark.parametrize(
-    "budget,fault", [(False, None), (True, None), (True, "after_ledger_receipt")]
+    "budget,fault", [(False, None), (True, None), (True, "after_ledger_receipt"), (False, "deferred"), (True, "deferred")]
 )
 def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_projection(
     configured, setup, monkeypatch, budget, fault
@@ -131,7 +131,7 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
         )
     add_detail(setup, external_id="002")
     add_detail(setup, external_id="003")
-    prepare(setup)
+    prepare(setup, owner_path=config["shared_lock_path"], owner_fd=owner.fileno())
     with sqlite3.connect(setup["worker"].path) as conn:
         conn.execute("UPDATE jobagg_dirty_state SET contract_sha256=?", (config["_config_sha256"],))
         if budget:
@@ -216,7 +216,22 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
             return self.returncode
 
     monkeypatch.setattr(runner.subprocess, "Popen", Child)
-    if fault:
+    if fault == 'deferred':
+        original_publish = publish_worker.publish_incremental
+        deferred = {'done':False}
+        def defer_once(*args, **kwargs):
+            if not deferred['done']:
+                deferred['done'] = True
+                return {'status':'deferred','generation_not_started':True,'observation_set_sha256':'a'*64,
+                        'budget_exhausted':True,'completeness_certified':False}
+            return original_publish(*args, **kwargs)
+        monkeypatch.setattr(publish_worker,'publish_incremental',defer_once)
+        first = runner.tick(config, ['test_custom_html'])
+        assert first['publication_status']=='deferred', first
+        original_snapshot = calls[0]['publication_snapshot']
+        continued = runner.tick(config, ['test_custom_html'])
+        assert continued.get('publication_continuation_prepared'), continued
+    if fault == 'after_ledger_receipt':
         from jobagg import atomic_files
         from jobagg.storage_budget import StorageBudgetDeferred
 
@@ -245,7 +260,9 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
         name: (root / name).read_bytes()
         for name in ("request.json", "acceptance.json", "worker_result.json")
     }
-    assert len(calls) == 3
+    assert len(calls) == (4 if fault == 'deferred' else 3)
+    if fault == 'deferred':
+        assert calls[1]['publication_snapshot'] == original_snapshot
     assert all("worker_acceptance_sha256" in request for request in calls)
     assert all(record.get("worker_exit_code") is None for record in results)
     assert len({record["run_id"] for record in results}) == 1
@@ -255,10 +272,10 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
 
         assert storage_cycle.existing_context(config) is None
     assert (root / "outcome.json").exists()
-    assert len(list((root / "publication_batches").glob("*/outcome.json"))) == 2
+    assert len(list((root / "publication_batches").glob("*/outcome.json"))) == (3 if fault == 'deferred' else 2)
     with sqlite3.connect(setup["worker"].path) as conn:
         assert authority.validate(conn)["phase"] == "idle"
     quiet = runner.tick(config, ["test_custom_html"])
     assert quiet["publication_status"] == "proven_empty", quiet
-    assert len(calls) == 4
+    assert len(calls) == (5 if fault == 'deferred' else 4)
     assert all((root / name).read_bytes() == value for name, value in proof.items())

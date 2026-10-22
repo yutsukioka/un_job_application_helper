@@ -125,3 +125,84 @@ def test_restore_or_lagged_head_cannot_authorize_empty_window(native):
     authority.head.write_bytes(old)
     with pytest.raises(ValueError, match="restore_mismatch"):
         authority.due("example", time.time(), minimum=0, jitter=0, batch=0, pause=120)
+
+
+def test_checkpointed_migration_resumes_each_page_and_cutover_without_empty_charges(native):
+    from jobagg.policy_migration import step
+
+    policy, owner = native
+    for i in range(7):
+        policy.reserve(str(i), "example", "detail", time.time() - 20 + i, policy.root, str(i))
+    kwargs = dict(
+        owner_fd=owner.fileno(),
+        epoch="test",
+        pauses=dict.fromkeys(policy.source_ids, 120),
+        reviewed_writers=[{"name": "all fixture writers", "fenced": True}],
+        limit=2,
+    )
+
+    def crash(where):
+        if where == "after_database_rename":
+            raise RuntimeError("power loss")
+
+    progress = step(policy, **kwargs)
+    assert not progress["complete"]
+    with pytest.raises(ValueError, match="migration_incomplete"):
+        policy.reserve("must-not-dispatch", "example", "detail", time.time(), policy.root, "x")
+    for _ in range(40):
+        progress = step(policy, **kwargs)
+        if progress["phase"] == "cutover":
+            break
+    else:
+        pytest.fail("migration did not reach finite cutover")
+    with pytest.raises(RuntimeError, match="power loss"):
+        step(policy, **kwargs, fault=crash)
+    assert not (policy.root / "authority.json").exists()
+    assert step(policy, **kwargs)["complete"]
+    authority = PolicyAuthority(policy)
+    with authority.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 7
+        assert conn.execute("SELECT sum(n) FROM sources").fetchone()[0] == 7
+    with pytest.raises(ValueError, match="Malformed"):
+        policy.event_snapshot()  # lagged JSON is never admission authority
+
+
+def test_overdue_audit_has_explicit_bounded_catchup_without_charge_reset(native):
+    policy, owner = native
+    for i in range(3):
+        policy.reserve(str(i), "example", "detail", time.time() - 10 + i, policy.root, str(i))
+    authority = activate(policy, owner)
+    authority.owner_fd = owner.fileno()
+    future = time.time() + 100
+    with pytest.raises(ValueError, match="audit_overdue"):
+        authority.audit(limit=1, now=future, maximum_lag_seconds=1)
+    assert authority.revision() == 0  # an admission hold did not leave pending writes
+    for _ in range(3):
+        authority.audit(limit=1, now=future, maximum_lag_seconds=1, reviewed_catchup=True)
+    with authority.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 3
+        assert conn.execute("SELECT audit_completed_at FROM authority").fetchone()[0] == future
+
+
+def test_task_reconciliation_retains_orphan_charge_and_rejects_missing_charge(native):
+    from jobagg.policy_migration import reconcile_worker
+
+    policy, owner = native
+    policy.reserve("charged", "example", "detail", 10, policy.root, "task")
+    authority = activate(policy, owner)
+    worker = sqlite3.connect(":memory:")
+    worker.execute(
+        "CREATE TABLE remediation_attempts(attempt_id TEXT PRIMARY KEY,task_id TEXT,source_id TEXT,kind TEXT,status TEXT,started_at REAL,finished_at REAL)"
+    )
+    worker.execute(
+        "INSERT INTO remediation_attempts VALUES('unfunded','task','example','detail','reserved',10,NULL)"
+    )
+    worker.commit()
+    result = reconcile_worker(
+        authority, worker, after_attempt_id="", limit=2, deadline_at=time.monotonic() + 5
+    )
+    assert result["unresolved"][0]["attempt_id"] == "unfunded"
+    assert result["policy_only_reservations_retained"]
+    with authority.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
+    worker.close()

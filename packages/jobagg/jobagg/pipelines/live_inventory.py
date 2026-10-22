@@ -15,7 +15,7 @@ from jobagg.models import JobRecord
 from jobagg.pipelines.inventory_checks import verify_listing
 
 
-def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None, diagnostics=None):
+def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None, diagnostics=None, selection=None):
     import time
     from contextlib import closing
 
@@ -113,6 +113,10 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
             key = "listing:" + _digest(
                 {"source": source_id, "frame_sha256": receipt["frame_sha256"], "proof": proof}
             )
+            selected = next((item for item in (selection or {}).get('units',[]) if item['unit']=='listing:'+source_id),{})
+            if selected.get('operation') in {'time_transition_revalidation','contract_revalidation'}:
+                key = 'listing:' + _digest({'accepted_publication_key':key,'revalidation_version':selected['version'],
+                                           'contract':selection['contract_sha256']})
             target = targets[source_id]
             with closing(_ro(target)) as source_conn:
                 if _receipt_exists(source_conn, key) and _receipt_exists(consolidated, key):

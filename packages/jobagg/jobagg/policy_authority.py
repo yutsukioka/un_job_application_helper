@@ -227,7 +227,7 @@ class PolicyAuthority:
                         ),
                     )
 
-    def audit(self, *, limit, now, maximum_lag_seconds):
+    def audit(self, *, limit, now, maximum_lag_seconds, reviewed_catchup=False):
         """Incremental exact evidence audit; persistent cursor, explicit latency.
 
         Quota rows are retained even when evidence is damaged. Failed or overdue
@@ -235,12 +235,19 @@ class PolicyAuthority:
         """
         if type(limit) is not int or limit <= 0 or maximum_lag_seconds <= 0:
             raise ValueError("finite_policy_audit_contract_required")
+        # Overdue admission is a read-only hold, not an uncertain write. An
+        # explicitly invoked catch-up still checks finite pages and retains all
+        # charges; it never marks a partial audit complete.
+        with self.connect() as conn:
+            completed = conn.execute(
+                "SELECT audit_completed_at FROM authority WHERE id=1"
+            ).fetchone()[0]
+        if now - completed > maximum_lag_seconds and not reviewed_catchup:
+            raise ValueError("policy_audit_overdue_explicit_repair_required")
         with self.connect(write=True) as conn:
             control = conn.execute(
                 "SELECT audit_cursor,audit_completed_at FROM authority WHERE id=1"
             ).fetchone()
-            if now - control["audit_completed_at"] > maximum_lag_seconds:
-                raise ValueError("policy_audit_overdue_explicit_repair_required")
             rows = conn.execute(
                 "SELECT path,sha256 FROM evidence WHERE path>? ORDER BY path LIMIT ?",
                 (control["audit_cursor"], limit),
@@ -296,115 +303,22 @@ def _insert(conn, event):
 
 
 def migrate(policy, *, owner_fd, epoch, pauses, reviewed_writers, check_deadline=lambda: None):
-    """Owner-fenced one-time import; retains unindexed reservations and exact bytes.
+    """Compatibility driver for the explicit checkpointed preparation API.
 
-    A durable staging DB is restartable by exact event identity. The final head
-    binds a second census, every writer's supplied inventory, original owner and
-    database inode. No normal invocation calls this migration.
+    Each step durably commits a finite page; a caller's migration deadline can
+    stop/restart this driver. No worker startup calls this historical operation.
     """
-    _owner(owner_fd, policy.owner)
-    if (
-        not epoch
-        or not reviewed_writers
-        or any(value.get("fenced") is not True for value in reviewed_writers)
-    ):
-        raise ValueError("complete_reviewed_writer_inventory_required")
-    authority = PolicyAuthority(policy)
-    if authority.head.exists():
-        authority.revision()
-        return authority
-    events = policy.event_snapshot(check_deadline=check_deadline)
-    # event_snapshot groups only detail; import every reservation kind as well.
-    files = sorted((policy.root / "attempts").glob("*.json"))
-    evidence = {str(path): _sha(path) for path in files}
-    records = [json.loads(path.read_text()) for path in files]
-    staging = authority.path.with_suffix(".import.sqlite3")
-    with closing(sqlite3.connect(staging)) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.create_function("jobagg_policy_write_allowed", 0, lambda: 1)
-        conn.executescript("""CREATE TABLE IF NOT EXISTS authority(id INTEGER PRIMARY KEY,epoch TEXT,revision INTEGER,transaction_id TEXT,audit_cursor TEXT,audit_completed_at REAL);
-CREATE TABLE IF NOT EXISTS sources(source_id TEXT PRIMARY KEY,pause REAL,n INTEGER);
-CREATE TABLE IF NOT EXISTS attempts(attempt_id TEXT PRIMARY KEY,source_id TEXT,kind TEXT,sequence INTEGER,started_at REAL,effective_end REAL,batch_break INTEGER,event_json TEXT);
-CREATE INDEX IF NOT EXISTS policy_sequence ON attempts(source_id,kind,sequence DESC);
-CREATE INDEX IF NOT EXISTS policy_batch_break ON attempts(source_id,kind,batch_break,sequence DESC);
-CREATE INDEX IF NOT EXISTS policy_window ON attempts(source_id,kind,effective_end DESC);
-CREATE TABLE IF NOT EXISTS evidence(path TEXT PRIMARY KEY,sha256 TEXT);
-CREATE TABLE IF NOT EXISTS migration_receipt(id INTEGER PRIMARY KEY,receipt_json TEXT);""")
-        with conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO authority VALUES(1,?,0,?,?,?)",
-                (epoch, "bootstrap", "", time.time()),
-            )
-            if conn.execute("SELECT epoch FROM authority").fetchone()[0] != epoch:
-                raise ValueError("policy_import_epoch_changed")
-            for source in policy.source_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO sources VALUES(?,?,0)", (source, pauses[source])
-                )
-            replay_order = {
-                row["attempt_id"]: index
-                for group in events.values()
-                for index, row in enumerate(group)
-            }
-            for event in sorted(
-                records,
-                key=lambda value: (value["started_at"], replay_order.get(value["attempt_id"], 0)),
-            ):
-                check_deadline()
-                _insert(conn, event)
-            conn.executemany("INSERT OR REPLACE INTO evidence VALUES(?,?)", evidence.items())
-            if policy.event_snapshot(check_deadline=check_deadline) != events or any(
-                _sha(path) != digest for path, digest in evidence.items()
-            ):
-                raise ValueError("policy_import_final_reconciliation_changed")
-            conn.execute(
-                "INSERT OR REPLACE INTO migration_receipt VALUES(1,?)",
-                (
-                    _dump(
-                        {
-                            "epoch": epoch,
-                            "reviewed_writers": reviewed_writers,
-                            "evidence": evidence,
-                            "host_states_retained": True,
-                            "source_holds_retained": True,
-                        }
-                    ),
-                ),
-            )
-        for table in ("authority", "sources", "attempts", "evidence", "migration_receipt"):
-            for op in ("INSERT", "UPDATE", "DELETE"):
-                conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS policy_guard_{table}_{op} BEFORE {op} ON {table} BEGIN SELECT CASE WHEN jobagg_policy_write_allowed()!=1 THEN RAISE(ABORT,'policy_writer_not_admitted') END; END"
-                )
-        schema_hash = _schema_hash(conn)
-        conn.commit()
-    os.replace(staging, authority.path)
-    # Legacy claim/reservation APIs cannot consume an index with this schema.
-    atomic_write_text(
-        policy.root / "attempt_index.json", _dump({"schema": SCHEMA, "old_writers_fenced": True})
-    )
-    boundaries = {}
-    for name in ("attempts",):
-        info = (policy.root / name).stat()
-        boundaries[name] = [info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns]
-    from jobagg.publication_fence import _file_identity
+    from jobagg.policy_migration import step
 
-    immutable_controls = {}
-    for path in (policy.root / "bootstrap.json", policy.marker):
-        path.chmod(path.stat().st_mode & ~0o222)
-        immutable_controls[str(path)] = _file_identity(path)
-    head = {
-        "immutable_controls": immutable_controls,
-        "schema": SCHEMA,
-        "epoch": epoch,
-        "revision": 0,
-        "transaction_id": "bootstrap",
-        "pending": False,
-        "schema_sha256": schema_hash,
-        "last_wall_at": time.time(),
-        "database_identity": _signature(authority.path),
-        "owner_identity": _signature(policy.owner),
-        "legacy_boundaries": boundaries,
-    }
-    atomic_write_text(authority.head, _dump(head))
-    return authority
+    while True:
+        progress = step(
+            policy,
+            owner_fd=owner_fd,
+            epoch=epoch,
+            pauses=pauses,
+            reviewed_writers=reviewed_writers,
+            limit=256,
+            check_deadline=check_deadline,
+        )
+        if progress["complete"]:
+            return PolicyAuthority(policy)

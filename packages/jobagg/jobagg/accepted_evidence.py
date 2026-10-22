@@ -10,7 +10,7 @@ import json
 import sqlite3
 import time
 
-CONTRACT = "accepted-detail-evidence-1"
+CONTRACT = "accepted-detail-evidence-2"
 TABLE = "jobagg_accepted_evidence"
 
 
@@ -25,6 +25,15 @@ def exists(conn):
 
 
 def prepare(conn):
+    from jobagg.acceptance_catalog import prepare as prepare_exits
+
+    prepare_exits(conn)
+    conn.execute("""CREATE TABLE IF NOT EXISTS jobagg_accepted_events(version TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,attempt_id TEXT NOT NULL UNIQUE,task_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,kind TEXT NOT NULL,reference_json TEXT NOT NULL)""")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS jobagg_accepted_event_run ON jobagg_accepted_events(run_id,attempt_id)"
+    )
     conn.execute(f"""CREATE TABLE IF NOT EXISTS {TABLE}(version TEXT PRIMARY KEY,
         job_key TEXT NOT NULL,source_id TEXT NOT NULL,external_id TEXT NOT NULL,
         task_id TEXT NOT NULL,attempt_id TEXT NOT NULL,artifact_id TEXT NOT NULL,
@@ -40,12 +49,33 @@ def prepare(conn):
 
 
 def record(
-    conn, *, job_key, task_id, attempt_id, artifact_path, artifact_sha256, job, proof, body_sha256
+    conn,
+    *,
+    job_key,
+    task_id,
+    attempt_id,
+    artifact_path,
+    artifact_sha256,
+    job,
+    proof,
+    body_sha256,
+    acceptance_proof=None,
 ):
     if not exists(conn):
         return None  # Old workspaces keep their original exact resolver contract.
     from jobagg.remediation_worker import PUBLIC_FIELDS
 
+    if not acceptance_proof:
+        return None
+    if hashlib.sha256(job["description"].encode()).hexdigest() != body_sha256:
+        raise ValueError("accepted_reference_body_hash_differs")
+    cursor = conn.cursor()
+    cursor.row_factory = sqlite3.Row
+    observed = cursor.execute(
+        "SELECT * FROM remediation_observations WHERE job_key=?", (job_key,)
+    ).fetchone()
+    if observed is None or json.loads(observed["proof"]) != proof:
+        raise ValueError("accepted_reference_observation_missing_or_changed")
     value = {
         "job_key": job_key,
         "source_id": job["source_id"],
@@ -59,8 +89,10 @@ def record(
         "body_sha256": body_sha256,
         "public_fields_sha256": digest({key: job.get(key) for key in PUBLIC_FIELDS}),
         "contract": CONTRACT,
+        "observation": dict(observed),
+        "acceptance_proof": acceptance_proof,
     }
-    version = digest(value)
+    version = digest({key: item for key, item in value.items() if key != "artifact_path"})
     conn.execute(
         f"INSERT OR IGNORE INTO {TABLE} VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -101,6 +133,32 @@ def selected_attempts(conn, row, proof):
             or ref["external_id"] != str(row["external_id"])
         ):
             raise ValueError("accepted_reference_identity_or_contract_changed")
+        reference = json.loads(ref["reference_json"])
+        if digest({key: item for key, item in reference.items() if key != "artifact_path"}) != ref[
+            "version"
+        ] or any(
+            reference.get(key) != ref[key]
+            for key in (
+                "job_key",
+                "source_id",
+                "external_id",
+                "task_id",
+                "attempt_id",
+                "artifact_id",
+                "artifact_path",
+                "artifact_sha256",
+                "proof_sha256",
+                "body_sha256",
+                "public_fields_sha256",
+                "contract",
+            )
+        ):
+            raise ValueError("accepted_reference_version_or_columns_changed")
+        current = cursor.execute(
+            "SELECT * FROM remediation_observations WHERE job_key=?", (row["job_key"],)
+        ).fetchone()
+        if current is None or reference.get("observation") != dict(current):
+            continue
         attempt = cursor.execute(
             "SELECT * FROM remediation_attempts WHERE attempt_id=?", (ref["attempt_id"],)
         ).fetchone()
@@ -145,6 +203,10 @@ def backfill(conn, *, limit, deadline_at):
             "SELECT j.*,o.proof AS accepted_proof FROM jobs j JOIN remediation_observations o ON o.job_key=j.job_key LIMIT 0"
         ).description
     ]
+    cache = {}
+    from jobagg.acceptance_catalog import verified_attempt
+    from jobagg.remediation_worker import PUBLIC_FIELDS
+
     for values in rows:
         if time.monotonic() >= deadline_at:
             raise TimeoutError("accepted_evidence_backfill_deadline")
@@ -154,7 +216,20 @@ def backfill(conn, *, limit, deadline_at):
             conn, row, proof, deadline_at=deadline_at, legacy_only=True
         )
         disposition = "matched" if matches else "missing_exact_acceptance"
+        verified = []
         for match in matches:
+            acceptance = verified_attempt(
+                conn, match["attempt"], deadline_at=deadline_at, cache=cache
+            )
+            if acceptance is None:
+                disposition = "missing_successful_exit_proof"
+            else:
+                verified.append((match, acceptance))
+            if any(
+                match["artifact"]["job"].get(field) != row.get(field) for field in PUBLIC_FIELDS
+            ):
+                disposition = "conflicting_public_fields"
+        for match, acceptance in verified:
             attempt = match["attempt"]
             artifact = match["artifact"]
             receipt = json.loads(attempt["evidence"])
@@ -167,7 +242,8 @@ def backfill(conn, *, limit, deadline_at):
                 artifact_sha256=receipt["detail_sha256"],
                 job=artifact["job"],
                 proof=proof,
-                body_sha256=proof.get("body_sha256", proof.get("response_body_sha256", "")),
+                body_sha256=hashlib.sha256(artifact["job"]["description"].encode()).hexdigest(),
+                acceptance_proof=acceptance,
             )
         conn.execute(
             "INSERT INTO jobagg_evidence_backfill VALUES(?,?,?)",
@@ -180,4 +256,127 @@ def backfill(conn, *, limit, deadline_at):
         "rejections": conn.execute(
             "SELECT count(*) FROM jobagg_evidence_backfill WHERE disposition!='matched'"
         ).fetchone()[0],
+    }
+
+
+def legacy_rejection(conn, job_key, proof):
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='jobagg_evidence_backfill'"
+    ).fetchone():
+        return None
+    value = conn.execute(
+        "SELECT observation_sha256,disposition FROM jobagg_evidence_backfill WHERE job_key=?",
+        (job_key,),
+    ).fetchone()
+    if value and value[0] == digest(proof) and value[1] == "conflicting_public_fields":
+        return "worker_public_fields_differ_from_completed_detail_artifact"
+    return None
+
+
+def record_event(conn, *, task, attempt_id, binding, run_id):
+    """Successful native acceptance, including listing/document, in its own TX.
+
+    The object was durably captured before finish(); no process exit is inferred.
+    Older occurrences remain independent of the next refresh task state.
+    """
+    from jobagg.runtime_authority import state
+
+    active = state(conn)
+    if active is None:
+        return
+    if active["phase"] != "worker" or active["run_id"] != run_id:
+        raise ValueError("atomic_acceptance_run_or_phase_differs")
+    cursor = conn.cursor()
+    cursor.row_factory = sqlite3.Row
+    attempt = dict(
+        cursor.execute(
+            "SELECT * FROM remediation_attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+    )
+    if attempt["status"] != "done" or attempt["finished_at"] is None:
+        raise ValueError("atomic_acceptance_requires_successful_attempt")
+    receipt = json.loads(attempt["evidence"])
+    path_key, hash_key = {
+        "detail": ("detail_path", "detail_sha256"),
+        "listing": ("frame_path", "frame_sha256"),
+        "document": ("manifest", "sha256"),
+    }[attempt["kind"]]
+    proof = {
+        "contract": "native-atomic-acceptance-1",
+        "run_id": run_id,
+        "binding": binding,
+        "transaction_id": active["source_transaction_id"],
+        "attempt": attempt,
+        "task_identity": {
+            key: task[key] for key in ("task_id", "source_id", "kind", "external_id")
+        },
+        "artifact": {
+            "id": "sha256:" + receipt[hash_key],
+            "sha256": receipt[hash_key],
+            "path": receipt[path_key],
+        },
+    }
+    version = digest(proof)
+    conn.execute(
+        "INSERT INTO jobagg_accepted_events VALUES(?,?,?,?,?,?,?)",
+        (
+            version,
+            run_id,
+            attempt_id,
+            task["task_id"],
+            task["source_id"],
+            task["kind"],
+            json.dumps(proof, sort_keys=True),
+        ),
+    )
+    return version
+
+
+def atomic_run(conn, run_id, *, limit, deadline_at):
+    """Bounded independent proof after a dead worker; never fabricate its exit."""
+    from pathlib import Path
+    from jobagg.accepted_detail_lineage import _sha
+
+    cursor = conn.cursor()
+    cursor.row_factory = sqlite3.Row
+    if not cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='jobagg_accepted_events'"
+    ).fetchone():
+        return None
+    rows = cursor.execute(
+        "SELECT * FROM jobagg_accepted_events WHERE run_id=? ORDER BY attempt_id LIMIT ?",
+        (run_id, limit + 1),
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) > limit:
+        raise ValueError("atomic_acceptance_recovery_requires_larger_reviewed_bound")
+    refs = []
+    for row in rows:
+        if time.monotonic() >= deadline_at:
+            raise TimeoutError("atomic_acceptance_verification_deadline")
+        proof = json.loads(row["reference_json"])
+        attempt = cursor.execute(
+            "SELECT * FROM remediation_attempts WHERE attempt_id=?", (row["attempt_id"],)
+        ).fetchone()
+        if (
+            digest(proof) != row["version"]
+            or proof.get("contract") != "native-atomic-acceptance-1"
+            or proof.get("run_id") != run_id
+            or attempt is None
+            or dict(attempt) != proof["attempt"]
+            or any(
+                attempt[key] != row[key] for key in ("attempt_id", "task_id", "source_id", "kind")
+            )
+            or _sha(Path(proof["artifact"]["path"]), deadline_at=deadline_at)
+            != proof["artifact"]["sha256"]
+        ):
+            raise ValueError("atomic_acceptance_reference_or_artifact_changed")
+        refs.append(row["version"])
+    return {
+        "kind": "verified_native_atomic_acceptance",
+        "run_id": run_id,
+        "versions": refs,
+        "sha256": digest(refs),
+        "worker_exit_verified": False,
     }

@@ -31,8 +31,10 @@ FILTERS = {
 }
 
 
-SELECTED_VERSION = 'publication-projection-3'
-SELECTED_FILTERS = {**FILTERS, 'jobagg_accepted_evidence': 'immutable_selected_accepted_versions_v1'}
+SELECTED_VERSION = 'publication-projection-4'
+PREVIOUS_SELECTED_VERSION = 'publication-projection-3'
+PREVIOUS_SELECTED_FILTERS = {**FILTERS, 'jobagg_accepted_evidence': 'immutable_selected_accepted_versions_v1'}
+SELECTED_FILTERS = {**PREVIOUS_SELECTED_FILTERS, 'jobagg_evidence_backfill':'selected_legacy_acceptance_dispositions_v1'}
 
 
 def _dump(value):
@@ -66,14 +68,14 @@ def _row_digest(row):
 
 
 def validate_manifest(manifest):
-    expected_filters = SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == SELECTED_VERSION else (
+    expected_filters = SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == SELECTED_VERSION else PREVIOUS_SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == PREVIOUS_SELECTED_VERSION else (
         LEGACY_FILTERS
         if isinstance(manifest, dict) and manifest.get("version") == "publication-projection-1"
         else FILTERS
     )
     if (
         not isinstance(manifest, dict)
-        or manifest.get("version") not in {VERSION, SELECTED_VERSION, "publication-projection-1"}
+        or manifest.get("version") not in {VERSION, SELECTED_VERSION, PREVIOUS_SELECTED_VERSION, "publication-projection-1"}
         or manifest.get("filters") != expected_filters
     ):
         raise ValueError("Unknown publication projection schema or filters")
@@ -228,7 +230,7 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None, s
             if selection is not None:
                 def placeholders(values):
                     return '(' + ','.join('?' for _ in values) + ')'
-                if table in {'jobs', 'remediation_observations', 'remediation_documents', 'jobagg_accepted_evidence'}:
+                if table in {'jobs', 'remediation_observations', 'remediation_documents', 'jobagg_accepted_evidence', 'jobagg_evidence_backfill'}:
                     where = ' WHERE job_key IN ' + placeholders(job_keys)
                     params = tuple(job_keys)
                 elif table == 'remediation_sources':
