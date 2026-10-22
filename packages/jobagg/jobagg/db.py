@@ -73,6 +73,8 @@ class JobDatabase:
         from jobagg.semantic_history import register_denied_writer
         register_denied_writer(conn)
         conn.create_function("jobagg_runtime_write_allowed", 0, lambda: 0)
+        from jobagg.publication_fence import configure
+        configure(conn, self.path, read_only=self.read_only)
         try:
             if not self.read_only:
                 self._apply_pragmas(conn)

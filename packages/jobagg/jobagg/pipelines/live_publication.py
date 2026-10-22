@@ -300,6 +300,7 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
         "created_at": _now(),
         "output_dir": str(output),
         "worker_database": str(Path(worker_database).resolve()),
+        "publication_target_paths": sorted(str(path) for path in {*targets.values(), output / "all_jobs.sqlite3"}),
         "registry_sha256": _sha(registry_path),
         "changes": [],
         "listing_frames": [],
@@ -987,9 +988,10 @@ def _apply_database(path, changes, generation, fault=None, frames=(), *, plan=No
                     or (wal.stat().st_size if wal.exists() else 0) > old_wal_bytes):
                 raise ValueError("publication_database_grew_after_admission")
             conn.execute(f"PRAGMA max_page_count={maximum_pages}")
-        conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {_JOURNAL}(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)"
-        )
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (_JOURNAL,)).fetchone():
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {_JOURNAL}(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)"
+            )
         semantic_versions = set() if policy else None
         pending_receipts = [] if policy else None
         if policy:
@@ -1215,11 +1217,21 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=
             allowed_roots=[plan["output_dir"]], deadline_at=deadline_at,
         )
         _save(Path(plan["generation_root"]) / "semantic-coverage.json", aggregate)
+    publication_boundary = None
+    if (plan.get("publication_target_paths") and
+            (not plan.get("previous_publication_boundary") or plan.get("previous_publication_boundary_verified") is True)):
+        from jobagg.publication_fence import seal_boundary
+        manifest_path = Path(plan["generation_root"]) / "exports.json"
+        publication_boundary = seal_boundary(
+            plan["publication_target_paths"], json.loads(manifest_path.read_text()),
+            output_root=plan["output_dir"], previous=plan.get("previous_publication_boundary"))
     gate.update(
         state="complete",
+        publication_boundary=publication_boundary,
         status="published",
         readback_verified=True,
-        pending_backlog_empty=plan.get("pending_backlog_empty_after_generation") is True,
+        pending_backlog_empty=(plan.get("pending_backlog_empty_after_generation") is True and
+                               (not plan.get("previous_publication_boundary") or plan.get("previous_publication_boundary_verified") is True)),
         completed_at=_now(),
         changed_jobs=len(plan["changes"]),
         published_listing_frames=len(plan["listing_frames"]),
@@ -1246,6 +1258,7 @@ def _publish_incremental(
     job_keys=None,
     publication_policy=None,
     storage_budget_lease=None,
+    previous_publication_boundary=None,
 ):
     """Publish while the caller holds the shared owner; never acquires it twice.
 
@@ -1273,6 +1286,11 @@ def _publish_incremental(
     )
     if publication_policy is not None:
         plan["publication_policy"] = publication_policy
+    if previous_publication_boundary is not None:
+        from jobagg.publication_fence import publication_scope, verify_boundary
+        plan["previous_publication_boundary"] = previous_publication_boundary
+        plan["previous_publication_boundary_verified"] = verify_boundary(
+            previous_publication_boundary, expected_scope=publication_scope(registry_path, output_dir))
     if not execute:
         return {"status": "preview", "plan": plan}
     if not plan["changes"] and not plan["listing_frames"]:

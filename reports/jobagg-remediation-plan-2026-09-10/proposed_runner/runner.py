@@ -1487,6 +1487,15 @@ def runtime_enabled(config):
     return bool(config.get("runtime_control", "jobagg.remediation_worker" in config.get("worker_argv", [])))
 
 
+def runtime_publication_scope(config):
+    argv = config.get("publication_argv", [])
+    if "--output-dir" not in argv:
+        return None
+    require(argv.count("--output-dir") == 1, "publication output scope is ambiguous")
+    return package_helper(config, "publication_fence").publication_scope(
+        config["_registry_path"], Path(argv[argv.index("--output-dir")+1]))
+
+
 @contextmanager
 def runtime_connection(config):
     import sqlite3
@@ -1827,7 +1836,14 @@ def publication_request(
             files.append(
                 {"path": snapshot["wal"]["path"], "sha256": snapshot["wal"]["sha256"]}
             )
+    prior_boundary = {}
+    if runtime_enabled(config):
+        with runtime_connection(config) as conn:
+            boundary = package_helper(config, "runtime_authority").publication_control(conn).get("publication_cursor")
+        if boundary is not None:
+            prior_boundary["previous_publication_boundary"] = boundary
     return {
+        **prior_boundary,
         "schema_version": 1,
         "run_id": request["run_id"],
         "generated_at": now().isoformat(),
@@ -1852,14 +1868,14 @@ def validate_publication(result, request):
         isinstance(result, dict) and result.get("schema_version") == 1,
         "invalid publication receipt",
     )
-    for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy"):
+    for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy", "previous_publication_boundary"):
         require(
             (key in result) == (key in request),
             "publication " + key + " presence differs",
         )
     for key in PUBLICATION_BINDINGS + tuple(
         key
-        for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy")
+        for key in ("publication_snapshot", "recovery_generation_binding", "publication_policy", "previous_publication_boundary")
         if key in request
     ):
         require(
@@ -2437,7 +2453,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
 
     if runtime_enabled(config) and resume is None:
         with runtime_connection(config) as conn:
-            package_helper(config, "runtime_authority").begin(conn, run_id, config["_config_sha256"])
+            package_helper(config, "runtime_authority").begin(conn, run_id, config["_config_sha256"],
+                control_dir=run_dir, publication_scope=runtime_publication_scope(config))
         config["_runtime_active_run"] = run_id
 
     def save():
@@ -2735,6 +2752,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                 publication_status=result["status"],
                 readback_verified=result.get("readback_verified") is True,
                 pending_backlog_empty=result.get("pending_backlog_empty") is True,
+                publication_boundary=result.get("publication_boundary"),
                 publication_result_sha256=digest(pub_result_path),
                 publication_recovery_allowed=result["status"] == "incomplete",
             )
@@ -2804,7 +2822,10 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             if (runtime_enabled(config) and record.get("publication_status") in {"published", "noop"}
                     and record.get("pending_backlog_empty") is True):
                 with runtime_connection(config) as conn:
-                    package_helper(config, "runtime_authority").finish_publication(conn, run_id)
+                    helper = package_helper(config, "runtime_authority")
+                    if record.get("publication_boundary") is not None:
+                        helper.remember_publication_boundary(conn, run_id, record["publication_boundary"])
+                    helper.finish_publication(conn, run_id)
             if record["status"] == "complete":
                 atomic_json(config["state_dir"] / "last_complete.json", record)
         finally:

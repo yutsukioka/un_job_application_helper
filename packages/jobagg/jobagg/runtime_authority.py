@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-SCHEMA = 'jobagg-runtime-authority-1'
+SCHEMA = 'jobagg-runtime-authority-2'
 
 
 class RuntimeRepairRequired(ValueError):
@@ -105,12 +105,18 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
         if existing['epoch'] != epoch or existing['owner_path'] != str(Path(owner_path).absolute()):
             raise RuntimeRepairRequired('runtime_activation_binding_changed')
         return existing
-    conn.execute('CREATE TABLE jobagg_runtime_state(id INTEGER PRIMARY KEY CHECK(id=1),schema TEXT,epoch TEXT,owner_path TEXT,revision INTEGER,tables_json TEXT,bootstrap_json TEXT,run_id TEXT,phase TEXT,config_sha256 TEXT,start_revision INTEGER)')
+    conn.execute("CREATE TABLE jobagg_runtime_state(id INTEGER PRIMARY KEY CHECK(id=1),schema TEXT,epoch TEXT,owner_path TEXT,revision INTEGER,tables_json TEXT,bootstrap_json TEXT,run_id TEXT,phase TEXT,config_sha256 TEXT,start_revision INTEGER,control_json TEXT NOT NULL DEFAULT '{}')")
     tables = _tables(conn)
-    conn.execute('INSERT INTO jobagg_runtime_state VALUES(1,?,?,?,?,?,?,NULL,\'idle\',NULL,0)',
+    conn.execute('INSERT INTO jobagg_runtime_state VALUES(1,?,?,?,?,?,?,NULL,\'idle\',NULL,0,\'{}\')',
                  (SCHEMA, epoch, str(Path(owner_path).absolute()), 0, json.dumps(tables), json.dumps(bootstrap_receipt, sort_keys=True)))
     for sql in _triggers(tables).values():
         conn.execute(sql)
+    if bootstrap_receipt.get('publication_boundary') is not None:
+        from jobagg.publication_fence import verify_boundary
+        if not verify_boundary(bootstrap_receipt['publication_boundary']):
+            raise RuntimeRepairRequired('runtime_publication_bootstrap_boundary_invalid')
+        conn.execute('UPDATE jobagg_runtime_state SET control_json=? WHERE id=1',
+                     (json.dumps({'publication_cursor': bootstrap_receipt['publication_boundary']}, sort_keys=True),))
     bootstrap_receipt['schema_sha256'] = _schema_hash(conn)
     conn.execute('UPDATE jobagg_runtime_state SET bootstrap_json=? WHERE id=1', (json.dumps(bootstrap_receipt, sort_keys=True),))
     return validate(conn)
@@ -128,11 +134,15 @@ def binding(path):
                 'bootstrap_sha256': hashlib.sha256(value['bootstrap_json'].encode()).hexdigest()}
 
 
-def begin(conn, run_id, config_sha256):
+def begin(conn, run_id, config_sha256, *, control_dir=None, publication_scope=None):
     value = validate(conn)
     if value['phase'] != 'idle':
         raise RuntimeRepairRequired('runtime_active_work_requires_continuation')
-    conn.execute("UPDATE jobagg_runtime_state SET run_id=?,phase='worker',config_sha256=?,start_revision=revision WHERE id=1", (run_id, config_sha256))
+    control = json.loads(value['control_json'])
+    control.update(publication_sequence=0, publication_control_dir=str(control_dir) if control_dir else None,
+                   publication_scope=publication_scope)
+    conn.execute("UPDATE jobagg_runtime_state SET run_id=?,phase='worker',config_sha256=?,start_revision=revision,control_json=? WHERE id=1",
+                 (run_id, config_sha256, json.dumps(control, sort_keys=True)))
 
 
 def transition(conn, run_id, old, new):
@@ -168,10 +178,16 @@ def writer(conn, *, run_id, owner_path):
 
 def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
     value = validate(conn)
-    return (value['run_id'] == run_id and value['phase'] == 'worker'
+    if not (value['run_id'] == run_id and value['phase'] == 'worker'
             and type(accepted_progress) is int and accepted_progress == 0
-            and value['revision'] == value['start_revision']
-            and publication_empty_check is not None and publication_empty_check(value) is True)
+            and value['revision'] == value['start_revision']):
+        return False
+    if publication_empty_check is not None:
+        return publication_empty_check(value) is True
+    from jobagg.publication_fence import verify_boundary
+    control = json.loads(value['control_json'])
+    return (control.get('publication_scope') is not None and
+            verify_boundary(control.get('publication_cursor'), expected_scope=control['publication_scope']))
 
 
 def close_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
@@ -193,3 +209,19 @@ def finish_publication(conn, run_id):
         value['phase'] = 'publisher'
     if value['phase'] == 'publisher':
         transition(conn, run_id, 'publisher', 'idle')
+
+
+def publication_control(conn):
+    return json.loads(validate(conn)['control_json'])
+
+
+def remember_publication_boundary(conn, run_id, boundary):
+    value = validate(conn)
+    if value['run_id'] != run_id:
+        raise RuntimeRepairRequired('runtime_publication_boundary_run_differs')
+    from jobagg.publication_fence import verify_boundary
+    control = json.loads(value['control_json'])
+    if not verify_boundary(boundary, expected_scope=control.get('publication_scope')):
+        raise RuntimeRepairRequired('runtime_publication_boundary_not_verified')
+    control['publication_cursor'] = boundary
+    conn.execute('UPDATE jobagg_runtime_state SET control_json=? WHERE id=1', (json.dumps(control, sort_keys=True),))

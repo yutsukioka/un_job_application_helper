@@ -78,7 +78,7 @@ def same_database_binding(expected, actual):
     Physical WAL evidence is retained in the seal even when the runtime authority
     proves a checkpoint did not change the accepted database revision.
     """
-    if expected.get("semantic", {}).get("schema") != "jobagg-runtime-authority-1":
+    if expected.get("semantic", {}).get("schema") not in {"jobagg-runtime-authority-1", "jobagg-runtime-authority-2"}:
         return expected == actual
     if expected.get("semantic") != actual.get("semantic"):
         return False

@@ -34,7 +34,7 @@ def _owner(path, inherited):
                 fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 fcntl.flock(inherited, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                yield
+                yield inherited
             else:
                 fcntl.flock(probe, fcntl.LOCK_UN)
                 raise ValueError("Inherited shared owner is not locked")
@@ -42,7 +42,7 @@ def _owner(path, inherited):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as owner:
             fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            yield
+            yield owner.fileno()
 
 
 def _request(args, *, owner_held=False, deadline_at=None, validation=None):
@@ -138,12 +138,17 @@ def main(argv=None):
                     request_identity=_recovery_identity(request) if request else None,
                     publication_policy=policy,
                     storage_budget_lease=lease,
+                    previous_publication_boundary=request.get("previous_publication_boundary"),
                 )
         if recovery and (
             result.get("generation_id") != recovery["binding"]["generation_id"]
             or result.get("observation_set_sha256") != recovery["binding"]["observation_set_sha256"]
         ):
             raise ValueError("Publisher returned a different recovery generation")
+        if result.get("status") == "no_changes" and request.get("previous_publication_boundary"):
+            from jobagg.publication_fence import publication_scope, verify_boundary
+            if verify_boundary(request["previous_publication_boundary"], expected_scope=publication_scope(args.registry, args.output_dir)):
+                result["publication_boundary"] = request["previous_publication_boundary"]
         if request:
             status = {"published": "published", "no_changes": "noop", "deferred": "deferred"}.get(
                 result["status"], "incomplete"
@@ -155,6 +160,7 @@ def main(argv=None):
                 "publication_snapshot_validation": checked["validation_receipt"],
                 "status": status,
                 "publication": result,
+                "publication_boundary": result.get("publication_boundary"),
                 "readback_verified": result.get("readback_verified") is True,
                 "pending_backlog_empty": result.get("pending_backlog_empty") is True,
                 "observation_set_sha256": result.get("observation_set_sha256"),
@@ -169,8 +175,10 @@ def main(argv=None):
             with write_scope(lease, (policy or {}).get("write_limits")) as escrow:
                 if lease is not None and not Path(args.shared_lock).is_file():
                     raise ValueError("admitted_publication_requires_existing_owner")
-                with _owner(args.shared_lock, inherited):
-                    result = invoke(owner_held=True)
+                with _owner(args.shared_lock, inherited) as descriptor:
+                    from jobagg.publication_fence import writer_scope
+                    with writer_scope(descriptor, args.shared_lock, args.output_dir):
+                        result = invoke(owner_held=True)
                 if escrow is not None and result.get("status") in {"incomplete", "deferred"}:
                     escrow.keep_open = True
         except BlockingIOError:
