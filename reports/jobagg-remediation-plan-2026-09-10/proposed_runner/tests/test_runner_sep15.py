@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 
 import pytest
 from test_runner_reliability import phase_config, RUNNER
@@ -46,7 +47,17 @@ def test_health_ages_liveness_without_manufacturing_publication(fixture):
     assert result["publication_currently_confirmed"] is False
 
 
-def test_three_same_recovery_failures_hold_then_evidence_change_rearms(fixture):
+def reviewed_probe(fixture):
+    config, _ = runner.load_config(fixture.config_path)
+    obs.condition_fingerprint(config, RUNNER)
+    review = fixture.root / "reviewed-recovery.txt"
+    review.write_text("Reviewed synthetic recovery evidence; revalidate original intent without bypass")
+    obs.authorize_stage_probe(config, "publication", evidence_path=review,
+                              evidence_sha256=hashlib.sha256(review.read_bytes()).hexdigest(),
+                              expires_at=time.time()+60)
+
+
+def test_three_same_recovery_failures_need_review_after_evidence_change(fixture):
     phase_config(fixture, publication="commit_then_fail")
     code, first = fixture.invoke()
     assert code == 3
@@ -61,6 +72,8 @@ def test_three_same_recovery_failures_hold_then_evidence_change_rearms(fixture):
     assert len((fixture.root / "worker_starts.txt").read_text().splitlines()) == 1
     original = (Path(first["run_dir"]) / "publication_request.json").read_bytes()
     wal.write_bytes(b"")
+    assert fixture.invoke()[0] == 75  # Mutable metadata is not recovery proof.
+    reviewed_probe(fixture)
     code, recovered = fixture.invoke()
     assert code == 0 and recovered["publication_status"] == "published"
     assert (
@@ -80,7 +93,7 @@ def test_three_same_recovery_failures_hold_then_evidence_change_rearms(fixture):
 
 
 def test_failed_snapshot_binding_remains_held_after_code_or_config_change(fixture):
-    # A condition change permits revalidation; it never bypasses it.
+    # Only reviewed revalidation permits a probe; it never bypasses bindings.
     phase_config(fixture, publication="commit_then_fail")
     fixture.invoke()
     (fixture.root / "worker.sqlite").write_bytes(b"changed database")
@@ -90,6 +103,8 @@ def test_failed_snapshot_binding_remains_held_after_code_or_config_change(fixtur
     c = json.loads(fixture.config_path.read_text())
     c["timeout_seconds"] += 1
     fixture.config_path.write_text(json.dumps(c))
+    assert fixture.invoke()[0] == 75
+    reviewed_probe(fixture)
     code, result = fixture.invoke()
     assert code == 3 and "configuration differs" in result["reasons"][0]
     assert len((fixture.root / "publication_commits.txt").read_text().splitlines()) == 1

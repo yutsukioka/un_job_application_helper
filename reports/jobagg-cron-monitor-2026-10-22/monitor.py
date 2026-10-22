@@ -15,12 +15,12 @@ The monitor observes the deployed dispatcher through its own durable evidence:
 It never writes to dispatcher state, databases, logs, receipts or the shared lock.
 All output is written under ``--out-dir`` (default: ``runtime/`` beside this file):
 
-- ``latest.json``   atomically replaced current snapshot with active alerts;
-- ``cycles.jsonl``  one record per observed terminal attempt (append-only);
-- ``alerts.jsonl``  alert start/severity-change/resolution transitions;
-- ``samples.jsonl`` compact per-sample trend observations;
-- ``monitor.log``   human-readable sample and alert lines;
-- ``monitor.lock``  advisory PID lock for the long-running mode.
+- ``latest.json`` atomically stores the bounded cycle window, deduplication IDs,
+  alert transitions and A8 observations in one restart-safe checkpoint.
+- ``monitor.lock`` prevents concurrent observation writers for this output root.
+
+Observation discovery is explicitly bounded; truncated history is incomplete.
+No process inspection, crontab command or provider dispatch is part of sampling.
 
 A 15-minute invocation is one bounded dispatcher batch. Counts here describe
 observed ticks and publications; they do not certify complete source coverage.
@@ -35,11 +35,8 @@ import hashlib
 import json
 import os
 import signal
-import statistics
 import subprocess
-import sys
 import tempfile
-from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -104,6 +101,8 @@ def age_seconds(value: Any, now: datetime) -> float | None:
 
 def read_json(path: Path, default: Any = None) -> Any:
     try:
+        if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+            return default
         return json.loads(path.read_text())
     except (FileNotFoundError, NotADirectoryError):
         return default
@@ -489,13 +488,7 @@ def a8_readiness(records: list[dict[str, Any]]) -> dict[str, Any]:
             'safe_downshift_verified': downshift, 'ready': streak >= 3 and overlap and downshift}
 
 
-def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attempts: int = 256) -> dict[str, Any]:
-    """One bounded read-only observation. Writes are confined to monitor output.
-
-    The bounded discovery window is explicit: an oversized receipt directory is
-    reported as incomplete, never interpreted as no history or healthy silence.
-    """
-    import time
+def observation_paths(config, config_path, output):
     base = config_path.parent
     state = resolve_relative(base, config.get('state_dir', 'dispatcher-attempts'))
     attempts = resolve_relative(base, config.get('attempt_state_dir', str(state)))
@@ -508,13 +501,36 @@ def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attem
     output = output.absolute()
     if output.resolve() != output or any(output == root or output.is_relative_to(root) for root in protected):
         raise ValueError('Monitor output must be a direct separate path outside production roots')
+    return state, attempts, output
+
+
+def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attempts: int = 256) -> dict[str, Any]:
+    """One bounded read-only observation. Writes are confined to monitor output.
+
+    The bounded discovery window is explicit: an oversized receipt directory is
+    reported as incomplete, never interpreted as no history or healthy silence.
+    """
+    import time
+    state, attempts, output = observation_paths(config, config_path, output)
     now = utcnow()
     started = time.monotonic()
     health = read_json(attempts / 'health.json', {})
     candidates = []
     incomplete = False
     directory = attempts / 'attempts'
-    if directory.exists():
+    index = {}
+    if health.get('attempt_index_schema') == 1:
+        indexed = [*health.get('active_attempts', {}).values(), *health.get('recent_attempts', [])]
+        for item in indexed:
+            identifier = item.get('attempt_id')
+            if not isinstance(identifier, str) or not identifier or Path(identifier).name != identifier:
+                incomplete = True
+                continue
+            index[identifier] = item
+        candidates = [directory / identifier for identifier in index]
+        incomplete = incomplete or bool(health.get('attempt_index_overflow')) or len(candidates) > max_attempts
+        candidates = candidates[-max_attempts:]
+    elif directory.exists():
         with os.scandir(directory) as entries:
             for entry in entries:
                 if len(candidates) >= max_attempts or time.monotonic() - started >= 5:
@@ -523,10 +539,24 @@ def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attem
                 if entry.is_dir(follow_symlinks=False):
                     candidates.append(Path(entry.path))
     records = []
+    latest_attempt = health.get('last_attempt_id')
+    if isinstance(latest_attempt, str) and Path(latest_attempt).name == latest_attempt:
+        latest_path = directory / latest_attempt
+        candidates = [latest_path, *[p for p in candidates if p != latest_path]][:max_attempts]
     for path in candidates:
+        if time.monotonic()-started >= 5:
+            incomplete = True
+            break
         intent = read_json(path / 'intent.json')
         if isinstance(intent, dict):
             outcome = read_json(path / 'outcome.json')
+            proof = index.get(path.name)
+            if proof is not None:
+                if (sha256_file(path / 'intent.json') != proof.get('intent_sha256') or
+                        (proof.get('outcome_sha256') and (not isinstance(outcome, dict) or
+                         sha256_file(path / 'outcome.json') != proof['outcome_sha256']))):
+                    incomplete = True
+                    continue
             record = build_attempt_record(path, intent, outcome, now)
             result = (outcome or {}).get('result') or {}
             # These are explicit receipts, not guesses from cadence or timestamps.
@@ -537,6 +567,8 @@ def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attem
                           peak_active_sources=concurrency.get('peak_active_sources'),
                           safe_downshift_verified=concurrency.get('safe_downshift_verified'))
             records.append(record)
+        elif path.name in index:
+            incomplete = True
     previous = read_json(output / 'latest.json', {})
     prior_ids = previous.get('terminal_attempt_ids', [])
     seen = set(prior_ids)
@@ -556,6 +588,12 @@ def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attem
         alerts.append('accepted_work_pending')
     if health.get('unresolved_publication'):
         alerts.append('publication_recovery_pending')
+    quiet = (health.get('last_proven_empty_at') is not None and
+             health.get('last_proven_empty_attempt_id') == health.get('last_attempt_id') and
+             not health.get('accepted_work_pending') and not health.get('unresolved_publication'))
+    published_age = age_seconds(health.get('last_publication_complete_at'), now)
+    if not quiet and (published_age is None or published_age > PUBLICATION_CRITICAL_SECONDS):
+        alerts.append('publication_progress_stale_or_unknown')
     if incomplete:
         alerts.append('receipt_discovery_incomplete')
     failure = collect_failure_condition(attempts)
@@ -563,6 +601,7 @@ def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attem
         alerts.append('repeated_stage_failure')
     value = {'schema_version': SCHEMA_VERSION, 'observed_at': iso(now), 'config_path': str(config_path),
              'discovery_complete': not incomplete, 'health': health, 'alerts': sorted(alerts),
+             'quiet_proven_empty': quiet,
              'alert_changes': {'opened': sorted(set(alerts)-set(previous.get('alerts', []))),
                                'resolved': sorted(set(previous.get('alerts', []))-set(alerts))},
              'cycles': ordered, 'terminal_attempt_ids': [r['attempt_id'] for r in ordered],
@@ -587,7 +626,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not 1 <= args.interval_seconds <= 60 or not 0 < args.duration_seconds <= 24*3600 or not 1 <= args.max_attempts <= 4096:
         parser.error('Polling/duration/discovery bounds are invalid')
+    global STOP_REQUESTED
+    STOP_REQUESTED = False
     config, path = load_config(args.config)
+    observation_paths(config, path, args.out_dir)
+    args.out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = (args.out_dir / 'monitor.lock').open('a+')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        return 75
     end = time.monotonic() + args.duration_seconds
     wall_end = utcnow() + timedelta(seconds=args.duration_seconds)
     def stop(_signum, _frame):
@@ -600,10 +649,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.once:
                 print(json.dumps(snapshot, indent=2))
                 break
-            time.sleep(min(args.interval_seconds, max(0, end-time.monotonic())))
+            time.sleep(min(args.interval_seconds, max(0, end-time.monotonic()),
+                           max(0, (wall_end-utcnow()).total_seconds())))
     finally:
         for signum, handler in prior.items():
             signal.signal(signum, handler)
+        lock.close()
     return 0
 
 

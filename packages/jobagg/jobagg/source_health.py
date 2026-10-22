@@ -27,13 +27,10 @@ def source_health(conn, source_id, *, now=None, hold=None, max_age=21600):
         "SELECT max(finished_at) FROM remediation_attempts WHERE source_id=? AND status='done'",
         (source_id,),
     ).fetchone()[0]
-    counts = {
-        row["status"]: row["n"]
-        for row in conn.execute(
-            "SELECT status,count(*) n FROM remediation_tasks WHERE source_id=? GROUP BY status",
-            (source_id,),
-        )
-    }
+    from jobagg.worker_summaries import counts as task_counts
+    counts = {}
+    for row in task_counts(conn, source_id):
+        counts[row["status"]] = counts.get(row["status"], 0) + row["n"]
     retry_due = conn.execute(
         "SELECT min(eligible_at) FROM remediation_tasks WHERE source_id=? AND status='pending' AND last_error IS NOT NULL",
         (source_id,),
@@ -228,10 +225,8 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         return {"host": host, "eligible": effective <= now,
                 "next_permitted_attempt_at": effective, "reasons": reasons}
 
-    for row in conn.execute(
-        "SELECT kind,status,count(*) AS n FROM remediation_tasks WHERE source_id=? GROUP BY kind,status",
-        (source.id,),
-    ):
+    from jobagg.worker_summaries import counts as task_counts
+    for row in task_counts(conn, source.id):
         kind_counts.setdefault(row["kind"], {"states": {}, "eligible_pending": 0,
                                             "deferred_pending": 0, "held_pending": 0,
                                             "out_of_scope_pending": 0})["states"][row["status"]] = row["n"]

@@ -4,6 +4,7 @@ Activation is an explicit, owner-held migration on an initialized worker DB.
 Unknown legacy history is never inferred empty. No compression/retention coupling.
 """
 from contextlib import contextmanager
+import os
 import hashlib
 import json
 from pathlib import Path
@@ -47,27 +48,55 @@ def state(conn):
     return dict(zip([field[0] for field in cursor.description], row))
 
 
+def _schema_hash(conn):
+    rows = list(conn.execute("SELECT name,type,sql FROM sqlite_master ORDER BY name"))
+    return hashlib.sha256(json.dumps([tuple(row) for row in rows], sort_keys=True).encode()).hexdigest()
+
+
 def validate(conn):
     value = state(conn)
     if value is None or value['schema'] != SCHEMA:
         raise RuntimeRepairRequired('runtime_authority_missing_or_unknown')
+    if (not isinstance(value['epoch'], str) or not value['epoch']
+            or value['phase'] not in {'idle', 'worker', 'accepted', 'publisher'}
+            or type(value['revision']) is not int or value['revision'] < 0
+            or type(value['start_revision']) is not int or not 0 <= value['start_revision'] <= value['revision']):
+        raise RuntimeRepairRequired('runtime_authority_malformed')
+    if value['phase'] != 'idle' and (not isinstance(value['run_id'], str) or Path(value['run_id']).name != value['run_id']):
+        raise RuntimeRepairRequired('runtime_active_identity_invalid')
+    owner = Path(value['owner_path']).stat()
+    bootstrap = json.loads(value['bootstrap_json'])
+    expected_owner = bootstrap.get('owner_identity')
+    if bootstrap.get('schema_sha256') != _schema_hash(conn):
+        raise RuntimeRepairRequired('runtime_schema_binding_changed')
+    if expected_owner != {'device': owner.st_dev, 'inode': owner.st_ino}:
+        raise RuntimeRepairRequired('runtime_owner_identity_changed')
     tables = _tables(conn)
     if tables != json.loads(value['tables_json']):
         raise RuntimeRepairRequired('runtime_unfenced_schema')
+    actual = dict(conn.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     for name, sql in _triggers(tables).items():
-        actual = conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (name,)).fetchone()
-        if not actual or ' '.join(actual[0].split()) != ' '.join(sql.split()):
+        if name not in actual or ' '.join(actual[name].split()) != ' '.join(sql.split()):
             raise RuntimeRepairRequired('runtime_fence_changed')
     return value
 
 
-def activate(conn, *, epoch, owner_path, bootstrap_receipt):
+def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
     """Caller proves shared owner, explicit complete historical reconciliation.
 
     Receipt must cover all accepted/published identities and unresolved controls;
     this function refuses a nonempty pending set rather than dropping it.
     """
-    if not epoch or not bootstrap_receipt.get('reconciled') or not bootstrap_receipt.get('source_sha256'):
+    import fcntl
+    owner_path = Path(owner_path).absolute()
+    if owner_path.resolve() != owner_path:
+        raise RuntimeRepairRequired('runtime_owner_aliased')
+    actual, expected = os.fstat(owner_fd), owner_path.stat()
+    if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+        raise RuntimeRepairRequired('runtime_owner_descriptor_differs')
+    fcntl.flock(owner_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    bootstrap_receipt = {**bootstrap_receipt, 'owner_identity': {'device': actual.st_dev, 'inode': actual.st_ino}}
+    if not epoch or bootstrap_receipt.get('reconciled') is not True or not bootstrap_receipt.get('source_sha256'):
         raise RuntimeRepairRequired('runtime_checkpointed_bootstrap_required')
     if bootstrap_receipt.get('unresolved_runs') or bootstrap_receipt.get('unpublished_identities'):
         raise RuntimeRepairRequired('runtime_bootstrap_has_unresolved_work')
@@ -82,11 +111,14 @@ def activate(conn, *, epoch, owner_path, bootstrap_receipt):
                  (SCHEMA, epoch, str(Path(owner_path).absolute()), 0, json.dumps(tables), json.dumps(bootstrap_receipt, sort_keys=True)))
     for sql in _triggers(tables).values():
         conn.execute(sql)
+    bootstrap_receipt['schema_sha256'] = _schema_hash(conn)
+    conn.execute('UPDATE jobagg_runtime_state SET bootstrap_json=? WHERE id=1', (json.dumps(bootstrap_receipt, sort_keys=True),))
     return validate(conn)
 
 
 def binding(path):
-    with sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True) as conn:
+    from contextlib import closing
+    with closing(sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True)) as conn:
         if state(conn) is None:
             return None
         value = validate(conn)
@@ -134,14 +166,30 @@ def writer(conn, *, run_id, owner_path):
         conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 0)
 
 
-def proven_empty(conn, run_id, *, accepted_progress):
+def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
     value = validate(conn)
     return (value['run_id'] == run_id and value['phase'] == 'worker'
             and type(accepted_progress) is int and accepted_progress == 0
-            and value['revision'] == value['start_revision'])
+            and value['revision'] == value['start_revision']
+            and publication_empty_check is not None and publication_empty_check(value) is True)
 
 
-def close_empty(conn, run_id, *, accepted_progress):
-    if not proven_empty(conn, run_id, accepted_progress=accepted_progress):
+def close_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
+    if not proven_empty(conn, run_id, accepted_progress=accepted_progress, publication_empty_check=publication_empty_check):
         raise RuntimeRepairRequired('runtime_backlog_not_proven_empty')
     conn.execute("UPDATE jobagg_runtime_state SET phase='idle' WHERE id=1 AND run_id=?", (run_id,))
+
+
+def finish_publication(conn, run_id):
+    """Finalize the exact proven generation, including intent→phase crash gaps."""
+    value = validate(conn)
+    if value['run_id'] != run_id:
+        raise RuntimeRepairRequired('runtime_completion_belongs_to_another_run')
+    if value['phase'] == 'worker':
+        transition(conn, run_id, 'worker', 'accepted')
+        value['phase'] = 'accepted'
+    if value['phase'] == 'accepted':
+        transition(conn, run_id, 'accepted', 'publisher')
+        value['phase'] = 'publisher'
+    if value['phase'] == 'publisher':
+        transition(conn, run_id, 'publisher', 'idle')

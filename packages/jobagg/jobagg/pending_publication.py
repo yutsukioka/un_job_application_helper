@@ -71,6 +71,24 @@ def database_binding(path: Path) -> dict:
     return {"files": files, "semantic": semantic}
 
 
+def same_database_binding(expected, actual):
+    """A fenced M1 revision survives WAL checkpoints, never data or inode changes.
+
+    Original semantic-history and legacy binding schemas retain exact comparison.
+    Physical WAL evidence is retained in the seal even when the runtime authority
+    proves a checkpoint did not change the accepted database revision.
+    """
+    if expected.get("semantic", {}).get("schema") != "jobagg-runtime-authority-1":
+        return expected == actual
+    if expected.get("semantic") != actual.get("semantic"):
+        return False
+    before, after = expected.get("files", []), actual.get("files", [])
+    if not before or not after:
+        return before == after
+    return all(before[0].get(key) == after[0].get(key) for key in
+               ("path", "exists", "device", "inode"))
+
+
 def _run(state_dir: Path, run_id: str) -> Path:
     if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id:
         raise PendingPublicationError("Invalid pending-work run identity")
@@ -165,7 +183,7 @@ def validate(state_dir, *, config_sha256, database, binding=None, projection_tar
         semantic = actual.get("semantic") or {}
         if not semantic.get("writer_fenced"):
             raise PendingPublicationError("Unsealed accepted database lacks a certified writer fence")
-        if actual != value["database_binding"]:
+        if not same_database_binding(value["database_binding"], actual):
             raise PendingPublicationError("Accepted database changed; automatic projection is held")
     else:
         projection = value["projection"]

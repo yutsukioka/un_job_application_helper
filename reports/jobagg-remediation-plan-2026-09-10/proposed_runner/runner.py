@@ -1171,7 +1171,8 @@ def controller_scope(config, context):
     global _CONTROL_WRITER
     helper = package_helper(config, "dispatcher_storage")
     previous, previous_observer = _CONTROL_WRITER, OBSERVABILITY.write
-    writer = lambda path, value: helper.write_json(context["ledger"], path, value)
+    def writer(path, value):
+        helper.write_json(context["ledger"], path, value)
     _CONTROL_WRITER = OBSERVABILITY.write = writer
     config["_storage_context"] = context
     try:
@@ -1252,6 +1253,11 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
                     pending.release_after_intent(config["state_dir"], run_id=accepted["run_id"])
                 accepted = None
         unknown = unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at)
+        condition = OBSERVABILITY.condition_fingerprint(config, Path(__file__))
+        held = OBSERVABILITY.failure_hold(config, condition,
+            stage="publication" if unknown else "projection" if accepted else "worker")
+        if held and not recover_publication:
+            return held
         if context and accepted is None and not unknown:
             old_run = config["state_dir"] / "runs" / context["ledger"].cycle_id
             old_state = old_run / "state.json"
@@ -1281,7 +1287,7 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
                             "Accepted worker crash request/configuration binding differs")
                     binding = proof.get("database_binding", {})
                     require(binding.get("semantic", {}).get("writer_fenced")
-                            and binding == pending.database_binding(config["publication_worker_database"]),
+                            and pending.same_database_binding(binding, pending.database_binding(config["publication_worker_database"])) ,
                             "Accepted worker crash lacks a database writer fence")
                     with controller_scope(config, context):
                         accepted = pending.seal(
@@ -1344,6 +1350,7 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
                 result = locked_tick(config, expected, descriptor, storage_context=context, resume=accepted,
                                      deadline_at=deadline_at)
             result["storage_budget"] = controls.summary(context)
+            OBSERVABILITY.record_failure(config, condition, result)
             if result.get("publication_status") in {"published", "noop"} and config["storage_retention"]["enabled"]:
                 result["storage_retention"] = maintain_storage(config, descriptor, context["ledger"], deadline_at=deadline_at)
             elif prior_retention is not None:
@@ -1485,8 +1492,12 @@ def runtime_connection(config):
     import sqlite3
     database = config["publication_worker_database"]
     require(database.exists(), "runtime authority missing; explicit bootstrap required")
-    with sqlite3.connect(database, timeout=1) as conn:
-        yield conn
+    conn = sqlite3.connect(database, timeout=1)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def runtime_active(config):
@@ -1507,6 +1518,35 @@ def runtime_resume(config):
     run = config["state_dir"] / "runs" / value["run_id"]
     require(value["config_sha256"] == config["_config_sha256"], "active runtime configuration differs; explicit repair required")
     if (run / "publication_intent.json").exists():
+        if (run / "publication_resolution.json").exists():
+            resolution = read_json(run / "publication_resolution.json")
+            require(resolution.get("previous_outcome_sha256") == digest(run / "outcome.json"),
+                    "Completed publication resolution changed")
+            resolved_request = read_json(evidence_path(resolution["request"], run))
+            resolved = read_json(evidence_path(resolution["result"], run))
+            validate_publication(resolved, resolved_request)
+            require(resolved.get("pending_backlog_empty") is True,
+                    "Recovered generation retains older pending work; bounded continuation repair required")
+            with runtime_connection(config) as conn:
+                package_helper(config, "runtime_authority").finish_publication(conn, run.name)
+            return {"_runtime_completed": {**read_json(run / "outcome.json"),
+                "status": "incomplete", "publication_status": resolved["status"],
+                "publication_exit_code": 0, "readback_verified": resolved.get("readback_verified") is True,
+                "pending_backlog_empty": True}}
+        if (run / "outcome.json").exists():
+            terminal = read_json(run / "outcome.json")
+            if terminal.get("publication_status") in {"published", "noop"}:
+                require(terminal.get("pending_backlog_empty") is True,
+                        "Completed generation retains older pending/rejected work; bounded continuation repair required")
+                request = read_json(run / "publication_request.json")
+                require(read_json(run / "publication_intent.json").get("request_sha256") == digest(run / "publication_request.json")
+                        and terminal.get("publication_result_sha256") == digest(run / "publication_result.json"),
+                        "Completed runtime generation proof changed")
+                validate_publication(read_json(run / "publication_result.json"), request)
+                former_processes_absent(terminal)
+                with runtime_connection(config) as conn:
+                    package_helper(config, "runtime_authority").finish_publication(conn, run.name)
+                return {"_runtime_completed": terminal}
         # Existing publication recovery owns this exact run, including uncertain commits.
         marker = pending.inspect(config["state_dir"])
         if marker:
@@ -1518,7 +1558,7 @@ def runtime_resume(config):
     require(proof.get("worker_exit_code") == 0
             and proof.get("request_sha256") == digest(run / "request.json")
             and proof.get("config_sha256") == config["_config_sha256"]
-            and proof.get("database_binding") == pending.database_binding(config["publication_worker_database"]),
+            and pending.same_database_binding(proof.get("database_binding", {}), pending.database_binding(config["publication_worker_database"])) ,
             "active worker lacks exact successful exit/configuration/database proof; repair required")
     marker = pending.inspect(config["state_dir"])
     if marker is None:
@@ -1624,8 +1664,22 @@ def tick(config, expected, recover_publication=False):
             return {"status": "accepted_work_pending", "review_required": True,
                     "worker_dispatched": False, "publisher_dispatched": False,
                     "reasons": ["Runtime authority requires repair: " + str(exc)]}
+        if resume and "_runtime_completed" in resume:
+            return {**resume["_runtime_completed"], "runtime_completion_reconciled": True,
+                    "worker_reexecuted": False, "publisher_reexecuted": False}
         condition = OBSERVABILITY.condition_fingerprint(config, Path(__file__))
-        held = OBSERVABILITY.failure_hold(config, condition, stage="projection" if resume else "worker")
+        try:
+            known_unknown = unresolved_publications(config["state_dir"] / "runs", config, deadline_at=deadline_at)
+        except Exception as exc:
+            result = {"status": "process_failure", "failure_stage": "publication",
+                      "failure_type": type(exc).__name__, "unresolved_publication": True,
+                      "reasons": [type(exc).__name__ + ": " + str(exc)]}
+            OBSERVABILITY.record_failure(config, condition, result)
+            if retention.get("enabled"):
+                result["storage_retention"] = maintain_storage(config, descriptor, deadline_at=deadline_at)
+            return result
+        held = OBSERVABILITY.failure_hold(config, condition,
+            stage="publication" if known_unknown else "projection" if resume else "worker")
         if held:
             if prior_retention is not None:
                 held["storage_retention"] = prior_retention
@@ -1653,6 +1707,8 @@ def tick(config, expected, recover_publication=False):
                 unresolved = True
             result = {
                 "status": "process_failure",
+                "failure_stage": "publication" if known_unknown or recover_publication else "projection" if resume else "worker",
+                "failure_type": type(exc).__name__,
                 "reasons": [type(exc).__name__ + ": " + str(exc)],
                 "unresolved_publication": unresolved,
             }
@@ -2251,14 +2307,21 @@ def resume_publication(config, expected, descriptor, *, deadline_at=None):
         result_state.update(
             status=status,
             publication_status=result["status"],
+            publication_exit_code=0,
+            readback_verified=result.get("readback_verified") is True,
+            pending_backlog_empty=result.get("pending_backlog_empty") is True,
             reasons=[],
             worker_reexecuted=False,
         )
+        if runtime_enabled(config) and result.get("pending_backlog_empty") is True:
+            with runtime_connection(config) as conn:
+                package_helper(config, "runtime_authority").finish_publication(conn, original["run_id"])
     except Exception as exc:
         result_state.update(
             status="process_failure",
             publication_status="unknown_requires_review_no_replay",
             reasons=[type(exc).__name__ + ": " + str(exc)],
+            failure_stage="publication", failure_type=type(exc).__name__,
             worker_reexecuted=False,
         )
     finally:
@@ -2671,6 +2734,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             record.update(
                 publication_status=result["status"],
                 readback_verified=result.get("readback_verified") is True,
+                pending_backlog_empty=result.get("pending_backlog_empty") is True,
                 publication_result_sha256=digest(pub_result_path),
                 publication_recovery_allowed=result["status"] == "incomplete",
             )
@@ -2684,7 +2748,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
         record.update(
             status="storage_deferred" if storage_deferred else "process_failure",
             reasons=[f"{type(exc).__name__}: {exc}"],
-            failure_stage=record.get("phase", "unknown"),
+            failure_stage=record.get("phase", "unknown"), failure_type=type(exc).__name__,
         )
         if storage_deferred:
             record["storage_deferral"] = True
@@ -2737,9 +2801,10 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             if runtime_enabled(config) and record.get("publication_status") == "proven_empty":
                 with runtime_connection(config) as conn:
                     package_helper(config, "runtime_authority").close_empty(conn, run_id, accepted_progress=0)
-            if runtime_enabled(config) and record.get("publication_status") in {"published", "noop"}:
+            if (runtime_enabled(config) and record.get("publication_status") in {"published", "noop"}
+                    and record.get("pending_backlog_empty") is True):
                 with runtime_connection(config) as conn:
-                    package_helper(config, "runtime_authority").transition(conn, run_id, "publisher", "idle")
+                    package_helper(config, "runtime_authority").finish_publication(conn, run_id)
             if record["status"] == "complete":
                 atomic_json(config["state_dir"] / "last_complete.json", record)
         finally:
@@ -2751,6 +2816,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
 def _main(argv=None):
     global _ENTRY_DEADLINES
     entry_monotonic, entry_wall = time.monotonic(), time.time()
+    _ENTRY_DEADLINES = (entry_monotonic + 840, entry_wall + 840)
+    OBSERVABILITY.DEADLINE_CHECK = check_entry_budget
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--invocation-origin", choices=("manual", "natural"), default="manual")

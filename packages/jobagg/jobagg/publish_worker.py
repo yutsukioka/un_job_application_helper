@@ -156,6 +156,7 @@ def main(argv=None):
                 "status": status,
                 "publication": result,
                 "readback_verified": result.get("readback_verified") is True,
+                "pending_backlog_empty": result.get("pending_backlog_empty") is True,
                 "observation_set_sha256": result.get("observation_set_sha256"),
                 "whole_job_completeness_certified": False,
             }

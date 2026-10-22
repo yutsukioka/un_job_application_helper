@@ -329,9 +329,10 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
         ).fetchall()
         from jobagg.pipelines.live_inventory import plan_frames
 
+        listing_diagnostics = {}
         if job_keys is None:
             plan["listing_frames"], listing_rejected = plan_frames(
-                worker, consolidated, sources, targets, limit=5, deadline_at=deadline_at
+                worker, consolidated, sources, targets, limit=5, deadline_at=deadline_at, diagnostics=listing_diagnostics
             )
         else:
             selected = set(job_keys)
@@ -521,6 +522,9 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                     plan["changes"].append(change)
             except (ValueError, KeyError, OSError, sqlite3.DatabaseError) as exc:
                 plan["rejected"].append({"job_key": observation["job_key"], "reason": str(exc)})
+    plan["pending_backlog_empty_after_generation"] = (
+        job_keys is None and listing_diagnostics.get("complete") is True
+        and not plan["budget_exhausted"] and not plan["rejected"])
     return plan
 
 
@@ -1215,6 +1219,7 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=
         state="complete",
         status="published",
         readback_verified=True,
+        pending_backlog_empty=plan.get("pending_backlog_empty_after_generation") is True,
         completed_at=_now(),
         changed_jobs=len(plan["changes"]),
         published_listing_frames=len(plan["listing_frames"]),
@@ -1274,6 +1279,7 @@ def _publish_incremental(
         return {
             "status": "deferred" if plan["budget_exhausted"] else "no_changes",
             "generation_not_started": True,
+            "pending_backlog_empty": plan.get("pending_backlog_empty_after_generation") is True,
             "unchanged": plan["unchanged"],
             "rejected": plan["rejected"],
             "listing_only": plan["listing_only"],

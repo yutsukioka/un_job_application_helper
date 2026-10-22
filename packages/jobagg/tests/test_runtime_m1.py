@@ -23,9 +23,10 @@ def runtime(configured, monkeypatch):
                                     measurement_sha256='a'*64)
     db = config['publication_worker_database']
     db.unlink()
-    with sqlite3.connect(db) as conn:
+    owner = config['shared_lock_path'].open('a+')
+    with owner, sqlite3.connect(db) as conn:
         conn.execute('CREATE TABLE jobs(id TEXT PRIMARY KEY, body TEXT)')
-        authority.activate(conn, epoch='fixture', owner_path=config['shared_lock_path'],
+        authority.activate(conn, epoch='fixture', owner_path=config['shared_lock_path'], owner_fd=owner.fileno(),
                            bootstrap_receipt={'reconciled': True, 'source_sha256': 'b'*64,
                                               'unresolved_runs': [], 'unpublished_identities': []})
     monkeypatch.setattr(pending_publication, 'database_binding', lambda path: {'files': [], 'semantic': authority.binding(path)})
@@ -106,6 +107,11 @@ def test_missing_authority_holds_instead_of_scanning_or_fetching(runtime):
 
 def test_proven_empty_skips_request_projection_and_publisher(runtime, monkeypatch):
     config, calls = runtime
+    # Routing fixture supplies a certified publication boundary. Source revision
+    # alone cannot certify other databases, exports or unresolved generations.
+    check = authority.proven_empty
+    monkeypatch.setattr(authority, 'proven_empty', lambda conn, run_id, **kwargs:
+                        check(conn, run_id, **{**kwargs, 'publication_empty_check': lambda _state: True}))
     child = runner.subprocess.Popen
     def empty(argv, **kwargs):
         process = child(argv, **kwargs)
@@ -211,3 +217,202 @@ def test_real_database_family_binding_survives_pending_replay(runtime, monkeypat
     assert again.get('review_required') is not True, again
     assert again['run_id'] == first['run_id']
     assert len(calls) == 1
+
+
+def test_transactional_summary_survives_update_delete_and_rollback(tmp_path):
+    from jobagg.worker_summaries import ensure, counts
+    conn = sqlite3.connect(tmp_path/'counts.sqlite3')
+    conn.row_factory = sqlite3.Row
+    with conn:
+        conn.execute('CREATE TABLE remediation_tasks(task_id TEXT PRIMARY KEY,source_id TEXT,kind TEXT,status TEXT)')
+        conn.executemany('INSERT INTO remediation_tasks VALUES(?,?,?,?)', [('one','a','detail','pending'), ('two','a','detail','done')])
+        ensure(conn)
+    def projected():
+        return sorted(tuple(row) for row in counts(conn))
+    before = projected()
+    with pytest.raises(RuntimeError):
+        with conn:
+            conn.execute("UPDATE remediation_tasks SET status='done' WHERE task_id='one'")
+            conn.execute("DELETE FROM remediation_tasks WHERE task_id='two'")
+            raise RuntimeError('rollback fixture')
+    assert projected() == before
+    with conn:
+        conn.execute("UPDATE remediation_tasks SET source_id='b',kind='listing',status='blocked' WHERE task_id='one'")
+        conn.execute("DELETE FROM remediation_tasks WHERE task_id='two'")
+    assert projected() == [('b', 'listing', 'blocked', 1)]
+    conn.close()
+
+
+def test_lineage_work_is_selective_and_timings_separate_artifact_costs(tmp_path):
+    import time
+    from jobagg.accepted_detail_lineage import DETAIL_ATTEMPTS_QUERY, ensure_detail_lineage_indexes, matching_detail_attempts
+    from test_live_publication import setup, add_detail
+    fixture = setup.__wrapped__(tmp_path)
+    record, proof = add_detail(fixture)
+    measurements = []
+    with fixture['worker'].connect() as conn:
+        ensure_detail_lineage_indexes(conn)
+        conn.execute('CREATE INDEX idx_remediation_attempts_kind_started ON remediation_attempts(kind,started_at DESC)')
+        conn.execute('CREATE INDEX idx_remediation_attempts_task_started ON remediation_attempts(task_id,started_at DESC)')
+        for size in (128, 2048):
+            conn.execute("DELETE FROM remediation_attempts WHERE attempt_id LIKE 'noise-%'")
+            conn.executemany('INSERT INTO remediation_attempts VALUES(?,?,?,?,?,?,?,?)', [
+                (f'noise-{i}', f'orphan-{i}', 'other', 'detail', i, i+1, 'done', '{}') for i in range(size)])
+            work = [0]
+            def progress():
+                work[0] += 1
+                return 0
+            conn.set_progress_handler(progress, 1)
+            rows = list(conn.execute(DETAIL_ATTEMPTS_QUERY, (record.source_id, record.external_id)))
+            conn.set_progress_handler(None, 0)
+            assert [row['attempt_id'] for row in rows] == ['accepted-001']
+            measurements.append(work[0])
+        assert measurements[1] <= measurements[0] * 2
+        metrics = {}
+        row = conn.execute('SELECT * FROM jobs').fetchone()
+        result = matching_detail_attempts(conn, row, proof, deadline_at=time.monotonic()+2, timings=metrics)
+        assert result[0]['attempt']['attempt_id'] == 'accepted-001'
+        assert {'sql_seconds','artifact_open_seconds','artifact_hash_read_seconds','artifact_hash_cpu_seconds',
+                'artifact_metadata_seconds','artifact_text_read_seconds','artifact_parse_seconds','proof_check_seconds'} <= metrics.keys()
+        assert all(value >= 0 for value in metrics.values())
+
+
+@pytest.mark.parametrize('storage_enabled', [False, True])
+def test_real_worker_respects_runtime_fence_in_nested_transactions(tmp_path, monkeypatch, storage_enabled):
+    import time
+    from datetime import UTC, datetime
+    from test_remediation_worker import setup
+    from test_worker_storage_ingress import enable_storage
+    worker, replies, calls, root = setup.__wrapped__(tmp_path, monkeypatch)
+    if storage_enabled:
+        worker, replies, calls, root, request, _ledger = enable_storage((worker, replies, calls, root), monkeypatch)
+    else:
+        worker.initialize()
+        request = {'run_id': 'native-worker', 'deadline_at': datetime.fromtimestamp(time.time()+30, UTC).isoformat(),
+                   'source_manifest_sha256': worker.binding['registry_sha256']}
+    if storage_enabled:
+        from jobagg.remediation_worker import WorkerStorage, shared_owner
+        with shared_owner(worker.shared_lock):
+            WorkerStorage(worker, _ledger.for_writer('worker').wire(), request['storage_limits']).activate(request['semantic_history_policy'])
+    with worker.shared_lock.open('a+') as owner, sqlite3.connect(worker.db.path) as conn:
+        authority.activate(conn, epoch='native-fixture', owner_path=worker.shared_lock, owner_fd=owner.fileno(),
+                           bootstrap_receipt={'reconciled': True, 'source_sha256': 'c'*64})
+        authority.begin(conn, request['run_id'], 'configuration')
+    report = worker.tick(execute=True, request=request)
+    assert report['tick_outcomes'][0]['independent_enumeration'] is True, report['tick_outcomes']
+    if not storage_enabled:
+        assert any('detail_stored' in item for item in report['tick_outcomes']), report['tick_outcomes']
+    assert authority.binding(worker.db.path)['revision'] > 0
+    assert calls
+
+
+def test_historical_reconciliation_uses_attempt_identity_and_both_destinations(tmp_path):
+    import hashlib
+    import time
+    from jobagg.runtime_reconciliation import reconcile_run
+    from test_live_publication import setup, add_detail, run as publish
+    fixture = setup.__wrapped__(tmp_path)
+    record, _ = add_detail(fixture)
+    history = tmp_path/'historical-run'
+    history.mkdir()
+    (history/'request.json').write_text(json.dumps({'run_id': history.name}))
+    report = {'run_id': history.name, 'concurrency': {'task_intervals': [{
+        'attempt_id': 'accepted-001', 'task_id': 'detail-001', 'source_id': record.source_id,
+        'kind': 'detail', 'outcome': {'detail_stored': record.identity_key()}}]}}
+    payload = json.dumps(report).encode()
+    (history/'acceptance.json').write_bytes(payload)
+    (history/'worker_result.json').write_text(json.dumps({'run_id': history.name, 'worker_exit_code': 0,
+        'report_sha256': hashlib.sha256(payload).hexdigest()}))
+    targets = [fixture['output']/'test_jobs.sqlite3', fixture['output']/'all_jobs.sqlite3']
+    before = reconcile_run(history, fixture['worker'].path, targets, deadline_at=time.monotonic()+2)
+    assert before['reconciled'] is False
+    assert publish(fixture, execute=True)['status'] == 'published'
+    after = reconcile_run(history, fixture['worker'].path, targets, deadline_at=time.monotonic()+2)
+    assert after['reconciled'] is True
+    assert after['accepted_details'][0]['attempt_id'] == 'accepted-001'
+    assert after['exports_reconciled'] is False  # Per-target text isn't export parity.
+    (tmp_path/'capture/001/detail.json').write_text('{}')
+    damaged = reconcile_run(history, fixture['worker'].path, targets, deadline_at=time.monotonic()+2)
+    assert damaged['reconciled'] is False
+    assert damaged['unresolved'][0]['reason'] == 'accepted_artifact_changed'
+
+
+def test_watchdog_anchors_import_and_configuration_time_without_real_dispatch(tmp_path, monkeypatch, capsys):
+    source = Path(runner.__file__).with_name('supervisor.py')
+    spec = importlib.util.spec_from_file_location('m1_supervisor', source)
+    supervisor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(supervisor)
+    clock = [100.0]
+    monkeypatch.setattr(supervisor.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(supervisor.time, 'time', lambda: clock[0])
+    children, signals = [], []
+    class Child:
+        pid = 99999999
+        returncode = None
+        def __init__(self, argv, **kwargs):
+            children.append((argv, kwargs))
+            clock[0] += 2  # Import/configuration consumed the whole entry window.
+        def poll(self):
+            return self.returncode
+        def wait(self, **kwargs):
+            self.returncode = -15
+            return self.returncode
+    monkeypatch.setattr(supervisor.subprocess, 'Popen', Child)
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *args: signals.append(args))
+    assert supervisor.main(['--entry-timeout-seconds','1','--','--config',str(tmp_path/'unused')]) == 3
+    assert children[0][1]['env']['JOBAGG_ENTRY_MONOTONIC_DEADLINE'] == '101.0'
+    assert signals
+    assert json.loads(capsys.readouterr().out)['accepted_work_unknown'] is True
+
+
+def test_reviewed_stage_probe_is_single_use_and_success_archives_episode(configured, tmp_path):
+    import hashlib
+    import time
+    config, _ = configured
+    obs = runner.OBSERVABILITY
+    config['attempt_state_dir'].mkdir(parents=True, exist_ok=True)
+    failure = {'status': 'process_failure', 'failure_stage': 'worker', 'reasons': ['typed timeout']}
+    for index in range(3):
+        obs.record_failure(config, str(index), failure)
+    assert obs.failure_hold(config, 'new-wal') is not None
+    evidence = tmp_path/'review.txt'
+    evidence.write_text('Reviewed fixture correction for this exact stage and configuration')
+    digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    obs.authorize_stage_probe(config, 'worker', evidence_path=evidence, evidence_sha256=digest, expires_at=time.time()+60)
+    assert obs.failure_hold(config, 'another-wal') is None
+    assert obs.failure_hold(config, 'another-wal') is not None
+    with pytest.raises(ValueError, match='single probe'):
+        obs.authorize_stage_probe(config, 'worker', evidence_path=evidence, evidence_sha256=digest, expires_at=time.time()+60)
+    obs.record_failure(config, 'success', {'status': 'incomplete', 'worker_exit_code': 0,
+        'worker_status': 'incomplete', 'run_id': 'verified-success'})
+    assert obs.failure_hold(config, 'success') is None
+    histories = list((config['attempt_state_dir']/'circuit-history').glob('*.json'))
+    assert len(histories) == 1
+    assert json.loads(histories[0].read_text())['episode']['unchanged_failures'] == 3
+
+
+def test_monitor_uses_compact_receipt_index_with_large_retained_history(tmp_path):
+    source = Path(__file__).resolve().parents[3] / 'reports/jobagg-cron-monitor-2026-10-22/monitor.py'
+    spec = importlib.util.spec_from_file_location('m1_index_monitor', source)
+    monitor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(monitor)
+    production = tmp_path/'production'
+    production.mkdir()
+    config = {'state_dir': str(production), 'attempt_state_dir': str(production),
+              'worker_cwd': str(production), 'publication_cwd': str(production)}
+    path = production/'config.json'
+    path.write_text(json.dumps(config))
+    for index in range(300):
+        (production/'attempts'/f'retained-{index}').mkdir(parents=True)
+    attempt, intent = runner.OBSERVABILITY.start_attempt(path, config)
+    runner.OBSERVABILITY.finish_attempt(attempt, intent, {'status': 'incomplete', 'origin': 'natural',
+        'publication_status': 'proven_empty', 'worker_exit_code': 0, 'backlog_authoritatively_empty': True})
+    snapshot = monitor.sample(config, path, tmp_path/'monitor', max_attempts=1)
+    assert snapshot['discovery_complete'] is True
+    assert snapshot['quiet_proven_empty'] is True
+    assert len(snapshot['cycles']) == 1
+    assert snapshot['cycles'][0]['publication_ok'] is False
+    assert snapshot['a8']['ready'] is False
+    (attempt/'outcome.json').write_text('{}')
+    damaged = monitor.sample(config, path, tmp_path/'monitor', max_attempts=1)
+    assert damaged['discovery_complete'] is False

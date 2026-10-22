@@ -15,6 +15,7 @@ from pathlib import Path
 import time
 from functools import wraps
 import threading
+from types import MappingProxyType
 
 from jobagg.atomic_files import atomic_write_text
 
@@ -246,6 +247,8 @@ class SharedPolicy:
         events = self.event_snapshot(check_deadline=check_deadline)
         self._batch_events = events
         self._batch_revisions = {}
+        self._batch_readonly = {source: tuple(MappingProxyType(row) for row in rows)
+                                for source, rows in events.items()}
         self._batch_signature = self._inventory_signature()
 
     def _inventory_signature(self):
@@ -259,7 +262,15 @@ class SharedPolicy:
             return self.events(source_id) if source_id else self.event_snapshot()
         if self._inventory_signature() != self._batch_signature:
             raise ValueError('Shared policy changed outside the owner batch; review required')
-        return deepcopy(self._batch_events.get(source_id, [])) if source_id else deepcopy(self._batch_events)
+        return self._batch_readonly.get(source_id, ()) if source_id else MappingProxyType(self._batch_readonly)
+
+    @_synchronized
+    def admission_revision(self, source_id):
+        if not hasattr(self, '_batch_events'):
+            return None
+        if self._inventory_signature() != self._batch_signature:
+            raise ValueError('Shared policy changed outside the owner batch; review required')
+        return self._batch_revisions.get(source_id, 0)
 
     @_synchronized
     def finish_batch(self, *, check_deadline=None):
@@ -280,6 +291,7 @@ class SharedPolicy:
                 rows.append(event)
                 rows.sort(key=lambda row: row['started_at'])
                 self._batch_revisions[event['source_id']] = self._batch_revisions.get(event['source_id'], 0) + 1
+                self._batch_readonly[event['source_id']] = tuple(MappingProxyType(row) for row in rows)
             self._batch_signature = self._inventory_signature()
 
     def events(self, source_id):

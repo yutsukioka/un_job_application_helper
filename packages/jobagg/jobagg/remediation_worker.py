@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "375e26de20c5ea6bc774f7cb34d743c91718454a2e30301180b8e8d89e476163"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "80450c9e6d819a9767b0f5833b4422047d9cda287e56799dfcd303c8c3125269"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -702,7 +702,7 @@ class SerializedWorkerDatabase(JobDatabase):
             if storage is not None and not nested:
                 storage.validate_database_paths()
             with super().connection_scope() as conn:
-                deadline = getattr(self.worker, "_report_deadline", None)
+                deadline = getattr(self.worker, "_sql_deadline", getattr(self.worker, "_report_deadline", None))
                 if deadline is not None and not nested:
                     self.worker.check_deadline(deadline)
                     conn.execute("PRAGMA busy_timeout=" + str(max(1, int(min(1, max(0, deadline-time.time()))*1000))))
@@ -710,8 +710,8 @@ class SerializedWorkerDatabase(JobDatabase):
                 storage = getattr(self.worker, "storage", None)
                 from jobagg.runtime_authority import writer
                 with (storage.database_write(conn) if storage is not None and not nested else nullcontext()):
-                    with writer(conn, run_id=getattr(self.worker, "_runtime_run_id", None),
-                                owner_path=self.worker.shared_lock):
+                    with (writer(conn, run_id=getattr(self.worker, "_runtime_run_id", None),
+                                 owner_path=self.worker.shared_lock) if not nested else nullcontext()):
                         yield conn
 
 
@@ -811,12 +811,15 @@ class Worker:
         counts = {}
         if self.db.path.exists():
             with self._database_lock, sqlite3.connect(self.db.path.as_uri() + "?mode=ro", uri=True) as conn:
-                counts = {
-                    f"{row[0]}:{row[1]}": row[2]
-                    for row in conn.execute(
-                        "SELECT kind,status,count(*) FROM remediation_tasks GROUP BY kind,status"
-                    )
-                }
+                conn.row_factory = sqlite3.Row
+                deadline = getattr(self, "_report_deadline", None)
+                if deadline is not None:
+                    conn.execute("PRAGMA busy_timeout=1000")
+                    conn.set_progress_handler(lambda: int(time.time() >= deadline or time.monotonic() >= self._elapsed_deadline), 256)
+                from jobagg.worker_summaries import counts as task_counts
+                for row in task_counts(conn):
+                    key = f"{row['kind']}:{row['status']}"
+                    counts[key] = counts.get(key, 0) + row["n"]
         return {
             "status": "dry_run",
             "network_requests": 0,
@@ -841,7 +844,9 @@ class Worker:
 
     def initialize(self):
         self.preview()
-        if self.storage is not None:
+        from jobagg.runtime_authority import binding as runtime_binding
+        runtime_prepared = self.db.path.exists() and runtime_binding(self.db.path) is not None
+        if self.storage is not None or runtime_prepared:
             if self.shared_policy.inspect()["status"] != "existing" or not self.db.path.exists():
                 raise StorageBudgetError("storage_activation_requires_initialized_workspace")
             # Schema migrations and activation are separately admitted setup.
@@ -887,6 +892,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_status_kind_source
 CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
  ON remediation_tasks(source_id,kind,status);
 """)
+            from jobagg.worker_summaries import ensure
+            ensure(conn)
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
             if "host" not in columns:
                 conn.execute("ALTER TABLE remediation_sources ADD COLUMN host TEXT")
@@ -1020,6 +1027,11 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
     def policy_due(self, source, kind, now, *, attempts=None):
         if kind != "detail":
             return now
+        revision = self.shared_policy.admission_revision(source.id)
+        cache = getattr(self, "_policy_due_cache", {})
+        cached = cache.get(source.id)
+        if revision is not None and cached is not None and cached[0] == revision:
+            return max(now, cached[1])
         policy = fetch_schedule_policy(source)
         minimum = float(
             policy.get("detail_min_delay_seconds")
@@ -1057,6 +1069,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             active = sorted(end for end in finishes if end > now - 3600)
             if len(active) >= 10:
                 due = max(due, active[len(active) - 10] + 3600)
+        if revision is not None:
+            cache[source.id] = (revision, due)
+            self._policy_due_cache = cache
         return max(now, due)
 
     def check_deadline(self, deadline):
@@ -2428,13 +2443,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 state = conn.execute(
                     "SELECT * FROM remediation_sources WHERE source_id=?", (source.id,)
                 ).fetchone()
-                rows = [
-                    dict(row)
-                    for row in conn.execute(
-                        "SELECT kind,status,count(*) AS n FROM remediation_tasks WHERE source_id=? GROUP BY kind,status",
-                        (source.id,),
-                    )
-                ]
+                from jobagg.worker_summaries import counts
+                rows = [{key: row[key] for key in ("kind", "status", "n")} for row in counts(conn, source.id)]
                 sources.append(
                     {
                         "source_id": source.id,
@@ -2515,7 +2525,19 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 raise StorageBudgetError("storage_request_lease_binding_differs")
             self.storage = WorkerStorage(self, lease, limits)
         with admitted_file_writes(self.storage.file_write if self.storage else None):
-            return self._tick_admitted(execute=True, request=request)
+            try:
+                return self._tick_admitted(execute=True, request=request)
+            finally:
+                # Neither a read budget nor a writer capability survives release
+                # of the shared owner. Standalone maintenance must re-admit.
+                self._report_deadline = self._sql_deadline = None
+                self._elapsed_deadline = float("inf")
+                self._runtime_run_id = None
+                self._policy_due_cache = {}
+                if hasattr(self, "_report_policy_events"):
+                    del self._report_policy_events
+                if hasattr(self.shared_policy, "_batch_events"):
+                    del self.shared_policy._batch_events
 
     def _tick_admitted(self, *, execute=False, request=None):
         if request is not None and (
@@ -2525,7 +2547,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             raise ValueError("Dispatcher request and worker parallel source limit differ")
         if not execute:
             return self.preview()
-        self._elapsed_deadline = time.monotonic() + self.max_seconds
+        self._elapsed_deadline = min(time.monotonic() + self.max_seconds,
+                                     getattr(self, "_entry_elapsed_deadline", float("inf")))
         self._runtime_run_id = (request or {}).get("run_id")
         self.tick_id = str(uuid4())
         tick_started_at = utc()
@@ -2533,12 +2556,14 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         self._request_intervals = []
         self._eligible_counts = (0, 0, 0)
         self._eligible_peaks = (0, 0)
-        deadline = time.time() + self.max_seconds
+        self._policy_due_cache = {}
+        deadline = min(time.time() + self.max_seconds, getattr(self, "_entry_wall_deadline", float("inf")))
         if request:
             deadline = min(deadline, epoch(request["deadline_at"]))
         if deadline <= time.time():
             raise ValueError("Request deadline already passed")
         self._report_deadline = deadline
+        self._sql_deadline = deadline
         with shared_owner(self.shared_lock):
             if self.storage:
                 self.storage.activate((request or {}).get("semantic_history_policy"))
@@ -2552,6 +2577,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             # request/selection work early enough to persist a truthful report.
             report_reserve = min(15.0, self.max_seconds * 0.1)
             work_deadline = deadline - report_reserve
+            self._sql_deadline = work_deadline
             stop_reason = "task_budget"
             if self.parallel_sources > 1:
                 outcomes, stop_reason = self.run_parallel(work_deadline)
@@ -2586,6 +2612,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 or self.binding["implementation_sha256"] != implementation_hash()
             ):
                 raise ValueError("Input code/config changed during tick; no acceptance report")
+            self._sql_deadline = deadline
             self._report_policy_events = self.shared_policy.admission_events()
             self.shared_policy.finish_batch(check_deadline=lambda: self.check_deadline(deadline))
             self.check_deadline(deadline)
@@ -2647,6 +2674,7 @@ def validate_request(path, report, registry):
 
 
 def main(argv=None):
+    entered_monotonic, entered_wall = time.monotonic(), time.time()
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--registry", type=Path, required=True)
     p.add_argument("--robots", type=Path, required=True)
@@ -2682,6 +2710,8 @@ def main(argv=None):
             parallel_sources=a.parallel_sources,
             max_requests_per_task=a.max_requests_per_task,
         )
+        worker._entry_elapsed_deadline = entered_monotonic + a.max_seconds
+        worker._entry_wall_deadline = entered_wall + a.max_seconds
         result = worker.tick(execute=a.execute, request=request)
         if a.report and a.execute:
             with admitted_file_writes(worker.storage.file_write if worker.storage else None):
@@ -2691,7 +2721,7 @@ def main(argv=None):
     except BlockingIOError:
         print(dump({"status": "lock_busy", "network_requests": 0}), flush=True)
         return 75
-    except (ValueError, OSError, KeyError, TypeError) as exc:
+    except (ValueError, OSError, KeyError, TypeError, HostIneligible, sqlite3.Error) as exc:
         print(
             dump(
                 {"status": "process_failure", "error_type": type(exc).__name__, "reason": str(exc)}

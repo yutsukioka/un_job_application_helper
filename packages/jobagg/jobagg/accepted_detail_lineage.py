@@ -46,16 +46,31 @@ def _check(deadline_at):
         raise _LineageDeadlineExceeded("Accepted detail lineage deadline exhausted")
 
 
-def _sha(path, *, deadline_at=None):
+def _add(timings, key, started):
+    if timings is not None:
+        timings[key] = timings.get(key, 0.0) + time.monotonic() - started
+
+
+def _sha(path, *, deadline_at=None, timings=None):
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
+    started = time.monotonic()
+    stream = path.open("rb")
+    _add(timings, "artifact_open_seconds", started)
+    with stream:
+        while True:
+            started = time.monotonic()
+            block = stream.read(1024 * 1024)
+            _add(timings, "artifact_hash_read_seconds", started)
             _check(deadline_at)
+            if not block:
+                break
+            started = time.monotonic()
             digest.update(block)
+            _add(timings, "artifact_hash_cpu_seconds", started)
     return digest.hexdigest()
 
 
-def matching_detail_attempts(conn, row, proof, *, deadline_at=None):
+def matching_detail_attempts(conn, row, proof, *, deadline_at=None, timings=None):
     """Return only exact successful lineage, never evidence from a failed attempt.
 
     Receipt/artifact failures are non-matches; the caller rejects acceptance when no
@@ -65,6 +80,7 @@ def matching_detail_attempts(conn, row, proof, *, deadline_at=None):
     _check(deadline_at)
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
+    sql_started = time.monotonic()
     canonical = task_key(row["source_id"], "detail", str(row["external_id"]))
     # Legacy IDs remain eligible only through the same exact immutable identity
     # crosswalk. Orphan attempts cannot invent a task or borrow another source.
@@ -81,15 +97,25 @@ def matching_detail_attempts(conn, row, proof, *, deadline_at=None):
             "AND status='done' AND finished_at IS NOT NULL ORDER BY finished_at DESC,attempt_id",
             (identity, row["source_id"])).fetchall())
     attempts.sort(key=lambda attempt: (-attempt["finished_at"], attempt["attempt_id"]))
+    _add(timings, "sql_seconds", sql_started)
     for attempt in attempts:
         _check(deadline_at)
         try:
             receipt = json.loads(attempt["evidence"] or "{}")
             path = Path(receipt["detail_path"])
-            if not path.is_file() or _sha(path, deadline_at=deadline_at) != receipt.get("detail_sha256"):
+            started = time.monotonic()
+            is_file = path.is_file()
+            _add(timings, "artifact_metadata_seconds", started)
+            if not is_file or _sha(path, deadline_at=deadline_at, timings=timings) != receipt.get("detail_sha256"):
                 continue
-            artifact = json.loads(path.read_text())
+            started = time.monotonic()
+            text = path.read_text()
+            _add(timings, "artifact_text_read_seconds", started)
+            started = time.monotonic()
+            artifact = json.loads(text)
+            _add(timings, "artifact_parse_seconds", started)
             _check(deadline_at)
+            started = time.monotonic()
             parsed = artifact["job"]
             if (
                 artifact.get("proof") == proof
@@ -98,6 +124,7 @@ def matching_detail_attempts(conn, row, proof, *, deadline_at=None):
                 and parsed.get("description") == row["description"]
             ):
                 matching.append({"attempt": dict(attempt), "artifact": artifact})
+            _add(timings, "proof_check_seconds", started)
         except _LineageDeadlineExceeded:
             raise
         except (KeyError, TypeError, ValueError, AttributeError, OSError):

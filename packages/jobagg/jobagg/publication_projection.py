@@ -97,7 +97,7 @@ def validate_manifest(manifest):
     return manifest
 
 
-def _accepted_attempt_ids(origin, deadline_at):
+def _accepted_attempt_ids(origin, deadline_at, timings=None):
     """Retain accepted evidence, not every historical refresh attempt."""
     if not _exists(origin, "remediation_attempts") or not _exists(origin, "remediation_tasks"):
         return set()
@@ -113,7 +113,7 @@ def _accepted_attempt_ids(origin, deadline_at):
             proof = json.loads(row["accepted_proof"])
         except (TypeError, ValueError):
             continue  # The unchanged bad observation is still copied and rejected.
-        for binding in matching_detail_attempts(origin, row, proof, deadline_at=deadline_at):
+        for binding in matching_detail_attempts(origin, row, proof, deadline_at=deadline_at, timings=timings):
             identifiers.add(binding["attempt"]["attempt_id"])
     return identifiers
 
@@ -171,7 +171,8 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None):
         timings["original_diagnostics_seconds"] = time.monotonic() - started
         phase = "accepted_detail_lineage"
         lineage_started = time.monotonic()
-        accepted_attempt_ids = _accepted_attempt_ids(origin, deadline_at)
+        timings["lineage_components"] = {}
+        accepted_attempt_ids = _accepted_attempt_ids(origin, deadline_at, timings["lineage_components"])
         timings["accepted_detail_lineage_seconds"] = time.monotonic() - lineage_started
         for table, predicate in FILTERS.items():
             phase = "copy_table:" + table

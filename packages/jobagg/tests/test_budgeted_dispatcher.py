@@ -63,7 +63,8 @@ def configured(tmp_path, monkeypatch):
             calls.append(request)
             if "worker_acceptance_sha256" in request:
                 receipt = {**request, "status": "published", "generated_at": runner.now().isoformat(),
-                           "observation_set_sha256": "2" * 64, "whole_job_completeness_certified": False}
+                           "observation_set_sha256": "2" * 64, "pending_backlog_empty": True,
+                           "whole_job_completeness_certified": False}
             else:
                 receipt = {"run_id": request["run_id"], "database": str(config["publication_worker_database"])}
             report.write_text(json.dumps(receipt))

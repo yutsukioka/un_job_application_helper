@@ -15,7 +15,7 @@ from jobagg.models import JobRecord
 from jobagg.pipelines.inventory_checks import verify_listing
 
 
-def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None):
+def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None, diagnostics=None):
     import time
     from contextlib import closing
 
@@ -30,6 +30,9 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
     )
 
     frames, rejected = [], []
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics["complete"] = True
     if not worker.execute(
         "SELECT 1 FROM sqlite_master WHERE name='remediation_sources'"
     ).fetchone():
@@ -39,6 +42,7 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
     ).fetchall()
     for source_row in source_rows:
         if len(frames) >= limit or (deadline_at and time.monotonic() >= deadline_at):
+            diagnostics["complete"] = False
             break
         source_id = source_row["source_id"]
         try:
