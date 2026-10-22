@@ -506,7 +506,8 @@ def record_failure(config, fingerprint, result):
                any(str(reason).startswith('TimeoutError:') for reason in result.get('reasons', []))))
     durable_progress = ((result.get('publication_status') in {'published', 'noop'}
                          and result.get('publication_exit_code') == 0
-                         and result.get('readback_verified') is True)
+                         and (result.get('readback_verified') is True or not config.get('runtime_control',
+                              'jobagg.remediation_worker' in config.get('worker_argv', []))))
                         or (result.get('publication_status') == 'proven_empty'
                             and result.get('backlog_authoritatively_empty') is True and not starved_worker))
     if durable_progress:

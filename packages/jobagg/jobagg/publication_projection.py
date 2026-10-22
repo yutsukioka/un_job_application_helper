@@ -44,7 +44,7 @@ def _sha(value):
 
 
 def _check(deadline):
-    if expired(deadline):
+    if (deadline is not None and time.monotonic() >= deadline) or expired(None):
         raise TimeoutError("Publication projection deadline exhausted")
 
 

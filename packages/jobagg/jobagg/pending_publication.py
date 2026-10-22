@@ -81,7 +81,7 @@ def same_database_binding(expected, actual):
     Physical WAL evidence is retained in the seal even when the runtime authority
     proves a checkpoint did not change the accepted database revision.
     """
-    if expected.get("semantic", {}).get("schema") not in {"jobagg-runtime-authority-1", "jobagg-runtime-authority-2"}:
+    if expected.get("semantic", {}).get("schema") not in {"jobagg-runtime-authority-1", "jobagg-runtime-authority-2", "jobagg-runtime-authority-3"}:
         return expected == actual
     if expected.get("semantic") != actual.get("semantic"):
         return False
@@ -145,8 +145,17 @@ def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, pro
     request = _json(run / "request.json")
     worker = _json(run / "worker_result.json")
     acceptance = run / "acceptance.json"
+    native_queue = worker.get('schema') == 'native-accepted-queue-proof-1'
+    if native_queue:
+        certificate = _json(acceptance)
+        actual = database_binding(Path(database))
+        semantic = actual.get('semantic') or {}
+        if (certificate.get('kind') != 'native_accepted_queue' or semantic.get('phase') != 'accepted'
+                or semantic.get('run_id') != run_id or not semantic.get('writer_fenced')
+                or not same_database_binding(worker.get('database_binding', {}), actual)):
+            raise PendingPublicationError('Native queue acceptance lacks its frozen revision fence')
     if (request.get("run_id") != run_id or worker.get("run_id") != run_id
-            or worker.get("worker_exit_code") != 0
+            or (not native_queue and worker.get("worker_exit_code") != 0)
             or worker.get("report_sha256") != _sha(acceptance)):
         raise PendingPublicationError("Accepted worker exit/report proof does not match")
     value = {

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 
 from jobagg import publication_fence as fence, runtime_authority as authority
 from jobagg import publish_worker
@@ -17,11 +19,50 @@ from test_publication_work import prepare
 # ruff: noqa: F811
 
 
+@pytest.mark.parametrize(
+    "budget,fault", [(False, None), (True, None), (True, "after_ledger_receipt")]
+)
 def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_projection(
-    configured, setup, monkeypatch
+    configured, setup, monkeypatch, budget, fault
 ):
     config, calls = configured
-    config.pop("storage_budget")
+    import importlib.util
+    from jobagg import pending_publication
+
+    spec = importlib.util.spec_from_file_location(
+        "native_real_pending", pending_publication.__file__
+    )
+    actual_pending = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(actual_pending)
+    monkeypatch.setattr(pending_publication, "database_binding", actual_pending.database_binding)
+    if not budget:
+        config.pop("storage_budget")
+    else:
+        from jobagg.storage_budget import CATEGORY_LIMITS, parse_budget_config
+
+        config["storage_budget"]["roots"].append(
+            {
+                "name": "fixture-data",
+                "path": str(setup["root"]),
+                "category": "essential",
+                "writers": ["runner", "worker", "publisher"],
+            }
+        )
+        config["native_publication_escrow"] = "per_bounded_batch"
+        config["storage_cycle"].update(
+            output_dir=str(setup["output"]),
+            controller_sql_cap_bytes=131072,
+            database_growth_cap_bytes=5_000_000,
+            control_cap_bytes=50_000_000,
+            publisher_write_limits=dict.fromkeys(CATEGORY_LIMITS, 50_000_000),
+        )
+        config["publication_policy"].update(
+            schema_version=1, transaction_growth_limit_bytes=1_000_000
+        )
+        config["publication_policy"]["write_limits"] = config["storage_cycle"][
+            "publisher_write_limits"
+        ]
+        budget_config = parse_budget_config(config["storage_budget"])
     config["runtime_control"] = True
     config["phase_budgets"] = dict(
         projection_max_seconds=3,
@@ -43,25 +84,64 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
     config["publication_worker_database"] = setup["worker"].path
     config["_registry_path"] = setup["registry"]
     config["_registry_sha256"] = runner.digest(setup["registry"])
+    config["publication_argv"][config["publication_argv"].index("--output-dir") + 1] = str(
+        setup["output"]
+    )
+    if budget:
+        from jobagg import storage_cycle
+
+        budget_config, _ = storage_cycle._configuration(config)
     owner = config["shared_lock_path"].open("a+")
     for path in (setup["output"] / "test_jobs.sqlite3", setup["output"] / "all_jobs.sqlite3"):
         with JobDatabase(path).connect() as conn:
             fence.prepare_target_schema(conn)
-            fence.activate(
-                conn,
-                owner_path=config["shared_lock_path"],
-                owner_fd=owner.fileno(),
-                epoch="native-test",
-            )
+            if not budget:
+                fence.activate(
+                    conn,
+                    owner_path=config["shared_lock_path"],
+                    owner_fd=owner.fileno(),
+                    epoch="native-test",
+                )
     add_detail(setup)
     with fence.writer_scope(owner.fileno(), config["shared_lock_path"], setup["output"]):
         initial = run(setup, execute=True)
     assert initial["status"] == "published"
+    if budget:
+        from jobagg import semantic_history as history
+
+        targets = [setup["output"] / "test_jobs.sqlite3", setup["output"] / "all_jobs.sqlite3"]
+        for path in targets:
+            with JobDatabase(path).connect() as conn:
+                history.activate_semantic_history(
+                    conn,
+                    policy_epoch="fixture",
+                    max_history_bytes=1_000_000,
+                    ledger_path=budget_config.ledger_path,
+                    scope_hash=budget_config.scope_hash,
+                )
+                fence.activate(
+                    conn,
+                    owner_path=config["shared_lock_path"],
+                    owner_fd=owner.fileno(),
+                    epoch="native-test",
+                )
+        exports = json.loads((Path(initial["plan_path"]).parent / "exports.json").read_text())
+        initial["publication_boundary"] = fence.seal_boundary(
+            targets, exports, output_root=setup["output"]
+        )
     add_detail(setup, external_id="002")
     add_detail(setup, external_id="003")
     prepare(setup)
     with sqlite3.connect(setup["worker"].path) as conn:
         conn.execute("UPDATE jobagg_dirty_state SET contract_sha256=?", (config["_config_sha256"],))
+        if budget:
+            history.activate_semantic_history(
+                conn,
+                policy_epoch="fixture",
+                max_history_bytes=1_000_000,
+                ledger_path=budget_config.ledger_path,
+                scope_hash=budget_config.scope_hash,
+            )
         authority.activate(
             conn,
             epoch="test",
@@ -99,7 +179,13 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
                 report.write_text(json.dumps(value))
             else:
                 calls.append(request)
-                monkeypatch.setenv("JOBAGG_SHARED_LOCK_FD", kwargs["env"]["JOBAGG_SHARED_LOCK_FD"])
+                for key in (
+                    "JOBAGG_SHARED_LOCK_FD",
+                    "JOBAGG_STORAGE_BUDGET_LEASE",
+                    "JOBAGG_STORAGE_CYCLE_LIMITS",
+                ):
+                    if key in kwargs["env"]:
+                        monkeypatch.setenv(key, kwargs["env"][key])
                 with redirect_stdout(io.StringIO()):
                     self.returncode = publish_worker.main(
                         [
@@ -130,6 +216,23 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
             return self.returncode
 
     monkeypatch.setattr(runner.subprocess, "Popen", Child)
+    if fault:
+        from jobagg import atomic_files
+        from jobagg.storage_budget import StorageBudgetDeferred
+
+        original_write = atomic_files.atomic_write_text
+        injected = {"done": False}
+
+        def interrupted(path, payload, **kwargs):
+            original_write(path, payload, **kwargs)
+            if Path(path).name == "storage_cycle_completed.json" and not injected["done"]:
+                injected["done"] = True
+                raise StorageBudgetDeferred("injected after durable native batch ledger")
+
+        monkeypatch.setattr(atomic_files, "atomic_write_text", interrupted)
+        first = runner.tick(config, ["test_custom_html"])
+        assert first["status"] == "storage_deferred", first
+        assert len(calls) == 1
     results = []
     for _ in range(3):
         result = runner.tick(config, ["test_custom_html"])
@@ -142,14 +245,20 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
         name: (root / name).read_bytes()
         for name in ("request.json", "acceptance.json", "worker_result.json")
     }
-    assert len(calls) == 4
+    assert len(calls) == 3
+    assert all("worker_acceptance_sha256" in request for request in calls)
+    assert all(record.get("worker_exit_code") is None for record in results)
     assert len({record["run_id"] for record in results}) == 1
     assert results[-1]["pending_backlog_empty"] is True
+    if budget:
+        from jobagg import storage_cycle
+
+        assert storage_cycle.existing_context(config) is None
     assert (root / "outcome.json").exists()
     assert len(list((root / "publication_batches").glob("*/outcome.json"))) == 2
     with sqlite3.connect(setup["worker"].path) as conn:
         assert authority.validate(conn)["phase"] == "idle"
     quiet = runner.tick(config, ["test_custom_html"])
     assert quiet["publication_status"] == "proven_empty", quiet
-    assert len(calls) == 5
+    assert len(calls) == 4
     assert all((root / name).read_bytes() == value for name, value in proof.items())

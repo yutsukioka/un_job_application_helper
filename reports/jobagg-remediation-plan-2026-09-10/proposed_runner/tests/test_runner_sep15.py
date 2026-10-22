@@ -52,7 +52,8 @@ def reviewed_probe(fixture):
     obs.condition_fingerprint(config, RUNNER)
     review = fixture.root / "reviewed-recovery.txt"
     review.write_text("Reviewed synthetic recovery evidence; revalidate original intent without bypass")
-    obs.authorize_stage_probe(config, "publication", evidence_path=review,
+    held = obs.failure_hold(config, 'reviewed-current-state', stage='publication')
+    obs.authorize_stage_probe(config, held['stage'], evidence_path=review,
                               evidence_sha256=hashlib.sha256(review.read_bytes()).hexdigest(),
                               expires_at=time.time()+60)
 
@@ -63,12 +64,12 @@ def test_three_same_recovery_failures_need_review_after_evidence_change(fixture)
     assert code == 3
     wal = fixture.root / "worker.sqlite-wal"
     wal.write_bytes(b"nonempty-unbound-wal")
-    for _ in range(3):
+    for _ in range(2):  # Initial publisher failure plus two recovery failures.
         code, result = fixture.invoke()
         assert code == 3 and "Unbound WAL is nonempty" in result["reasons"][0]
     code, held = fixture.invoke()
     assert code == 75 and held["status"] == "unchanged_failure_hold"
-    assert len(outcomes(fixture)) == 5
+    assert len(outcomes(fixture)) == 4
     assert len((fixture.root / "worker_starts.txt").read_text().splitlines()) == 1
     original = (Path(first["run_dir"]) / "publication_request.json").read_bytes()
     wal.write_bytes(b"")
@@ -97,7 +98,7 @@ def test_failed_snapshot_binding_remains_held_after_code_or_config_change(fixtur
     phase_config(fixture, publication="commit_then_fail")
     fixture.invoke()
     (fixture.root / "worker.sqlite").write_bytes(b"changed database")
-    for _ in range(3):
+    for _ in range(2):
         assert fixture.invoke()[0] == 3
     assert fixture.invoke()[0] == 75
     c = json.loads(fixture.config_path.read_text())

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from jobagg import pending_publication, runtime_authority as authority
+from jobagg.remediation_worker import shared_owner
 from test_budgeted_dispatcher import configured, runner  # noqa: F401
 
 # ruff: noqa: F811
@@ -21,6 +22,7 @@ def runtime(configured, monkeypatch):
     monkeypatch.setattr(runner, 'require_native_capabilities', lambda *_: None)
     config['_fixture_storage_budget'] = config.pop('storage_budget')
     config['runtime_control'] = True
+    config['native_publication_escrow'] = 'per_bounded_batch' 
     config['phase_budgets'] = dict(projection_max_seconds=3, projection_min_seconds=.01,
                                     publisher_min_seconds=.01, cleanup_report_seconds=.01,
                                     measurement_sha256='a'*64)
@@ -74,16 +76,16 @@ def test_both_pre_intent_windows_resume_exact_original_without_worker(runtime, m
 
 def test_unadmitted_writers_fail_and_revision_is_transactional(runtime):
     config, _ = runtime
-    with sqlite3.connect(config['publication_worker_database']) as conn:
+    with shared_owner(config['shared_lock_path']) as owner_fd, sqlite3.connect(config['publication_worker_database']) as conn:
         authority.begin(conn, 'run', config['_config_sha256'])
         with pytest.raises(sqlite3.OperationalError):
             conn.execute("INSERT INTO jobs VALUES('1','unadmitted')")
-        with authority.writer(conn, run_id='run', owner_path=config['shared_lock_path']):
+        with authority.writer(conn, run_id='run', owner_path=config['shared_lock_path'], owner_fd=owner_fd):
             conn.execute("INSERT INTO jobs VALUES('1','retained')")
         assert authority.validate(conn)['revision'] == 1
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("DELETE FROM jobs")
-    with sqlite3.connect(config['publication_worker_database']) as conn:
+    with shared_owner(config['shared_lock_path']) as owner_fd, sqlite3.connect(config['publication_worker_database']) as conn:
         assert conn.execute('SELECT body FROM jobs').fetchone()[0] == 'retained'
 
 
@@ -91,8 +93,8 @@ def test_changed_revision_holds_pending_without_refetch(runtime, monkeypatch):
     config, calls = runtime
     monkeypatch.setattr(runner, 'snapshot_helper', lambda _: SimpleNamespace(create_publication_snapshot=lambda *a, **k: (_ for _ in ()).throw(TimeoutError('fixture'))))
     first = runner.tick(config, ['fixture'])
-    with sqlite3.connect(config['publication_worker_database']) as conn:
-        with authority.writer(conn, run_id=first['run_id'], owner_path=config['shared_lock_path']):
+    with shared_owner(config['shared_lock_path']) as owner_fd, sqlite3.connect(config['publication_worker_database']) as conn:
+        with authority.writer(conn, run_id=first['run_id'], owner_path=config['shared_lock_path'], owner_fd=owner_fd):
             conn.execute("INSERT INTO jobs VALUES('new','new revision')")
     held = runner.tick(config, ['fixture'])
     assert held['review_required'] is True

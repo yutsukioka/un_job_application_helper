@@ -135,6 +135,11 @@ class PolicyAuthority:
         return 0
 
     def _verify_boundary(self, head):
+        from jobagg.publication_fence import _file_identity
+
+        for path, identity in head.get("immutable_controls", {}).items():
+            if _file_identity(path) != identity:
+                raise ValueError("policy_bootstrap_control_changed")
         if (self.policy.root / "attempt_index.json").read_text() != _dump(
             {"schema": SCHEMA, "old_writers_fenced": True}
         ):
@@ -382,7 +387,14 @@ CREATE TABLE IF NOT EXISTS migration_receipt(id INTEGER PRIMARY KEY,receipt_json
     for name in ("attempts",):
         info = (policy.root / name).stat()
         boundaries[name] = [info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns]
+    from jobagg.publication_fence import _file_identity
+
+    immutable_controls = {}
+    for path in (policy.root / "bootstrap.json", policy.marker):
+        path.chmod(path.stat().st_mode & ~0o222)
+        immutable_controls[str(path)] = _file_identity(path)
     head = {
+        "immutable_controls": immutable_controls,
         "schema": SCHEMA,
         "epoch": epoch,
         "revision": 0,

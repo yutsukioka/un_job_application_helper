@@ -181,7 +181,10 @@ def main(argv=None):
                     from jobagg.publication_fence import writer_scope
                     with writer_scope(descriptor, args.shared_lock, args.output_dir):
                         result = invoke(owner_held=True)
-                if escrow is not None and result.get("status") in {"incomplete", "deferred"}:
+                if escrow is not None and (result.get("status") in {"incomplete", "deferred"}
+                                           or initial_request.get('publication_selection') is not None):
+                    # Native batches share one finite escrow. The owner settles
+                    # it only after conditional queue acknowledgements drain it.
                     escrow.keep_open = True
         except BlockingIOError:
             result = {"status": "owner_busy", "completeness_certified": False}

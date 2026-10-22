@@ -1206,12 +1206,36 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"status": "lock_busy", "worker_dispatched": False}
+        config['_runtime_controller_fd'] = descriptor
         if config.get("maintenance_file") and config["maintenance_file"].exists():
             return {"status": "maintenance_paused", "worker_dispatched": False}
         OBSERVABILITY.storage_check(config, require_reserve=False)
         context = bridge.existing_context(config)
         native_resume = None
         if runtime_enabled(config):
+            native_state = runtime_active(config)
+            require(config.get('native_publication_escrow') == 'per_bounded_batch',
+                    'reviewed native per-batch escrow policy required')
+            if context and native_state['phase'] in {'accepted','idle'} and context['ledger'].snapshot()['phase'] == 'publication_admitted':
+                with runtime_connection(config) as conn:
+                    control = package_helper(config, 'runtime_authority').publication_control(conn)
+                if native_state['phase'] == 'idle' or control.get('publication_sequence', 0) > 0:
+                    previous = Path(control['publication_control_dir'] if native_state['phase'] == 'idle' else control['previous_publication_control_dir'])
+                    receipt = read_json(previous / 'outcome.json')
+                    require(receipt.get('publication_status') in {'published','noop'} and receipt.get('publication_result_sha256') == digest(previous / 'publication_result.json'),
+                            'native batch escrow close lacks exact prior publication proof')
+                    with controller_scope(config, context):
+                        close_native_batch_escrow(config, context, previous, receipt['publication_result_sha256'])
+                    return {**receipt, 'storage_cycle_reconciled':True, 'worker_reexecuted':False, 'publisher_reexecuted':False}
+            if context is None:
+                if native_state['phase'] == 'accepted':
+                    context = bridge.prepare_cycle(config, native_state['run_id'])
+                elif native_state['phase'] == 'idle':
+                    with runtime_connection(config) as conn:
+                        work = package_helper(config, 'publication_work')
+                        vector = work.vector(conn, contract_sha256=config['_config_sha256'], now=time.time()) if work.exists(conn) else None
+                    if vector and (vector['pending'] or vector['revalidation_reasons']):
+                        context = bridge.prepare_cycle(config, str(uuid.uuid4()))
             if context:
                 with controller_scope(config, context):
                     native_resume = runtime_resume(config, descriptor)
@@ -1219,7 +1243,9 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
                 native_resume = runtime_resume(config, descriptor)
             if native_resume and '_runtime_completed' in native_resume:
                 if context and context['ledger'].snapshot()['phase'] == 'publication_admitted':
-                    context['ledger'].transition('publication_admitted', 'completed')
+                    terminal = native_resume['_runtime_completed']
+                    with controller_scope(config, context):
+                        close_native_batch_escrow(config, context, Path(terminal['run_dir']), terminal['publication_result_sha256'])
                 return {**native_resume['_runtime_completed'], 'runtime_completion_reconciled':True}
         accepted = pending.inspect(config["state_dir"])
         if context and not runtime_enabled(config):
@@ -1387,7 +1413,9 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
         if result.get('publication_status') == 'proven_empty':
             context['ledger'].transition('worker_admitted', 'completed')
         elif result.get("publication_status") in {"published", "noop", "deferred"}:
-            if not runtime_enabled(config) or runtime_active(config)['phase'] == 'idle':
+            if runtime_enabled(config) and result.get('publication_status') in {'published','noop'}:
+                close_native_batch_escrow(config, context, Path(result['run_dir']), result['publication_result_sha256'])
+            elif not runtime_enabled(config):
                 context["ledger"].transition("publication_admitted", "completed")
         return result
     except (errors.StorageBudgetError, errors.StorageBudgetDeferred) as exc:
@@ -1404,6 +1432,8 @@ def budgeted_tick(config, expected, recover_publication=False, *, deadline_at=No
             held["worker_dispatched"] = bool(worker_attempt_possible and result and result.get("worker_pid"))
         return held
     finally:
+        if config.get('_runtime_controller_fd') == descriptor:
+            config.pop('_runtime_controller_fd', None)
         os.close(descriptor)
 
 
@@ -1517,26 +1547,32 @@ def runtime_publication_scope(config):
 @contextmanager
 def runtime_connection(config):
     import sqlite3
-    database = config["publication_worker_database"]
-    require(database.exists(), "runtime authority missing; explicit bootstrap required")
+    database = config['publication_worker_database']
+    require(database.exists(), 'runtime authority missing; explicit bootstrap required')
     conn = sqlite3.connect(database, timeout=1)
     try:
         with ExitStack() as stack:
             context = config.get('_storage_context')
-            native = package_helper(config, 'publication_work').exists(conn)
+            work = package_helper(config, 'publication_work')
+            native = work.exists(conn)
+            fd = config.get('_runtime_controller_fd')
+            charged = False
+            maximum = context['limits'].get('controller_sql_cap_bytes') if context and native else None
             if context and native:
-                maximum = context['limits'].get('controller_sql_cap_bytes')
                 require(type(maximum) is int and maximum >= 4096, 'measured controller SQL allocation bound required')
-                charged = False
-                def authorize(action, table, column, database_name, trigger):
-                    nonlocal charged
-                    if action in {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}:
-                        if table != 'jobagg_runtime_state' and not table.startswith('jobagg_dirty_'):
-                            return sqlite3.SQLITE_DENY
-                        if not charged:
-                            stack.enter_context(package_helper(config, 'dispatcher_storage').charged_write(context['ledger'], Path(database), maximum))
-                            charged = True
-                    return sqlite3.SQLITE_OK
+            def authorize(action, table, column, database_name, trigger):
+                nonlocal charged
+                if native and action in {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}:
+                    if table != 'jobagg_runtime_state' and table not in work.CONTROL_TABLES and table != 'sqlite_sequence':
+                        return sqlite3.SQLITE_DENY
+                    if context and not charged:
+                        stack.enter_context(package_helper(config, 'dispatcher_storage').charged_write(context['ledger'], Path(database), maximum))
+                        charged = True
+                return sqlite3.SQLITE_OK
+            if native and fd is not None:
+                stack.enter_context(package_helper(config, 'runtime_source_head').grant(
+                    conn, owner_fd=fd, control=True, authorizer=authorize))
+            elif native:
                 conn.set_authorizer(authorize)
             with conn:
                 yield conn
@@ -1570,6 +1606,57 @@ def runtime_active(config):
     else:
         config.pop('_runtime_active_control', None)
     return value
+
+
+def close_native_batch_escrow(config, context, controls, proof_sha256):
+    # A completed bounded batch gets an immutable final ledger before a new
+    # token/escrow may be admitted for the same frozen accepted run. Actual file
+    # usage is inventoried again; provider charges and prior ledgers are retained.
+    settle_native_publication(config, context, proof_sha256)
+    ledger = context['ledger']
+    target = Path(controls) / 'storage_cycle_completed.json'
+    budget = package_helper(config, 'storage_budget')
+    if not target.exists():
+        maximum = 2*budget.LEDGER_MAX_BYTES + 16384
+        operation_id = hashlib.sha256(('native-batch-ledger:'+str(target)).encode()).hexdigest()
+        funding_proof = hashlib.sha256(f'{target}\n{maximum}\n{ledger.cycle_id}\n{ledger.scope_hash}'.encode()).hexdigest()
+        funded = ledger.snapshot().get('completions', {}).get(operation_id)
+        if funded is None:
+            outstanding = ledger.snapshot()['operations'].get(operation_id)
+            operation = ledger.resume(operation_id) if outstanding else ledger.reserve(ledger.category_for(target), maximum, path=target, operation_id=operation_id)
+            if outstanding is None or outstanding['consumed'] == 0:
+                operation.consume(maximum)
+            operation.settle(proof_sha256=funding_proof)
+        else:
+            require(funded['path'] == str(target) and funded['maximum'] == maximum
+                    and funded['consumed'] == maximum and funded['proof_sha256'] == funding_proof,
+                    'native batch ledger funding receipt differs')
+        document = {**ledger.snapshot(), 'phase':'completed'}
+        payload = json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n'
+        require(len(payload.encode()) <= budget.LEDGER_MAX_BYTES, 'native batch ledger exceeds its sealed bound')
+        from contextlib import nullcontext as prepaid
+        files = package_helper(config, 'atomic_files')
+        def covered(path, size):
+            require(path == target and size == len(payload.encode()), 'native escrow receipt escaped its prepaid bound')
+            return prepaid()
+        with files.admitted_file_writes(covered):
+            files.atomic_write_text(target, payload)
+    require(read_json(target) == {**ledger.snapshot(), 'phase':'completed'}, 'native batch final escrow differs')
+    ledger.transition('publication_admitted', 'completed')
+
+
+def settle_native_publication(config, context, proof_sha256):
+    state = context['ledger'].snapshot()
+    writers = [key for key, role in context['admission'].config.writer_roles.items() if role == 'publisher']
+    require(len(writers) == 1, 'native publisher writer scope differs')
+    publisher = context['ledger'].for_writer(writers[0])
+    for category, maximum in context['limits']['publisher_write_limits'].items():
+        operation_id = hashlib.sha256(f'publication\n{publisher.cycle_id}\n{publisher.writer_id}\n{category}'.encode()).hexdigest()
+        operation = state['operations'].get(operation_id)
+        if operation is not None:
+            require(operation['writer_id'] == publisher.writer_id and operation['maximum'] == maximum
+                    and operation['category'] == category, 'native publisher escrow binding differs')
+            publisher.resume(operation_id).settle(proof_sha256=proof_sha256)
 
 
 def runtime_projection_target(config, run_id, controls):
@@ -1613,17 +1700,80 @@ def runtime_advance(config, run_id, controls, descriptor):
     runtime_active(config)
 
 
+def runtime_queue_controls(config, run_id, descriptor):
+    root = config['state_dir'] / 'runs' / run_id
+    with runtime_connection(config) as conn:
+        authority = package_helper(config, 'runtime_authority')
+        value = authority.validate(conn)
+        control = authority.publication_control(conn)
+        require(value['run_id'] == run_id and value['phase'] == 'accepted' and control.get('publication_only'),
+                'native queue proof requires its publication-only owner')
+        require(value['revision'] == value['start_revision'], 'native queue source revision changed before sealing')
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = control['queue_started_at']
+    immutable_json(root / 'request.json', {'schema_version':1, 'run_id':run_id, 'started_at':stamp,
+        'deadline_at':stamp, 'kind':'native_publication_only',
+        'source_manifest_path':str(root / 'source_manifest.json'),
+        'source_manifest_sha256':config['_manifest_sha256'],
+        'source_registry':{'path':str(config['_registry_path']), 'sha256':config['_registry_sha256']},
+        'expected_source_ids':config['_runtime_expected_source_ids'], 'report_path':str(root / 'acceptance.json')})
+    manifest = root / 'source_manifest.json'
+    if not manifest.exists():
+        payload = config['source_manifest_path'].read_bytes()
+        require(hashlib.sha256(payload).hexdigest() == config['_manifest_sha256'], 'queue source manifest changed')
+        if config.get('_storage_context'):
+            with package_helper(config, 'dispatcher_storage').charged_write(config['_storage_context']['ledger'], manifest, len(payload)):
+                manifest.write_bytes(payload)
+        else:
+            manifest.write_bytes(payload)
+    require(digest(manifest) == config['_manifest_sha256'], 'queue manifest differs')
+    immutable_json(root / 'acceptance.json', {'schema_version':1,'kind':'native_accepted_queue','run_id':run_id,
+        'queue_epoch':value['epoch'], 'source_revision':value['revision'], 'database':str(config['publication_worker_database']),
+        'bootstrap_sha256':hashlib.sha256(value['bootstrap_json'].encode()).hexdigest(),
+        'scope':'Frozen committed acceptance references; exact selected artifacts and destinations are verified before acknowledgement.'})
+    current_binding = package_helper(config, 'pending_publication').database_binding(config['publication_worker_database'])
+    if (root / 'worker_result.json').exists():
+        previous = read_json(root / 'worker_result.json')['database_binding']
+        require(package_helper(config, 'pending_publication').same_database_binding(previous, current_binding),
+                'native queue source fence changed')
+        current_binding = previous
+    immutable_json(root / 'worker_result.json', {'schema':'native-accepted-queue-proof-1','run_id':run_id,
+        'status':'incomplete','reasons':['Continuing authoritative older publication work without fetching'],
+        'worker_exit_code':None, 'report_sha256':digest(root / 'acceptance.json'),
+        'request_sha256':digest(root / 'request.json'), 'config_sha256':config['_config_sha256'],
+        'database_binding':current_binding})
+    if not (root / 'state.json').exists():
+        atomic_json(root / 'state.json', {'schema_version':1,'run_id':run_id,'run_dir':str(root),
+            'status':'accepted_work_pending','phase':'accepted','process_groups':[], 'worker_dispatched':False})
+
+
 def runtime_resume(config, descriptor):
     """Reconcile only the authoritative active run under the exact shared owner."""
     pending = package_helper(config, "pending_publication")
     value = runtime_active(config)
     if value["phase"] == "idle":
         require(pending.inspect(config["state_dir"]) is None, "idle authority has an unresolved accepted marker")
-        return None
+        work = package_helper(config, 'publication_work')
+        with runtime_connection(config) as conn:
+            vector = work.vector(conn, contract_sha256=config['_config_sha256'], now=time.time()) if work.exists(conn) else None
+            if vector and (vector['pending'] or vector['revalidation_reasons']):
+                require(not any(reason != 'time_transition_due' for reason in vector['revalidation_reasons']),
+                        'publication contract requires explicit dirty-epoch migration before fetching')
+                context = config.get('_storage_context')
+                run_id = context['ledger'].cycle_id if context else str(uuid.uuid4())
+                package_helper(config, 'runtime_authority').begin_publication_only(conn, run_id, config['_config_sha256'],
+                    control_dir=config['state_dir'] / 'runs' / run_id,
+                    publication_scope=runtime_publication_scope(config), started_at=now().isoformat())
+            else:
+                return None
+        runtime_queue_controls(config, run_id, descriptor)
+        return runtime_resume(config, descriptor)
     accepted_dir = config["state_dir"] / "runs" / value["run_id"]
     run = Path(config['_runtime_active_control'])
     with runtime_connection(config) as conn:
         control = package_helper(config, 'runtime_authority').publication_control(conn)
+    if control.get('publication_only') and control.get('publication_sequence', 0) == 0:
+        runtime_queue_controls(config, value['run_id'], descriptor)
     if control.get('publication_sequence', 0):
         previous = Path(control['previous_publication_control_dir'])
         require(digest(previous / 'outcome.json') == control['previous_outcome_sha256']
@@ -1679,7 +1829,7 @@ def runtime_resume(config, descriptor):
     state = read_json(state_path)
     former_processes_absent(state)
     proof = read_json(accepted_dir / "worker_result.json")
-    require(proof.get("worker_exit_code") == 0
+    require((proof.get("worker_exit_code") == 0 or (control.get('publication_only') and proof.get('schema') == 'native-accepted-queue-proof-1'))
             and proof.get("request_sha256") == digest(accepted_dir / "request.json")
             and proof.get("config_sha256") == config["_config_sha256"]
             and (control.get('publication_sequence', 0) > 0 or pending.same_database_binding(proof.get("database_binding", {}), pending.database_binding(config["publication_worker_database"]))) ,
@@ -1716,6 +1866,7 @@ def phase_remaining(config, hard_end, wall_end, phase):
 
 
 def tick(config, expected, recover_publication=False):
+    config['_runtime_expected_source_ids'] = expected
     deadline_at = min(time.monotonic() + config['total_timeout_seconds'], config.get('_entry_monotonic_deadline', float('inf')))
     wall_at = min(time.time() + config['total_timeout_seconds'], config.get('_entry_wall_deadline', float('inf')))
     with (package_helper(config, 'publication_deadline').entry_deadlines(deadline_at, wall_at) if runtime_enabled(config) else nullcontext()):
@@ -1747,6 +1898,7 @@ def _tick(config, expected, recover_publication=False):
                 "status": "lock_busy",
                 "reason": "another cooperating jobagg entry point holds the shared lock",
             }
+        config['_runtime_controller_fd'] = descriptor
         if config.get("maintenance_file") and config["maintenance_file"].exists():
             return {
                 "status": "maintenance_paused",
@@ -1855,6 +2007,8 @@ def _tick(config, expected, recover_publication=False):
             )
         return result
     finally:
+        if config.get('_runtime_controller_fd') == descriptor:
+            config.pop('_runtime_controller_fd', None)
         os.close(descriptor)
 
 
@@ -1958,6 +2112,11 @@ def publication_request(
     if config["sealed_publication_snapshots"]:
         snapshot = pending_value.get("projection") if pending_value else None
         if snapshot is None:
+            if context and selection is not None:
+                target_parent = Path(pending_value['projection_target']).parent
+                if not target_parent.exists():
+                    with package_helper(config, 'dispatcher_storage').charged_write(context['ledger'], target_parent, 0):
+                        target_parent.mkdir(parents=True)
             snapshot = snapshot_helper(config).create_publication_snapshot(
                 config["publication_worker_database"],
                 Path(pending_value['projection_target']) if pending_value else report_path.parent / 'publication_snapshot.sqlite3',
@@ -2801,7 +2960,9 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
         else:
             proof = read_json(accepted_dir / "worker_result.json")
             status, reasons = proof["status"], list(proof["reasons"])
-            record.update(worker_exit_code=0, worker_status=status, worker_reasons=reasons,
+            record.update(worker_exit_code=proof.get('worker_exit_code'), worker_dispatched=False,
+                          publication_only=proof.get('schema') == 'native-accepted-queue-proof-1',
+                          worker_status=status, worker_reasons=reasons,
                           worker_report_sha256=digest(report_path), phase="worker_validated")
             save()
         replacements = {"{request_path}": str(request_path), "{report_path}": str(report_path),

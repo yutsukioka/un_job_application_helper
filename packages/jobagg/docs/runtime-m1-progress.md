@@ -79,6 +79,31 @@ finite caps under the existing storage escrow.
 
 ## Remaining immediate scope
 
+The native idle-start path now continues older queued work using a typed,
+revision-fenced publication-only certificate; it does not invent a worker exit.
+Native budget admission is explicitly `per_bounded_batch`: each completed batch
+retains an exact final escrow receipt before fresh finite tokens are admitted for
+the same frozen accepted run. The fixed total/category ceilings and quota charges
+remain in force. A real budget/semantic/runtime fixture covers three batches,
+verified exports, empty follow-up and interruption after the durable escrow
+receipt; its combined routing/budget regression batch passed 58 tests.
+
+The full package suite on immutable commit `08d8546d` produced 3,760 passes,
+9 skips and one clock-injection failure. The local monotonic seam was restored
+alongside entry propagation; its 17-test targeted batch passed. The dispatcher
+suite then passed 166 tests and 17 subtests after updating the three-total-failure
+end-to-end ceiling. Later candidate changes still require final broad validation.
+
+The next ownership stage binds source mutations to the actual shared-owner FD
+and checks ownership again at commit. A source transaction head outside the
+SQLite file prevents an in-place stale restore or an uncertain rollback from
+certifying an empty queue. Native phase/revision controls reject raw writers;
+only explicitly named control tables are exempt from domain history tracking.
+Its source-restore/owner, real native drain and complete binding batch passed
+19 tests; the broader current routing/native-worker batch passed 28 tests before
+those dedicated negative cases were added. These groups overlap and are not
+summed. All 161 package Python modules are included in the reviewed seal.
+
 Complete checkpointed all-writer migration and exact historical listing/document/
 export reconciliation, native budget/semantic-fence integration and its crash
 faults, retained-history scale/cold-output gates, and the full regression/review

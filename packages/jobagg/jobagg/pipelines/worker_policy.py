@@ -56,6 +56,16 @@ class SharedPolicy:
     def inspect(self):
         if self.root.resolve() != self.root or self.marker.resolve() != self.marker:
             raise ValueError("Shared policy paths must not be symlinked/aliased")
+        if (self.root / 'authority.json').exists():
+            authority = self.native_authority()
+            authority.revision()
+            with authority.connect() as conn:
+                covered = {row[0] for row in conn.execute('SELECT source_id FROM sources')}
+            if not self.source_ids.issubset(covered):
+                raise ValueError('Source scope not covered by native policy migration')
+            return {'status':'existing', 'path':str(self.root), 'authority':'indexed_sql'}
+        if (self.root / 'authority.sqlite3').exists():
+            raise ValueError('Native policy authority head missing; explicit repair required')
         if self.marker.exists():
             marker = json.loads(self.marker.read_text())
             manifest = self.root / "bootstrap.json"

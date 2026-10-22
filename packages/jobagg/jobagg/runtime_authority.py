@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-SCHEMA = 'jobagg-runtime-authority-2'
+SCHEMA = 'jobagg-runtime-authority-3'
 
 
 class RuntimeRepairRequired(ValueError):
@@ -22,9 +22,10 @@ def _quote(name):
 
 
 def _tables(conn):
+    from jobagg.publication_work import CONTROL_TABLES
     excluded = {row[1] for row in conn.execute('PRAGMA table_list') if row[2] in {'virtual', 'shadow'}}
     return sorted(row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                  if row[0] not in excluded and row[0] not in {'semantic_history_state', 'jobagg_runtime_state'} and not row[0].startswith(('sqlite_', 'jobagg_dirty_')))
+                  if row[0] not in excluded and row[0] not in {'semantic_history_state', 'jobagg_runtime_state'} | CONTROL_TABLES and not row[0].startswith('sqlite_'))
 
 
 def _triggers(tables):
@@ -78,6 +79,8 @@ def validate(conn):
     for name, sql in _triggers(tables).items():
         if name not in actual or ' '.join(actual[name].split()) != ' '.join(sql.split()):
             raise RuntimeRepairRequired('runtime_fence_changed')
+    from jobagg.runtime_source_head import validate as validate_head
+    validate_head(conn, value)
     return value
 
 
@@ -105,13 +108,16 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
         if existing['epoch'] != epoch or existing['owner_path'] != str(Path(owner_path).absolute()):
             raise RuntimeRepairRequired('runtime_activation_binding_changed')
         return existing
-    conn.execute("CREATE TABLE jobagg_runtime_state(id INTEGER PRIMARY KEY CHECK(id=1),schema TEXT,epoch TEXT,owner_path TEXT,revision INTEGER,tables_json TEXT,bootstrap_json TEXT,run_id TEXT,phase TEXT,config_sha256 TEXT,start_revision INTEGER,control_json TEXT NOT NULL DEFAULT '{}')")
+    conn.execute("CREATE TABLE jobagg_runtime_state(id INTEGER PRIMARY KEY CHECK(id=1),schema TEXT,epoch TEXT,owner_path TEXT,revision INTEGER,tables_json TEXT,bootstrap_json TEXT,run_id TEXT,phase TEXT,config_sha256 TEXT,start_revision INTEGER,control_json TEXT NOT NULL DEFAULT '{}',source_transaction_id TEXT)")
     tables = _tables(conn)
-    conn.execute('INSERT INTO jobagg_runtime_state VALUES(1,?,?,?,?,?,?,NULL,\'idle\',NULL,0,\'{}\')',
+    conn.execute('INSERT INTO jobagg_runtime_state VALUES(1,?,?,?,?,?,?,NULL,\'idle\',NULL,0,\'{}\',NULL)',
                  (SCHEMA, epoch, str(Path(owner_path).absolute()), 0, json.dumps(tables), json.dumps(bootstrap_receipt, sort_keys=True)))
     for sql in _triggers(tables).values():
         conn.execute(sql)
-    for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'jobagg_dirty_%'").fetchall():
+    from jobagg.publication_work import CONTROL_TABLES
+    for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+        if row[0] not in CONTROL_TABLES:
+            continue
         for operation in ('INSERT', 'UPDATE', 'DELETE'):
             name = 'runtime_control_' + hashlib.sha256((row[0] + operation).encode()).hexdigest()
             conn.execute(f'CREATE TRIGGER {_quote(name)} BEFORE {operation} ON {_quote(row[0])} BEGIN '
@@ -122,9 +128,21 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
             raise RuntimeRepairRequired('runtime_publication_bootstrap_boundary_invalid')
         conn.execute('UPDATE jobagg_runtime_state SET control_json=? WHERE id=1',
                      (json.dumps({'publication_cursor': bootstrap_receipt['publication_boundary']}, sort_keys=True),))
+    from jobagg.publication_work import exists as native_work
+    if native_work(conn):
+        from jobagg.runtime_source_head import activate as activate_head
+        activate_head(conn, owner_fd=owner_fd)
+        bootstrap_receipt = json.loads(state(conn)['bootstrap_json'])
+        conn.execute("CREATE TRIGGER runtime_state_control_guard BEFORE UPDATE OF schema,epoch,owner_path,tables_json,bootstrap_json,run_id,phase,config_sha256,start_revision,control_json ON jobagg_runtime_state BEGIN SELECT CASE WHEN jobagg_runtime_control_allowed()!=1 THEN RAISE(ABORT,'runtime_control_not_admitted') END; END")
+        conn.execute("CREATE TRIGGER runtime_state_mutation_guard BEFORE UPDATE OF revision,source_transaction_id ON jobagg_runtime_state BEGIN SELECT CASE WHEN jobagg_runtime_mutation_allowed()!=1 THEN RAISE(ABORT,'runtime_mutation_not_admitted') END; END")
+        conn.create_function('jobagg_runtime_control_allowed',0,lambda:1)
+        conn.create_function('jobagg_runtime_mutation_allowed',0,lambda:1)
     bootstrap_receipt['schema_sha256'] = _schema_hash(conn)
     conn.execute('UPDATE jobagg_runtime_state SET bootstrap_json=? WHERE id=1', (json.dumps(bootstrap_receipt, sort_keys=True),))
-    return validate(conn)
+    result = validate(conn)
+    conn.create_function('jobagg_runtime_control_allowed',0,lambda:0)
+    conn.create_function('jobagg_runtime_mutation_allowed',0,lambda:0)
+    return result
 
 
 def binding(path):
@@ -139,7 +157,11 @@ def binding(path):
                 'bootstrap_sha256': hashlib.sha256(value['bootstrap_json'].encode()).hexdigest()}
 
 
-def begin(conn, run_id, config_sha256, *, control_dir=None, publication_scope=None):
+def begin(conn, run_id, config_sha256, *, control_dir=None, publication_scope=None, owner_fd=None):
+    if owner_fd is not None:
+        from jobagg.runtime_source_head import grant
+        with grant(conn, owner_fd=owner_fd, control=True):
+            return begin(conn, run_id, config_sha256, control_dir=control_dir, publication_scope=publication_scope)
     value = validate(conn)
     if value['phase'] != 'idle':
         raise RuntimeRepairRequired('runtime_active_work_requires_continuation')
@@ -160,25 +182,23 @@ def transition(conn, run_id, old, new):
 
 
 @contextmanager
-def writer(conn, *, run_id, owner_path):
+def writer(conn, *, run_id, owner_path, owner_fd=None, budgeted=False):
     value = state(conn)
     if value is None:
-        yield  # Existing generations retain their original contract until explicit migration.
+        yield
         return
     value = validate(conn)
-    if value['owner_path'] != str(Path(owner_path).absolute()) or value['run_id'] != run_id or value['phase'] != 'worker':
-        conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 0)
-        yield  # Read-only use is valid; every mutation remains denied by triggers.
+    if (owner_fd is None or value['owner_path'] != str(Path(owner_path).absolute())
+            or value['run_id'] != run_id or value['phase'] != 'worker'):
+        conn.create_function('jobagg_runtime_write_allowed',0,lambda:0)
+        yield
         return
-    # Caller holds the actual inherited shared owner for this whole context.
+    from jobagg.runtime_source_head import grant
     def allowed():
         current = state(conn)
-        return int(current['run_id'] == run_id and current['phase'] == 'worker' and current['epoch'] == value['epoch'])
-    conn.create_function('jobagg_runtime_write_allowed', 0, allowed)
-    try:
+        return current['epoch'] == value['epoch'] and current['run_id'] == run_id and current['phase'] == 'worker'
+    with grant(conn, owner_fd=owner_fd, writer_check=allowed, commit_guard=not budgeted):
         yield
-    finally:
-        conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 0)
 
 
 def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
@@ -237,16 +257,12 @@ def remember_publication_boundary(conn, run_id, boundary):
 
 @contextmanager
 def controller(conn, *, run_id, owner_fd):
-    from jobagg.publication_fence import _owner
     value = validate(conn)
     if value['run_id'] != run_id:
         raise RuntimeRepairRequired('runtime_controller_run_differs')
-    _owner(owner_fd, value['owner_path'])
-    conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 1)
-    try:
+    from jobagg.runtime_source_head import grant
+    with grant(conn, owner_fd=owner_fd, control=True, commit_guard=False):
         yield
-    finally:
-        conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 0)
 
 
 def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result_sha256):
@@ -270,3 +286,10 @@ def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result
     conn.execute("UPDATE jobagg_runtime_state SET phase='accepted',control_json=? WHERE id=1",
                  (json.dumps(control, sort_keys=True),))
     return control
+
+
+def begin_publication_only(conn, run_id, config_sha256, *, control_dir, publication_scope, started_at):
+    begin(conn, run_id, config_sha256, control_dir=control_dir, publication_scope=publication_scope)
+    control = publication_control(conn)
+    control.update(publication_only=True, queue_started_at=started_at)
+    conn.execute("UPDATE jobagg_runtime_state SET phase='accepted',control_json=? WHERE id=1", (json.dumps(control,sort_keys=True),))

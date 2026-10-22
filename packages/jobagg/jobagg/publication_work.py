@@ -12,7 +12,15 @@ from pathlib import Path
 import sqlite3
 import time
 
-SCHEMA = "publication-work-1"
+SCHEMA = "publication-work-2"
+CONTROL_TABLES = {
+    "jobagg_dirty_state",
+    "jobagg_dirty_versions",
+    "jobagg_dirty_current",
+    "jobagg_dirty_bootstrap",
+    "jobagg_dirty_cohorts",
+    "jobagg_dirty_transitions",
+}
 EXCLUDED = {
     "jobagg_runtime_state",
     "semantic_history_state",
@@ -97,16 +105,47 @@ def configure(conn):
     conn.create_function("jobagg_dirty_units", 2, units)
 
 
+def _schema_hash(conn):
+    rows = [
+        tuple(row)
+        for row in conn.execute("SELECT name,type,sql FROM sqlite_master ORDER BY name")
+        if row[0].startswith("jobagg_dirty_")
+    ]
+    return hashlib.sha256(_dump(rows).encode()).hexdigest()
+
+
+def validate(conn):
+    if not exists(conn):
+        raise ValueError("publication_work_authority_missing")
+    state = conn.execute(
+        "SELECT schema,schema_sha256 FROM jobagg_dirty_state WHERE id=1"
+    ).fetchone()
+    if (
+        state is None
+        or state[0] != SCHEMA
+        or state[1] != _schema_hash(conn)
+        or any(
+            not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+            ).fetchone()
+            for name in CONTROL_TABLES
+        )
+    ):
+        raise ValueError("publication_work_schema_or_fence_changed")
+
+
 def prepare(conn, *, contract_sha256, epoch):
     """Explicit staged schema preparation before runtime fence activation."""
     if exists(conn):
+        validate(conn)
         return
     configure(conn)
     conn.execute(
-        "CREATE TABLE jobagg_dirty_state(id INTEGER PRIMARY KEY,schema TEXT,epoch TEXT,contract_sha256 TEXT,next_transition_at REAL,bootstrap_complete INTEGER)"
+        "CREATE TABLE jobagg_dirty_state(id INTEGER PRIMARY KEY,schema TEXT,epoch TEXT,contract_sha256 TEXT,next_transition_at REAL,bootstrap_complete INTEGER,schema_sha256 TEXT)"
     )
     conn.execute(
-        "INSERT INTO jobagg_dirty_state VALUES(1,?,?,?,NULL,0)", (SCHEMA, epoch, contract_sha256)
+        "INSERT INTO jobagg_dirty_state VALUES(1,?,?,?,NULL,0,NULL)",
+        (SCHEMA, epoch, contract_sha256),
     )
     conn.execute(
         "CREATE TABLE jobagg_dirty_versions(version INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,source_id TEXT,job_key TEXT,kind TEXT,changed_at REAL,operation TEXT)"
@@ -140,7 +179,7 @@ def prepare(conn, *, contract_sha256, epoch):
     tables = [
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        if not row[0].startswith(("sqlite_", "jobagg_dirty_")) and row[0] not in EXCLUDED
+        if not row[0].startswith("sqlite_") and row[0] not in EXCLUDED | CONTROL_TABLES
     ]
     excluded = {
         row[1] for row in conn.execute("PRAGMA table_list") if row[2] in {"virtual", "shadow"}
@@ -176,6 +215,8 @@ def prepare(conn, *, contract_sha256, epoch):
                 ON CONFLICT(unit) DO UPDATE SET version=excluded.version,last_changed_at=excluded.last_changed_at,
                     first_changed_at=CASE WHEN disposition='acknowledged' THEN excluded.first_changed_at ELSE first_changed_at END,
                     disposition='pending',reason=NULL,acknowledgement_sha256=NULL; END''')
+
+    conn.execute("UPDATE jobagg_dirty_state SET schema_sha256=? WHERE id=1", (_schema_hash(conn),))
 
 
 def _mark(conn, unit, source, job, kind, operation):
@@ -236,8 +277,7 @@ def bootstrap(conn, *, limit, deadline_at):
 
 
 def vector(conn, *, contract_sha256, now):
-    if not exists(conn):
-        raise ValueError("publication_work_authority_missing")
+    validate(conn)
     state = dict(
         zip(
             [

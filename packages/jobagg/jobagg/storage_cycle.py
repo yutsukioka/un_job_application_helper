@@ -320,6 +320,11 @@ def prepare_cycle(config: Mapping[str, Any], run_id: str) -> dict[str, Any] | No
     deadline = time.monotonic() + limits["inventory_seconds"]
     basis = _basis(config, limits, deadline=deadline)
     projection_cap = 2 * (basis["worker_db_bytes"] + limits["database_growth_cap_bytes"])
+    if config.get('runtime_control') and config.get('publication_admission'):
+        declared = config['publication_admission'].get('max_projection_bytes')
+        if type(declared) is not int:
+            raise StorageBudgetError('finite_native_projection_cap_required')
+        projection_cap = declared
     if projection_cap < MIN_PROJECTION_ALLOCATION_BYTES:
         raise StorageBudgetError("projection cap cannot cover finite snapshot recovery controls")
     # Enforced publisher caps are added to worker/projection/control escrow,

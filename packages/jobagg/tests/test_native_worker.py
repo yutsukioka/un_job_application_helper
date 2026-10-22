@@ -46,7 +46,7 @@ def test_cold_first_useful_cycle_charges_sql_and_accepts_pointer_atomically(setu
                 owner_fd=owner,
                 bootstrap_receipt={"reconciled": True, "source_sha256": "a" * 64},
             )
-            runtime_authority.begin(conn, "first-useful", "configuration")
+            runtime_authority.begin(conn, "first-useful", "configuration", owner_fd=owner)
     monkeypatch.setattr(
         worker.shared_policy, "event_snapshot", lambda **_: pytest.fail("cold historical census")
     )

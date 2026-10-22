@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "621193bd1e442e32e3a2f836f11202569f07ffa68bb821563a2f8c3236bdda74"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "f5ca4e1752a4b6298ea17e3fe00d4c244338c9d07ab315c6da1cad6f57f0ed8a"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -623,8 +623,14 @@ class WorkerStorage:
             nonlocal grant, admission_error
             if action in denied or action == sqlite3.SQLITE_SAVEPOINT:
                 return sqlite3.SQLITE_DENY
-            if action == sqlite3.SQLITE_TRANSACTION and first == "COMMIT" and not committing:
-                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_TRANSACTION and first == "COMMIT":
+                if not committing:
+                    return sqlite3.SQLITE_DENY
+                try:
+                    from jobagg.runtime_source_head import owner
+                    owner(self.worker._runtime_owner_fd, self.worker.shared_lock)
+                except (ValueError, OSError, TypeError):
+                    return sqlite3.SQLITE_DENY
             if (action == sqlite3.SQLITE_PRAGMA and second is not None
                     and first.lower() not in {"table_info", "table_xinfo", "index_list", "index_info", "index_xinfo", "foreign_key_list"}):
                 return sqlite3.SQLITE_DENY
@@ -728,7 +734,8 @@ class SerializedWorkerDatabase(JobDatabase):
                 from jobagg.runtime_authority import writer
                 with (storage.database_write(conn) if storage is not None and not nested else nullcontext()):
                     with (writer(conn, run_id=getattr(self.worker, "_runtime_run_id", None),
-                                 owner_path=self.worker.shared_lock) if not nested else nullcontext()):
+                                 owner_path=self.worker.shared_lock, owner_fd=getattr(self.worker, '_runtime_owner_fd', None),
+                                 budgeted=storage is not None) if not nested else nullcontext()):
                         yield conn
 
 
@@ -2574,6 +2581,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self._report_deadline = self._sql_deadline = None
                 self._elapsed_deadline = float("inf")
                 self._runtime_run_id = None
+                self._runtime_owner_fd = None
                 if getattr(self.shared_policy, '_native', None) is not None:
                     self.shared_policy._native.owner_fd = None
                     self.shared_policy._native.storage = None
@@ -2610,6 +2618,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         self._report_deadline = deadline
         self._sql_deadline = deadline
         with shared_owner(self.shared_lock) as owner_fd:
+            self._runtime_owner_fd = owner_fd
             if self.storage:
                 self.storage.activate((request or {}).get("semantic_history_policy"))
             self.initialize()
