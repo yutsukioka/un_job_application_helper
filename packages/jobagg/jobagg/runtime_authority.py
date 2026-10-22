@@ -22,7 +22,9 @@ def _quote(name):
 
 
 def _tables(conn):
-    from jobagg.publication_work import CONTROL_TABLES
+    from jobagg.publication_work import CONTROL_TABLES as WORK_TABLES
+    from jobagg.runtime_control_catalog import CONTROL_TABLES as LEGACY_TABLES
+    CONTROL_TABLES=WORK_TABLES|LEGACY_TABLES
     excluded = {row[1] for row in conn.execute('PRAGMA table_list') if row[2] in {'virtual', 'shadow'}}
     return sorted(row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
                   if row[0] not in excluded and row[0] not in {'semantic_history_state', 'jobagg_runtime_state'} | CONTROL_TABLES and not row[0].startswith('sqlite_'))
@@ -101,8 +103,19 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
     bootstrap_receipt = {**bootstrap_receipt, 'owner_identity': {'device': actual.st_dev, 'inode': actual.st_ino}}
     if not epoch or bootstrap_receipt.get('reconciled') is not True or not bootstrap_receipt.get('source_sha256'):
         raise RuntimeRepairRequired('runtime_checkpointed_bootstrap_required')
-    if bootstrap_receipt.get('unresolved_runs') or bootstrap_receipt.get('unpublished_identities'):
-        raise RuntimeRepairRequired('runtime_bootstrap_has_unresolved_work')
+    has_catalogue = conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobagg_legacy_control_state'").fetchone()
+    if has_catalogue or bootstrap_receipt.get('unresolved_runs') or bootstrap_receipt.get('unpublished_identities'):
+        from jobagg.runtime_control_catalog import receipt as catalogue_receipt
+        imported=catalogue_receipt(conn)
+        if imported['epoch']!=epoch or imported['sha256']!=bootstrap_receipt.get('control_catalogue_sha256'):
+            raise RuntimeRepairRequired('runtime_bootstrap_has_unresolved_work')
+        for identity in bootstrap_receipt.get('unresolved_runs',[]):
+            if not conn.execute('SELECT 1 FROM jobagg_legacy_controls WHERE run_id=?',(identity,)).fetchone():
+                raise RuntimeRepairRequired('runtime_bootstrap_unindexed_unresolved_control')
+        for identity in bootstrap_receipt.get('unpublished_identities',[]):
+            unit=identity if ':' in identity and identity.split(':',1)[0] in {'job','listing','health'} else 'job:'+identity
+            if not conn.execute('SELECT 1 FROM jobagg_dirty_current WHERE unit=?',(unit,)).fetchone():
+                raise RuntimeRepairRequired('runtime_bootstrap_unindexed_accepted_identity')
     if state(conn):
         existing = validate(conn)
         if existing['epoch'] != epoch or existing['owner_path'] != str(Path(owner_path).absolute()):
@@ -114,7 +127,9 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
                  (SCHEMA, epoch, str(Path(owner_path).absolute()), 0, json.dumps(tables), json.dumps(bootstrap_receipt, sort_keys=True)))
     for sql in _triggers(tables).values():
         conn.execute(sql)
-    from jobagg.publication_work import CONTROL_TABLES
+    from jobagg.publication_work import CONTROL_TABLES as WORK_TABLES
+    from jobagg.runtime_control_catalog import CONTROL_TABLES as LEGACY_TABLES
+    CONTROL_TABLES=WORK_TABLES|LEGACY_TABLES
     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
         if row[0] not in CONTROL_TABLES:
             continue
@@ -165,7 +180,8 @@ def begin(conn, run_id, config_sha256, *, control_dir=None, publication_scope=No
     value = validate(conn)
     if value['phase'] != 'idle':
         raise RuntimeRepairRequired('runtime_active_work_requires_continuation')
-    control = json.loads(value['control_json'])
+    previous = json.loads(value['control_json'])
+    control = {key:previous[key] for key in ('publication_cursor',) if key in previous}
     control.update(publication_sequence=0, publication_control_dir=str(control_dir) if control_dir else None,
                    publication_scope=publication_scope)
     conn.execute("UPDATE jobagg_runtime_state SET run_id=?,phase='worker',config_sha256=?,start_revision=revision,control_json=? WHERE id=1",
@@ -201,7 +217,7 @@ def writer(conn, *, run_id, owner_path, owner_fd=None, budgeted=False):
         yield
 
 
-def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
+def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=None, contract_sha256=None):
     value = validate(conn)
     if not (value['run_id'] == run_id and value['phase'] == 'worker'
             and type(accepted_progress) is int and accepted_progress == 0
@@ -212,14 +228,14 @@ def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=Non
     from jobagg.publication_fence import verify_boundary
     from jobagg.publication_work import exists as work_exists, vector
     control = json.loads(value['control_json'])
-    if work_exists(conn) and not vector(conn, contract_sha256=value['config_sha256'], now=__import__('time').time())['empty']:
+    if work_exists(conn) and not vector(conn, contract_sha256=contract_sha256 or value['config_sha256'], now=__import__('time').time())['empty']:
         return False
     return (control.get('publication_scope') is not None and
             verify_boundary(control.get('publication_cursor'), expected_scope=control['publication_scope']))
 
 
-def close_empty(conn, run_id, *, accepted_progress, publication_empty_check=None):
-    if not proven_empty(conn, run_id, accepted_progress=accepted_progress, publication_empty_check=publication_empty_check):
+def close_empty(conn, run_id, *, accepted_progress, publication_empty_check=None, contract_sha256=None):
+    if not proven_empty(conn, run_id, accepted_progress=accepted_progress, publication_empty_check=publication_empty_check, contract_sha256=contract_sha256):
         raise RuntimeRepairRequired('runtime_backlog_not_proven_empty')
     conn.execute("UPDATE jobagg_runtime_state SET phase='idle' WHERE id=1 AND run_id=?", (run_id,))
 
@@ -275,7 +291,7 @@ def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result
     sequence = control['publication_sequence'] + 1
     if sequence > 999999:
         raise RuntimeRepairRequired('runtime_continuation_ceiling_requires_review')
-    root = Path(controls) if control['publication_sequence'] == 0 else Path(controls).parent.parent
+    root = Path(control['accepted_root']) if control.get('accepted_root') else (Path(controls) if control['publication_sequence'] == 0 else Path(controls).parent.parent)
     target = root / 'publication_batches' / f'{sequence:06d}'
     if target.resolve() != target:
         raise RuntimeRepairRequired('runtime_continuation_alias')
@@ -297,3 +313,22 @@ def begin_publication_only(conn, run_id, config_sha256, *, control_dir, publicat
     control = publication_control(conn)
     control.update(publication_only=True, queue_started_at=started_at)
     conn.execute("UPDATE jobagg_runtime_state SET phase='accepted',control_json=? WHERE id=1", (json.dumps(control,sort_keys=True),))
+
+
+def promote_atomic_acceptance(conn, run_id, *, proof, original_controls, started_at):
+    """Retain a failed/killed exit and promote only independently committed work."""
+    value=validate(conn)
+    if (value['phase']!='worker' or value['run_id']!=run_id or value['revision']<=value['start_revision']
+            or proof.get('kind')!='verified_native_atomic_acceptance' or proof.get('run_id')!=run_id
+            or not proof.get('versions') or proof.get('worker_exit_verified') is not False):
+        raise RuntimeRepairRequired('native_atomic_acceptance_recovery_unproven')
+    control=publication_control(conn)
+    root=Path(control['publication_control_dir'])
+    target=root/'publication_batches'/'000000'
+    target.mkdir(parents=True,exist_ok=True)
+    control.update(accepted_root=str(root),publication_control_dir=str(target))
+    control.update(publication_only=True,queue_started_at=started_at,atomic_recovery=proof,
+                   original_worker_controls=original_controls,
+                   proof_files={'acceptance':'recovered_acceptance.json','worker_result':'recovered_worker_result.json'})
+    conn.execute("UPDATE jobagg_runtime_state SET phase='accepted',start_revision=revision,control_json=? WHERE id=1",
+                 (json.dumps(control,sort_keys=True),))

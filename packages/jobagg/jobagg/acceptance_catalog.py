@@ -7,6 +7,7 @@ runtime uses the fenced immutable accepted references produced by that import.
 
 import hashlib
 import json
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -56,16 +57,24 @@ def _bundle(run, *, deadline_at, reviewed_implementations, owner_path=None):
             result.get("request_sha256") is not None
             and result["request_sha256"] != controls["request.json"]["sha256"]
         )
+        or not re.fullmatch(r"[a-f0-9]{64}", str(request.get("source_manifest_sha256")))
         or report.get("source_manifest_sha256") != request.get("source_manifest_sha256")
         or report.get("status") not in {"complete", "incomplete"}
+        or not isinstance(report.get("binding"), dict)
         or (
             owner_path is not None
             and report.get("binding", {}).get("shared_lock") != str(Path(owner_path).absolute())
         )
-        or not isinstance(report.get("binding"), dict)
         or report["binding"].get("implementation_sha256") not in reviewed_implementations
     ):
         raise ValueError("accepted_exit_successful_bound_report_required")
+    _, manifest = _read(run / "source_manifest.json", deadline_at)
+    if manifest["sha256"] != request["source_manifest_sha256"]:
+        raise ValueError("accepted_exit_frozen_manifest_changed")
+    controls["source_manifest.json"] = {
+        "path": str(run / "source_manifest.json"),
+        "sha256": manifest["sha256"],
+    }
     intervals = report.get("concurrency", {}).get("task_intervals")
     if not isinstance(intervals, list):
         raise ValueError("accepted_exit_attempt_identities_missing")

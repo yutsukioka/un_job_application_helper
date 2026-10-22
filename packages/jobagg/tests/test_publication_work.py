@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 import hashlib
 import json
+from pathlib import Path
 import sqlite3
 import time
 
@@ -22,15 +23,21 @@ def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
         fixture["worker"].connect() as conn,
     ):
         conn.execute(
-            "CREATE TABLE remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
+            "CREATE TABLE IF NOT EXISTS remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
         )
         accepted_evidence.prepare(conn)
         if import_exits:
             run_dir = fixture["root"] / "verified-old-worker"
             run_dir.mkdir(exist_ok=True)
+            (run_dir / "source_manifest.json").write_text(
+                json.dumps({"expected_source_ids": ["test_custom_html"]})
+            )
+            manifest_sha = hashlib.sha256(
+                (run_dir / "source_manifest.json").read_bytes()
+            ).hexdigest()
             request = {
                 "run_id": run_dir.name,
-                "source_manifest_sha256": "a" * 64,
+                "source_manifest_sha256": manifest_sha,
                 "expected_source_ids": ["test_custom_html"],
             }
             attempts = [
@@ -40,7 +47,7 @@ def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
             report = {
                 "run_id": run_dir.name,
                 "status": "incomplete",
-                "source_manifest_sha256": "a" * 64,
+                "source_manifest_sha256": manifest_sha,
                 "binding": {"implementation_sha256": "f" * 64, "shared_lock": str(owner_path)},
                 "concurrency": {
                     "task_intervals": [
@@ -49,7 +56,13 @@ def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
                                 key: row[key]
                                 for key in ("attempt_id", "task_id", "source_id", "kind")
                             },
-                            "outcome": {"detail_stored": "fixture"},
+                            "outcome": {
+                                {
+                                    "detail": "detail_stored",
+                                    "listing": "listing_observed",
+                                    "document": "document_captured",
+                                }[row["kind"]]: "fixture"
+                            },
                         }
                         for row in attempts
                     ]
@@ -80,6 +93,10 @@ def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
                 deadline_at=time.monotonic() + 10,
             )
         accepted_evidence.backfill(conn, limit=100, deadline_at=time.monotonic() + 10)
+        while not accepted_evidence.backfill_events(
+            conn, limit=100, deadline_at=time.monotonic() + 10
+        )["complete"]:
+            pass
         work.prepare(conn, contract_sha256="contract", epoch="epoch")
         while not work.bootstrap(conn, limit=10, deadline_at=time.monotonic() + 10):
             pass
@@ -122,7 +139,7 @@ def test_selected_projection_reads_only_admitted_dependencies_and_preserves_outp
             deadline_at=time.monotonic() + 10,
             max_bytes=2_000_000,
         )
-        assert receipt["manifest"]["version"] == "publication-projection-4"
+        assert receipt["manifest"]["version"] == "publication-projection-5"
         assert (
             destination.execute("SELECT count(*) FROM remediation_observations").fetchone()[0] == 1
         )
@@ -258,7 +275,7 @@ def test_freshness_transition_and_checkpointed_contract_revalidation_never_noop(
     add_detail(setup)
     with setup["worker"].connect() as conn:
         conn.execute(
-            "CREATE TABLE remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
+            "CREATE TABLE IF NOT EXISTS remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
         )
         accepted_evidence.prepare(conn)
         freshness = {"detail_max_age_seconds": 60, "listing_max_age_seconds": 120}
@@ -292,3 +309,81 @@ def test_freshness_transition_and_checkpointed_contract_revalidation_never_noop(
         )
         assert second["complete"]
         assert work.vector(conn, contract_sha256="new", now=time.time())["pending"]
+
+
+def test_aged_cohort_target_union_and_existing_export_cost_are_bounded(setup):
+    from jobagg.db import JobDatabase
+
+    add_detail(setup)
+    prepare(setup)
+    second = setup["output"] / "second_jobs.sqlite3"
+    JobDatabase(second).initialize()
+    paths = {"test_custom_html": setup["output"] / "test_jobs.sqlite3", "second": second}
+    policy = {
+        "max_candidates": 10,
+        "max_units": 2,
+        "max_sources": 2,
+        "max_targets": 3,
+        "max_bytes": 1_000_000_000,
+        "minimum_seconds": 0.01,
+        "measurement_sha256": "a" * 64,
+    }
+    with setup["worker"].connect() as conn:
+        work.acknowledge(conn, select(setup, conn), result_sha256="a" * 64)
+        conn.execute(
+            "INSERT OR REPLACE INTO jobagg_dirty_cohorts VALUES('test_custom_html',1000000)"
+        )
+        work._mark(
+            conn, "health:test_custom_html", "test_custom_html", None, "health", "health_update"
+        )
+        work._mark(conn, "health:second", "second", None, "health", "health_update")
+        low = work.select(
+            conn,
+            policy={**policy, "max_units": 1},
+            contract_sha256="contract",
+            output_root=setup["output"],
+            source_paths=paths,
+            deadline_at=time.monotonic() + 10,
+        )
+        assert low["source_ids"] == [
+            "second"
+        ]  # actual service history protects the low-volume cohort
+        both = work.select(
+            conn,
+            policy=policy,
+            contract_sha256="contract",
+            output_root=setup["output"],
+            source_paths=paths,
+            deadline_at=time.monotonic() + 10,
+        )
+        assert len(both["target_paths"]) == 3
+        family = sum(
+            Path(path + suffix).stat().st_size
+            for path in both["target_paths"]
+            for suffix in ("", "-wal", "-shm")
+            if Path(path + suffix).exists()
+        )
+        assert both["estimated_bytes"] == family * 8  # consolidated cost appears once
+        export = setup["output"] / "all_jobs_history.json"
+        export.write_bytes(b"x" * 4096)
+        increased = work.select(
+            conn,
+            policy=policy,
+            contract_sha256="contract",
+            output_root=setup["output"],
+            source_paths=paths,
+            deadline_at=time.monotonic() + 10,
+        )
+        assert increased["estimated_bytes"] == both["estimated_bytes"] + 8192
+        too_narrow = work.select(
+            conn,
+            policy={**policy, "max_targets": 1},
+            contract_sha256="contract",
+            output_root=setup["output"],
+            source_paths=paths,
+            deadline_at=time.monotonic() + 10,
+        )
+        assert not too_narrow["units"] and all(
+            item["reason"] == "destination_fanout_exceeds_reviewed_bound"
+            for item in too_narrow["held"]
+        )

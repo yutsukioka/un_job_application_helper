@@ -31,10 +31,11 @@ FILTERS = {
 }
 
 
-SELECTED_VERSION = 'publication-projection-4'
+SELECTED_VERSION = 'publication-projection-5'
 PREVIOUS_SELECTED_VERSION = 'publication-projection-3'
 PREVIOUS_SELECTED_FILTERS = {**FILTERS, 'jobagg_accepted_evidence': 'immutable_selected_accepted_versions_v1'}
-SELECTED_FILTERS = {**PREVIOUS_SELECTED_FILTERS, 'jobagg_evidence_backfill':'selected_legacy_acceptance_dispositions_v1'}
+PREVIOUS_V4_FILTERS = {**PREVIOUS_SELECTED_FILTERS, 'jobagg_evidence_backfill':'selected_legacy_acceptance_dispositions_v1'}
+SELECTED_FILTERS = {**PREVIOUS_V4_FILTERS, 'jobagg_accepted_events':'exact_selected_listing_document_occurrences_v1'}
 
 
 def _dump(value):
@@ -68,14 +69,14 @@ def _row_digest(row):
 
 
 def validate_manifest(manifest):
-    expected_filters = SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == SELECTED_VERSION else PREVIOUS_SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == PREVIOUS_SELECTED_VERSION else (
+    expected_filters = SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == SELECTED_VERSION else PREVIOUS_V4_FILTERS if isinstance(manifest, dict) and manifest.get('version') == 'publication-projection-4' else PREVIOUS_SELECTED_FILTERS if isinstance(manifest, dict) and manifest.get('version') == PREVIOUS_SELECTED_VERSION else (
         LEGACY_FILTERS
         if isinstance(manifest, dict) and manifest.get("version") == "publication-projection-1"
         else FILTERS
     )
     if (
         not isinstance(manifest, dict)
-        or manifest.get("version") not in {VERSION, SELECTED_VERSION, PREVIOUS_SELECTED_VERSION, "publication-projection-1"}
+        or manifest.get("version") not in {VERSION, SELECTED_VERSION, PREVIOUS_SELECTED_VERSION, "publication-projection-1", "publication-projection-4"}
         or manifest.get("filters") != expected_filters
     ):
         raise ValueError("Unknown publication projection schema or filters")
@@ -193,6 +194,20 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None, s
         lineage_started = time.monotonic()
         timings["lineage_components"] = {}
         accepted_attempt_ids = _accepted_attempt_ids(origin, deadline_at, timings["lineage_components"], job_keys=job_keys)
+        accepted_versions=[]
+        if selection is not None and _exists(origin,'jobagg_accepted_evidence'):
+            from jobagg.accepted_evidence import digest
+            for key in job_keys:
+                observed=origin.execute('SELECT proof FROM remediation_observations WHERE job_key=?',(key,)).fetchone()
+                if observed:
+                    proof_sha=digest(json.loads(observed[0]))
+                    for attempt in accepted_attempt_ids:
+                        accepted_versions.extend(row[0] for row in origin.execute('SELECT version FROM jobagg_accepted_evidence WHERE job_key=? AND proof_sha256=? AND attempt_id=?',(key,proof_sha,attempt)))
+        event_refs=[]
+        if selection is not None:
+            from jobagg.accepted_evidence import selected_events
+            event_refs=selected_events(origin,job_keys=job_keys,listing_sources=listing_sources,deadline_at=deadline_at)
+            accepted_attempt_ids.update(row['attempt_id'] for row in event_refs)
         timings["accepted_detail_lineage_seconds"] = time.monotonic() - lineage_started
         for table, predicate in filters.items():
             phase = "copy_table:" + table
@@ -230,9 +245,15 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None, s
             if selection is not None:
                 def placeholders(values):
                     return '(' + ','.join('?' for _ in values) + ')'
-                if table in {'jobs', 'remediation_observations', 'remediation_documents', 'jobagg_accepted_evidence', 'jobagg_evidence_backfill'}:
+                if table in {'jobs', 'remediation_observations', 'remediation_documents', 'jobagg_evidence_backfill'}:
                     where = ' WHERE job_key IN ' + placeholders(job_keys)
                     params = tuple(job_keys)
+                elif table == 'jobagg_accepted_evidence':
+                    where = ' WHERE version IN ' + placeholders(accepted_versions)
+                    params = tuple(accepted_versions)
+                elif table == 'jobagg_accepted_events':
+                    where = ' WHERE version IN ' + placeholders(event_refs)
+                    params = tuple(row['version'] for row in event_refs)
                 elif table == 'remediation_sources':
                     where = ' WHERE source_id IN ' + placeholders(listing_sources)
                     params = tuple(listing_sources)
@@ -240,10 +261,9 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None, s
                     where = ' WHERE attempt_id IN ' + placeholders(accepted_attempt_ids)
                     params = tuple(accepted_attempt_ids)
                 elif table == 'remediation_tasks':
-                    where = (' WHERE task_id IN (SELECT task_id FROM jobagg_accepted_evidence WHERE job_key IN ' + placeholders(job_keys) +
-                        ') OR task_id IN (SELECT task_id FROM remediation_documents WHERE job_key IN ' + placeholders(job_keys) +
-                        ") OR (kind='listing' AND source_id IN " + placeholders(listing_sources) + ')')
-                    params = tuple(job_keys) + tuple(job_keys) + tuple(listing_sources)
+                    where = (' WHERE task_id IN (SELECT task_id FROM remediation_attempts WHERE attempt_id IN ' + placeholders(accepted_attempt_ids) +
+                        ') OR task_id IN (SELECT task_id FROM remediation_documents WHERE job_key IN ' + placeholders(job_keys) + ')')
+                    params = tuple(accepted_attempt_ids) + tuple(job_keys)
                 elif table == 'attachment_blobs':
                     where = ' WHERE content_sha256 IN (SELECT content_sha256 FROM remediation_documents WHERE job_key IN ' + placeholders(job_keys) + ')'
                     params = tuple(job_keys)

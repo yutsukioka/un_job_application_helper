@@ -1,9 +1,9 @@
 """Recheck IDB page evidence; adapter diagnostics alone never certify a census."""
 
-import gzip
 import hashlib
 import json
 from pathlib import Path
+from jobagg.verification_budget import read as verification_read, VerificationBudgetExceeded
 from urllib.parse import parse_qsl, urlsplit
 
 from jobagg.adapters.idb_inventory import board_url, parse_board
@@ -42,7 +42,7 @@ def verify_idb_listing(source, jobs, capture_paths):
                 or meta.get("response_url") != url
             ):
                 raise ValueError("IDB board has no exact successful original HTTP response")
-            body = gzip.decompress(Path(meta["artifact"]).read_bytes())
+            body = verification_read(Path(meta["artifact"]), compressed=True)
             if hashlib.sha256(body).hexdigest() != meta.get("body_sha256"):
                 raise ValueError("IDB original board bytes changed")
             if url in original_urls:
@@ -125,6 +125,8 @@ def verify_idb_listing(source, jobs, capture_paths):
             identity_unit="public_requisition_id",
             verified_zero=False,
         )
+    except VerificationBudgetExceeded:
+        raise
     except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         result["reasons"].append(str(exc))
     return result

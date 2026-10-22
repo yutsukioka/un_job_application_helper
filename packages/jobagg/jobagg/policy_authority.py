@@ -9,7 +9,6 @@ may reconcile a pending head; ordinary startup never rebuilds it from history.
 from contextlib import closing, contextmanager, nullcontext
 import hashlib
 import json
-import os
 from pathlib import Path
 import sqlite3
 import time
@@ -25,8 +24,26 @@ def _dump(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def _sha(path, check_deadline=lambda: None):
+    path = Path(path)
+    before = path.stat()
+    if path.resolve() != path or not path.is_file() or before.st_size > 16 * 1024**2:
+        raise ValueError("policy_evidence_missing_aliased_or_oversized_charges_retained")
+    sha = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            check_deadline()
+            sha.update(block)
+    after = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise ValueError("policy_evidence_changed_during_audit_charges_retained")
+    return sha.hexdigest()
 
 
 def _schema_hash(conn):
@@ -62,6 +79,12 @@ class PolicyAuthority:
         self.check_deadline()
         if not self.head.exists():
             raise ValueError("policy_authority_missing_explicit_migration_required")
+        if (
+            self.head.resolve() != self.head
+            or not self.head.is_file()
+            or self.head.stat().st_size > 65536
+        ):
+            raise ValueError("policy_authority_head_missing_aliased_or_oversized")
         head = json.loads(self.head.read_text())
         if (
             head.get("schema") != SCHEMA
@@ -91,10 +114,26 @@ class PolicyAuthority:
                 if self.owner_fd is None:
                     raise ValueError("policy_authority_live_owner_required")
                 _owner(self.owner_fd, self.policy.owner)
+                owner_fd = self.owner_fd
+                from jobagg.runtime_source_head import owner as verify_owner
+
+                def admitted():
+                    verify_owner(owner_fd, self.policy.owner)
+                    return 1
+
+                def authorize(action, first, second, database, trigger):
+                    if action == sqlite3.SQLITE_TRANSACTION and first == "COMMIT":
+                        try:
+                            verify_owner(owner_fd, self.policy.owner)
+                        except (ValueError, OSError):
+                            return sqlite3.SQLITE_DENY
+                    return sqlite3.SQLITE_OK
+
+                conn.set_authorizer(authorize)
                 conn.create_function(
                     "jobagg_policy_write_allowed",
                     0,
-                    lambda: int(os.fstat(self.owner_fd).st_ino == self.policy.owner.stat().st_ino),
+                    admitted,
                 )
                 with (
                     self.storage.policy_database_write(conn, self.path)
@@ -254,7 +293,7 @@ class PolicyAuthority:
             ).fetchall()
             for row in rows:
                 self.check_deadline()
-                if _sha(row["path"]) != row["sha256"]:
+                if _sha(row["path"], self.check_deadline) != row["sha256"]:
                     raise ValueError("policy_evidence_missing_or_changed_charges_retained")
             more = (
                 rows

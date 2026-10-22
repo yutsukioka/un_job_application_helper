@@ -126,25 +126,35 @@ def _no_intent(run):
         raise PendingPublicationError("Pending work crossed publisher intent; use publication recovery")
 
 
+def proof_paths(run, files=None):
+    files=files or {'acceptance':'acceptance.json','worker_result':'worker_result.json'}
+    if files not in ({'acceptance':'acceptance.json','worker_result':'worker_result.json'},
+                     {'acceptance':'recovered_acceptance.json','worker_result':'recovered_worker_result.json'}):
+        raise PendingPublicationError('Unknown accepted proof filenames')
+    return {key:Path(run)/name for key,name in files.items()}
+
+
 def _accepted_proofs(value, run):
     for field, filename in (("request_sha256", "request.json"),
                             ("acceptance_sha256", "acceptance.json"),
                             ("worker_result_sha256", "worker_result.json")):
-        path = run / filename
+        paths = proof_paths(run, value.get('proof_files'))
+        path = run / filename if filename == 'request.json' else paths['acceptance' if filename == 'acceptance.json' else 'worker_result']
         _json(path)
         if value[field] != _sha(path):
             raise PendingPublicationError("Pending accepted-work proof changed: " + filename)
 
 
-def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, projection_target=None, publication_control_dir=None):
+def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, projection_target=None, publication_control_dir=None, proof_files=None):
     """Seal successful worker evidence before any projection allocation."""
     run = _run(Path(state_dir), run_id)
     controls = control_dir(state_dir, {'run_id': run_id, **({'publication_control_dir': str(publication_control_dir)} if publication_control_dir else {})})
     _no_intent(controls)
     target = _target(run, projection_target or (controls / 'publication_snapshot.sqlite3'))
     request = _json(run / "request.json")
-    worker = _json(run / "worker_result.json")
-    acceptance = run / "acceptance.json"
+    paths = proof_paths(run, proof_files)
+    worker = _json(paths['worker_result'])
+    acceptance = paths['acceptance']
     native_queue = worker.get('schema') == 'native-accepted-queue-proof-1'
     if native_queue:
         certificate = _json(acceptance)
@@ -163,12 +173,14 @@ def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, pro
         "config_sha256": config_sha256,
         "request_sha256": _sha(run / "request.json"),
         "acceptance_sha256": _sha(acceptance),
-        "worker_result_sha256": _sha(run / "worker_result.json"),
+        "worker_result_sha256": _sha(paths['worker_result']),
         "database": str(Path(database).absolute()),
         "database_binding": binding if binding is not None else database_binding(Path(database)),
         "lease": lease,
         "projection": None, "projection_target": str(target), "publisher_intent_recorded": False,
     }
+    if proof_files:
+        value['proof_files'] = proof_files
     if controls != run:
         value['publication_control_dir'] = str(controls)
     path = marker_path(Path(state_dir))

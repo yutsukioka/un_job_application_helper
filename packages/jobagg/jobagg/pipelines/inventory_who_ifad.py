@@ -7,11 +7,11 @@ IFAD's 100-result ceiling and inconsistent WHO totals never establish absence.
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
-import gzip
 import hashlib
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+from jobagg.verification_budget import read as verification_read, VerificationBudgetExceeded
 import re
 from urllib.parse import parse_qsl, urlsplit
 import zlib
@@ -114,8 +114,7 @@ def _body(source, path, meta, endpoint, method, result, request=None):
         )
     artifact = Path(meta["artifact"])
     require(artifact.stat().st_size <= MAX_BODY, "Compressed census exceeds read bound")
-    with gzip.open(artifact, "rb") as stream:
-        body = stream.read(MAX_BODY + 1)
+    body = verification_read(artifact, compressed=True, maximum=MAX_BODY)
     result["body_bytes_verified"] += len(body)
     require(
         len(body) <= MAX_BODY and result["body_bytes_verified"] <= MAX_TOTAL_BODY,
@@ -543,6 +542,8 @@ def verify_who_ifad_listing(source, jobs, capture_paths):
             ).encode()
         ).hexdigest()
         (_who if source.id == "who_taleo" else _ifad)(source, jobs, captures, result)
+    except VerificationBudgetExceeded:
+        raise
     except (OSError, EOFError, zlib.error):
         result["complete"] = False
         result["reasons"].append("Census capture could not be read or decompressed")

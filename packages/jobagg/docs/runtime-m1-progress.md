@@ -137,3 +137,73 @@ with unchanged storage ceilings. The real native drain fixture passes five
 profiles, including deferral with storage budget disabled/enabled and the prior
 escrow-receipt interruption. Policy migration/audit/reconciliation passes eight
 focused cases; these are separate scopes, not a package-wide result.
+
+## Complete immediate correction candidate
+
+The next stage completes the prepared M1 correction paths. It does not activate
+any production migration, process, configuration, schedule or provider request.
+
+- Native atomic acceptance can survive a killed worker without inventing exit 0.
+  Separate recovery certificates retain the original failed controls, and exact
+  selected artifacts are verified before publication. New worker runs clear old
+  recovery/projection controls while retaining their verified destination cursor.
+- Listing and document references now survive a failed refresh. Projection 5
+  copies their exact accepted occurrences and only current selected detail
+  versions, including when one vacancy has many retained historical versions.
+  Old projection validators retain their original contracts.
+- The explicit legacy-control catalogue imports reviewed complete root/writer
+  inventories in finite pages, retains uncertain claims/generations and provides
+  indexed active references. A missing/incomplete/changed catalogue holds before
+  fetching. Accepted legacy work may drain through bounded native publication;
+  closure requires exact occurrence and current export reconciliation.
+- Historical reconciliation covers detail, listing and document readback. A
+  superseded occurrence needs its exact reviewed completed generation plan and
+  actual destination journals. Current full-scope export consistency is an
+  independent condition; current row counts or a later row never substitute.
+- Publication admission includes database/WAL/SHM families, existing current and
+  history exports, the union of destinations and the consolidated target once.
+  Service history protects aged cohorts; oversized/fan-out work has explicit
+  held dispositions. Fixed source, request, concurrency and storage ceilings stay
+  intact. Freshness and contract revalidation remain durable, resumable work.
+- Independent census readers decompress in checked chunks and preserve every
+  source-specific verification condition. Typed local expiry retains the charge,
+  capture and pending task, uses only the existing reporting reserve for cleanup,
+  and earns no provider failure or accepted progress. Publication SQL readers and
+  capture hashing also enforce the inherited phase clocks.
+- Dirty epochs bind actual package Python/resource, dispatcher/helper, Python and
+  relevant installed dependency bytes. The value is computed for each invocation;
+  this is not a persistent timestamp cache or automatic approval. Changed bytes
+  require explicit reviewed dirty-epoch revalidation before fetching. Worker
+  startup is pinned to the admitted implementation. All **166** package Python
+  modules participate in the reviewed implementation seal.
+
+The immutable `b128bf9f` package run produced 3,771 passes, 9 skips and three
+failures. Two exposed compatibility with legacy fixtures lacking an event table;
+the third was a direct storage test that bypassed the actual owner lifetime.
+Compatibility is preserved, and the storage fixture now performs its authorized
+mutation under the real owner. Focused reruns pass. Final full-package/dispatcher
+validation of this later stage is recorded below once completed.
+
+### Preparation and activation boundary
+
+Preparation order is explicit: retain M0; inventory/review every control root and
+writer; page quota/control imports and acceptance backfill (including typed
+listing/document events); prepare task headers, dirty/freshness schema, complete
+destination fences and current export references; reconcile exact legacy accepted
+identities and unresolved generations; then bind the native source/owner/epoch
+with the catalogue receipt. Missing proof stays a scoped repair state. Never
+replace a live authority with an old database to roll back code.
+
+The APIs expose bounded steps; they are not permission to run against production.
+Preparation must use the actual shared owner and the applicable reviewed storage
+escrow, maintenance and migration budgets. Native normal operation refuses a
+missing catalogue, policy head, freshness contract or measured admission contract.
+Existing control/accepted artifacts remain retained across a compatible roll-forward.
+
+External-volume cold/warm scale, production throughput/age, independent R7 review,
+CI/security review, exact activation/rollback approval and M4 natural A8/24-hour
+observations remain release gates. The synthetic local history-growth fixture
+keeps one active job while adding 0/1,024/8,192 retained versions; it records SQL
+work, projection bytes and separate lineage timing without claiming an OS-cold
+cache or external-volume performance. Compression, retirement enablement and
+dispatcher relocation remain separate deliverables.

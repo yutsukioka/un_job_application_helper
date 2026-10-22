@@ -34,6 +34,7 @@ from jobagg.pipelines.document_readback import document_readback
 from jobagg.pipelines.publication_exports import publish_exports
 from jobagg.pipelines.sync_source import load_sources
 from jobagg.publication_deadline import expired
+from jobagg.verification_budget import check as verification_check, scope as verification_scope, VerificationBudgetExceeded
 from jobagg.publication_storage import charge, ensure_directory, write_scope
 
 VERSION = "incremental-live-publication-1"
@@ -54,6 +55,7 @@ def _sha(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
+            verification_check()
             digest.update(block)
     return digest.hexdigest()
 
@@ -82,6 +84,8 @@ def _epoch(value):
 def _ro(path):
     connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
+    connection.execute('PRAGMA busy_timeout=1000')
+    connection.set_progress_handler(lambda:int(expired(None)),256)
     return connection
 
 
@@ -134,6 +138,7 @@ def _capture(path, expected_sha=None):
         digest = hashlib.sha256()
         size = 0
         for block in iter(lambda: source.read(1024 * 1024), b""):
+            verification_check()
             digest.update(block)
             size += len(block)
     if digest.hexdigest() != meta.get("body_sha256") or size != meta.get("body_bytes"):
@@ -212,13 +217,18 @@ def _documents(conn, row, proof):
                 != record["text_sha256"]
             ):
                 raise ValueError("document_identity_parent_or_hash_conflict")
-            task = conn.execute(
-                "SELECT receipt,payload,status FROM remediation_tasks WHERE task_id=?",
-                (record["task_id"],),
-            ).fetchone()
-            if not task or task["status"] != "done":
-                raise ValueError("document_task_not_complete")
-            payload, receipt = json.loads(task["payload"]), json.loads(task["receipt"])
+            from jobagg.accepted_evidence import resolve_event,digest
+            accepted=resolve_event(conn,kind='document',source_id=row['source_id'],task_id=record['task_id'],evidence_key=digest(doc))
+            if accepted is not None:
+                payload,receipt=accepted['payload'],accepted['receipt']
+            else:
+                task = conn.execute(
+                    "SELECT receipt,payload,status FROM remediation_tasks WHERE task_id=?",
+                    (record["task_id"],),
+                ).fetchone()
+                if not task or task["status"] != "done":
+                    raise ValueError("document_task_not_complete")
+                payload, receipt = json.loads(task["payload"]), json.loads(task["receipt"])
             if payload.get("url") != record["url"] or payload.get("job_key") != row["job_key"]:
                 raise ValueError("document_task_association_differs")
             path = Path(receipt["manifest"])
@@ -243,6 +253,8 @@ def _documents(conn, row, proof):
             ):
                 raise ValueError("document_capture_bytes_not_bound")
             documents.append(doc)
+        except VerificationBudgetExceeded:
+            raise
         except (ValueError, KeyError, OSError, sqlite3.DatabaseError) as exc:
             rejected.append({"task_id": record["task_id"], "reason": str(exc)})
     return documents, rejected
@@ -288,7 +300,12 @@ def _latest_detail(row, conn):
     return max((_epoch(value) for value in clocks if value), default=0.0)
 
 
-def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20, deadline_at=None, job_keys=None, selected_targets=None):
+def plan_publication(*args,deadline_at=None,**kwargs):
+    with verification_scope(deadline_at):
+        return _plan_publication(*args,deadline_at=deadline_at,**kwargs)
+
+
+def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20, deadline_at=None, job_keys=None, selected_targets=None):
     _validate_targets(worker_database, output_dir, known_paths=selected_targets)
     output = Path(output_dir).resolve()
     sources = {source.id: source for source in load_sources(registry_path)}
@@ -533,6 +550,8 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                             change, destination["before"], connection
                         )
                     plan["changes"].append(change)
+            except VerificationBudgetExceeded:
+                raise
             except (ValueError, KeyError, OSError, sqlite3.DatabaseError) as exc:
                 plan["rejected"].append({"job_key": observation["job_key"], "reason": str(exc)})
     plan["pending_backlog_empty_after_generation"] = (
@@ -1379,12 +1398,14 @@ def publish_incremental(*args, publication_policy=None, storage_budget_lease=Non
         storage_budget_lease = json.loads(os.environ["JOBAGG_STORAGE_BUDGET_LEASE"])
     if execute and bool(publication_policy) != bool(storage_budget_lease):
         raise ValueError("publication_policy_and_budget_lease_required_together")
-    with write_scope(storage_budget_lease if execute else None,
+    with verification_scope(kwargs.get('deadline_at'),check_after=False), write_scope(storage_budget_lease if execute else None,
                      (publication_policy or {}).get("write_limits")) as escrow:
         result = _publish_incremental(
             *args, publication_policy=publication_policy,
             storage_budget_lease=storage_budget_lease, **kwargs,
         )
+        if result.get('status') != 'deferred':
+            verification_check()
         if escrow is not None and result.get("status") in {"publication_pending", "deferred"}:
             escrow.keep_open = True
         return result

@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "f2dbe097c3b833bad0f246845322e294fdec907670efbcc446da0025b55ac35d"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "3849d74b7edad8d4440efe52020e0246cddc457dc8843b9bf61cf886dc419527"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -1617,7 +1617,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         # retain the original listing shape, especially Workday externalPath.
         dispatch_payloads = json.loads(dump(frame))["jobs"]
         paths = sorted((target / "http").glob("*.json"))
-        proof = verify_listing(source, jobs, paths)
+        proof = verify_listing(source, jobs, paths, deadline_at=getattr(self,"_elapsed_deadline",None), deadline_epoch=getattr(self,"_sql_deadline",None))
         with self.db.connection_scope() as conn:
             retained = {}
             for job in jobs:
@@ -2276,6 +2276,23 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             # Preserve received bytes and durable attempt. Semantic errors block only
             # this task; transport host decisions are made by the HTTP checkpoint.
             reason = safe_error(exc)
+            from jobagg.verification_budget import VerificationBudgetExceeded
+            if isinstance(exc,VerificationBudgetExceeded):
+                # Verification exhausted work time after capture. Preserve the
+                # provider charge and bytes; use only the existing report reserve
+                # for a small local deferral, with the coordinator DB lock held.
+                with self._database_lock:
+                    previous=self._sql_deadline
+                    self._sql_deadline=self._report_deadline
+                    try:
+                        with self.db.connection_scope() as conn:
+                            self.finish(conn,task,token,'verification_deferred',{'capture_directory':str(target),
+                                'provider_failure':False,'verification_complete':False,'reason':reason},reason)
+                            conn.execute("UPDATE remediation_tasks SET status='pending' WHERE task_id=? AND claim=?",(task['task_id'],token))
+                    finally:
+                        self._sql_deadline=previous
+                return {'status':'pending','verification_deferred':True,'provider_failure':False,
+                        'task_id':task['task_id'],'error_type':type(exc).__name__}
             if isinstance(exc, (ResponseTooLargeError, StorageBudgetError, SemanticCapacityError)):
                 return self.finish_storage_hold(task, token, target, exc)
             if isinstance(exc, ValueError):
@@ -2612,6 +2629,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             raise ValueError("Dispatcher request and worker parallel source limit differ")
         if not execute:
             return self.preview()
+        if request and request.get('expected_implementation_sha256') is not None and request['expected_implementation_sha256']!=self.binding['implementation_sha256']:
+            raise ValueError('Worker implementation differs from admitted runtime contract')
         self._elapsed_deadline = min(time.monotonic() + self.max_seconds,
                                      getattr(self, "_entry_elapsed_deadline", float("inf")))
         self._runtime_run_id = (request or {}).get("run_id")
@@ -2673,6 +2692,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                     if task["kind"] == "detail":
                         detail_tasks += 1
                     outcomes.append(outcome)
+                    if outcome.get('verification_deferred'):
+                        stop_reason='work_deadline'
+                        break
             if (
                 self.binding["registry_sha256"] != sha(self.registry)
                 or self.binding["robots_sha256"] != sha(self.robots_path)

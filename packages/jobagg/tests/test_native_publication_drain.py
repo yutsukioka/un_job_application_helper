@@ -133,7 +133,7 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
     add_detail(setup, external_id="003")
     prepare(setup, owner_path=config["shared_lock_path"], owner_fd=owner.fileno())
     with sqlite3.connect(setup["worker"].path) as conn:
-        conn.execute("UPDATE jobagg_dirty_state SET contract_sha256=?", (config["_config_sha256"],))
+        conn.execute("UPDATE jobagg_dirty_state SET contract_sha256=?", (runner.runtime_publication_contract(config)['sha256'],))
         if budget:
             history.activate_semantic_history(
                 conn,

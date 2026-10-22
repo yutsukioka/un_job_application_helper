@@ -8,6 +8,7 @@ Unknown operations remain held rather than turning a zero-task tick into no-op.
 
 import hashlib
 import json
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -25,6 +26,9 @@ CONTROL_TABLES = {
 }
 EXCLUDED = {
     "jobagg_runtime_state",
+    "jobagg_legacy_control_state",
+    "jobagg_legacy_controls",
+    "jobagg_legacy_dependencies",
     "semantic_history_state",
     "remediation_task_counts",
     "jobagg_task_headers",
@@ -32,6 +36,7 @@ EXCLUDED = {
     "jobagg_source_hosts",
     "jobagg_header_contract",
     "jobagg_accepted_events",
+    "jobagg_event_backfill",
     "jobagg_evidence_backfill",
     "jobagg_accepted_exits",
     "jobagg_accepted_exit_runs",
@@ -373,7 +378,9 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
         "minimum_seconds",
         "measurement_sha256",
     )
-    if any(key not in policy for key in required) or not policy["measurement_sha256"]:
+    if any(key not in policy for key in required) or not re.fullmatch(
+        r"[a-f0-9]{64}", str(policy["measurement_sha256"])
+    ):
         raise ValueError("measured_publication_admission_required")
     if (
         any(type(policy[key]) is not int or policy[key] <= 0 for key in required[:5])
@@ -441,15 +448,62 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
             ):
                 unit_bytes += blob[0] * 3
         elif row["kind"] == "listing":
-            task = cursor.execute(
-                "SELECT receipt FROM remediation_tasks WHERE source_id=? AND kind='listing' AND status='done'",
-                (source,),
+            from jobagg.accepted_evidence import resolve_event, digest
+
+            frame = cursor.execute(
+                "SELECT listing_proof FROM remediation_sources WHERE source_id=?", (source,)
             ).fetchone()
-            if task:
-                receipt = json.loads(task[0])
+            try:
+                accepted = (
+                    resolve_event(
+                        conn,
+                        kind="listing",
+                        source_id=source,
+                        evidence_key=digest(json.loads(frame[0])),
+                    )
+                    if frame and frame[0]
+                    else None
+                )
+                task = (
+                    cursor.execute(
+                        "SELECT receipt FROM remediation_tasks WHERE source_id=? AND kind='listing' AND status='done'",
+                        (source,),
+                    ).fetchone()
+                    if accepted is None
+                    else None
+                )
+                receipt = accepted["receipt"] if accepted else json.loads(task[0]) if task else None
+            except ValueError:
+                holds.append(
+                    {
+                        "unit": row["unit"],
+                        "version": row["version"],
+                        "reason": "accepted_listing_dependency_requires_reconciliation",
+                    }
+                )
+                continue
+            if receipt:
                 path = Path(receipt["frame_path"])
                 unit_bytes = path.stat().st_size * 8  # Entire frame + maps/beforeimages.
-        extra = sum(Path(path).stat().st_size * 8 for path in paths - targets)
+        from jobagg.pipelines.bundles import source_output_paths
+
+        extra = 0
+        for target in paths - targets:
+            family = sum(
+                member.stat().st_size
+                for suffix in ("", "-wal", "-shm")
+                if (member := Path(target + suffix)).exists()
+            )
+            exports = source_output_paths(
+                Path(output_root), Path(target).name.removesuffix("_jobs.sqlite3")
+            )
+            existing_exports = sum(
+                exports[key].stat().st_size
+                for key in ("current_json", "current_csv", "history_json", "history_csv")
+                if exports[key].exists()
+            )
+            extra += family * 8 + existing_exports * 2
+
         estimate = unit_bytes + extra
         if estimate > policy["max_bytes"]:
             holds.append(
@@ -458,6 +512,15 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
                     "version": row["version"],
                     "reason": "oversized_unit_requires_reviewed_measured_path",
                     "estimated_bytes": estimate,
+                }
+            )
+            continue
+        if len(paths) > policy["max_targets"]:
+            holds.append(
+                {
+                    "unit": row["unit"],
+                    "version": row["version"],
+                    "reason": "destination_fanout_exceeds_reviewed_bound",
                 }
             )
             continue

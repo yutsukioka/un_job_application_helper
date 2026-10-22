@@ -206,3 +206,19 @@ def test_task_reconciliation_retains_orphan_charge_and_rejects_missing_charge(na
     with authority.connect() as conn:
         assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
     worker.close()
+
+
+def test_policy_commit_rechecks_actual_owner_lifetime_and_preserves_uncertainty(native):
+    import fcntl
+
+    policy, owner = native
+    authority = activate(policy, owner)
+    authority.owner_fd = owner.fileno()
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        with authority.connect(write=True) as conn:
+            conn.execute(
+                "INSERT INTO attempts VALUES('uncertain','example','listing',NULL,10,10,0,'{}')"
+            )
+            fcntl.flock(owner, fcntl.LOCK_UN)
+    with pytest.raises(ValueError, match="pending_repair"):
+        authority.revision()

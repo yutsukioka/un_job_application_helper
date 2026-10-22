@@ -34,6 +34,12 @@ def prepare(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS jobagg_accepted_event_run ON jobagg_accepted_events(run_id,attempt_id)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS jobagg_event_identity ON jobagg_accepted_events(kind,source_id,json_extract(reference_json,'$.evidence_key'),task_id)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS jobagg_event_backfill(attempt_id TEXT PRIMARY KEY,disposition TEXT)"
+    )
     conn.execute(f"""CREATE TABLE IF NOT EXISTS {TABLE}(version TEXT PRIMARY KEY,
         job_key TEXT NOT NULL,source_id TEXT NOT NULL,external_id TEXT NOT NULL,
         task_id TEXT NOT NULL,attempt_id TEXT NOT NULL,artifact_id TEXT NOT NULL,
@@ -273,7 +279,7 @@ def legacy_rejection(conn, job_key, proof):
     return None
 
 
-def record_event(conn, *, task, attempt_id, binding, run_id):
+def record_event(conn, *, task, attempt_id, binding, run_id, acceptance_proof=None):
     """Successful native acceptance, including listing/document, in its own TX.
 
     The object was durably captured before finish(); no process exit is inferred.
@@ -282,9 +288,11 @@ def record_event(conn, *, task, attempt_id, binding, run_id):
     from jobagg.runtime_authority import state
 
     active = state(conn)
-    if active is None:
+    if (active is None and acceptance_proof is None) or not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='jobagg_accepted_events'"
+    ).fetchone():
         return
-    if active["phase"] != "worker" or active["run_id"] != run_id:
+    if active is not None and (active["phase"] != "worker" or active["run_id"] != run_id):
         raise ValueError("atomic_acceptance_run_or_phase_differs")
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
@@ -301,11 +309,24 @@ def record_event(conn, *, task, attempt_id, binding, run_id):
         "listing": ("frame_path", "frame_sha256"),
         "document": ("manifest", "sha256"),
     }[attempt["kind"]]
+    evidence_key = receipt[hash_key]
+    if task["kind"] == "listing":
+        evidence_key = digest(receipt["enumeration"])
+    if task["kind"] == "document":
+        document = cursor.execute(
+            "SELECT manifest FROM remediation_documents WHERE task_id=?", (task["task_id"],)
+        ).fetchone()
+        evidence_key = digest(json.loads(document[0])) if document else None
     proof = {
-        "contract": "native-atomic-acceptance-1",
+        "contract": "native-atomic-acceptance-1"
+        if active is not None
+        else "legacy-accepted-event-1",
+        "evidence_key": evidence_key,
+        "task_payload": json.loads(task["payload"]),
+        "acceptance_proof": acceptance_proof,
         "run_id": run_id,
         "binding": binding,
-        "transaction_id": active["source_transaction_id"],
+        "transaction_id": active["source_transaction_id"] if active else None,
         "attempt": attempt,
         "task_identity": {
             key: task[key] for key in ("task_id", "source_id", "kind", "external_id")
@@ -364,6 +385,10 @@ def atomic_run(conn, run_id, *, limit, deadline_at):
             or proof.get("contract") != "native-atomic-acceptance-1"
             or proof.get("run_id") != run_id
             or attempt is None
+            or attempt["status"] != "done"
+            or attempt["finished_at"] is None
+            or not proof.get("transaction_id")
+            or proof["artifact"].get("id") != "sha256:" + proof["artifact"]["sha256"]
             or dict(attempt) != proof["attempt"]
             or any(
                 attempt[key] != row[key] for key in ("attempt_id", "task_id", "source_id", "kind")
@@ -380,3 +405,134 @@ def atomic_run(conn, run_id, *, limit, deadline_at):
         "sha256": digest(refs),
         "worker_exit_verified": False,
     }
+
+
+def resolve_event(conn, *, kind, source_id, evidence_key, task_id=None):
+    """Indexed exact occurrence, independent of the next refresh task status."""
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='jobagg_accepted_events'"
+    ).fetchone():
+        return None  # Original legacy contract, before explicit migration.
+    cursor = conn.cursor()
+    cursor.row_factory = sqlite3.Row
+    query = "SELECT * FROM jobagg_accepted_events WHERE kind=? AND source_id=? AND json_extract(reference_json,'$.evidence_key')=?"
+    args = (kind, source_id, evidence_key)
+    if task_id is not None:
+        query += " AND task_id=?"
+        args += (task_id,)
+    rows = cursor.execute(query + " LIMIT 2", args).fetchall()
+    if len(rows) != 1:
+        raise ValueError("accepted_event_missing_or_conflicting_occurrence")
+    row = rows[0]
+    proof = json.loads(row["reference_json"])
+    attempt = cursor.execute(
+        "SELECT * FROM remediation_attempts WHERE attempt_id=?", (row["attempt_id"],)
+    ).fetchone()
+    if (
+        digest(proof) != row["version"]
+        or proof["contract"] not in {"native-atomic-acceptance-1", "legacy-accepted-event-1"}
+        or attempt is None
+        or dict(attempt) != proof["attempt"]
+        or attempt["status"] != "done"
+        or any(
+            proof["task_identity"].get(key) != row[key] for key in ("task_id", "source_id", "kind")
+        )
+    ):
+        raise ValueError("accepted_event_identity_changed")
+    return {
+        "version": row["version"],
+        "attempt_id": row["attempt_id"],
+        "task_id": row["task_id"],
+        "receipt": json.loads(attempt["evidence"]),
+        "payload": proof["task_payload"],
+    }
+
+
+def selected_events(conn, *, job_keys, listing_sources, deadline_at):
+    """Exact event dependencies only; no history discovery in publication."""
+    cursor = conn.cursor()
+    cursor.row_factory = sqlite3.Row
+    result = []
+    for source in listing_sources:
+        if time.monotonic() >= deadline_at:
+            raise TimeoutError("selected_event_deadline")
+        row = cursor.execute(
+            "SELECT listing_proof FROM remediation_sources WHERE source_id=?", (source,)
+        ).fetchone()
+        if row and row[0]:
+            try:
+                result.append(
+                    resolve_event(
+                        conn,
+                        kind="listing",
+                        source_id=source,
+                        evidence_key=digest(json.loads(row[0])),
+                    )
+                )
+            except ValueError:
+                pass  # Preserve publisher's exact rejection, never accept a substitute.
+    for job in job_keys:
+        for row in cursor.execute(
+            "SELECT task_id,source_id,manifest FROM remediation_documents WHERE job_key=?", (job,)
+        ).fetchall():
+            if time.monotonic() >= deadline_at:
+                raise TimeoutError("selected_event_deadline")
+            try:
+                result.append(
+                    resolve_event(
+                        conn,
+                        kind="document",
+                        source_id=row["source_id"],
+                        task_id=row["task_id"],
+                        evidence_key=digest(json.loads(row["manifest"])),
+                    )
+                )
+            except ValueError:
+                pass
+    return [row for row in result if row is not None]
+
+
+def backfill_events(conn, *, limit, deadline_at):
+    """Explicit finite legacy occurrence import; killed done rows stay rejected."""
+    from pathlib import Path
+    from jobagg.acceptance_catalog import verified_attempt
+    from jobagg.publication_snapshot import _json_document
+
+    cursor = conn.cursor()
+    cursor.row_factory = sqlite3.Row
+    rows = cursor.execute(
+        "SELECT * FROM remediation_attempts a WHERE a.kind IN('listing','document') AND a.status='done' AND a.finished_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobagg_event_backfill b WHERE b.attempt_id=a.attempt_id) ORDER BY a.attempt_id LIMIT ?",
+        (limit,),
+    ).fetchall()
+    cache = {}
+    for row in rows:
+        if time.monotonic() >= deadline_at:
+            raise TimeoutError("accepted_event_backfill_deadline")
+        disposition = "missing_successful_exit_proof"
+        proof = verified_attempt(conn, row, deadline_at=deadline_at, cache=cache)
+        if proof:
+            task = cursor.execute(
+                "SELECT * FROM remediation_tasks WHERE task_id=?", (row["task_id"],)
+            ).fetchone()
+            receipt = json.loads(row["evidence"])
+            path_key, hash_key = (
+                ("frame_path", "frame_sha256")
+                if row["kind"] == "listing"
+                else ("manifest", "sha256")
+            )
+            _, record = _json_document(Path(receipt[path_key]), deadline_at=deadline_at)
+            if record["sha256"] != receipt[hash_key]:
+                raise ValueError("accepted_event_backfill_artifact_changed")
+            record_event(
+                conn,
+                task=task,
+                attempt_id=row["attempt_id"],
+                binding=None,
+                run_id=proof["run_id"],
+                acceptance_proof=proof,
+            )
+            disposition = "matched"
+        conn.execute(
+            "INSERT INTO jobagg_event_backfill VALUES(?,?)", (row["attempt_id"], disposition)
+        )
+    return {"processed": len(rows), "complete": len(rows) < limit}

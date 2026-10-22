@@ -20,6 +20,7 @@ def runtime(configured, monkeypatch):
     # This routing fixture has synthetic SQL/children; native capability coverage
     # lives in real selected-publication tests rather than a production bypass.
     monkeypatch.setattr(runner, 'require_native_capabilities', lambda *_: None)
+    monkeypatch.setattr(runner,'runtime_publication_contract',lambda cfg:{'sha256':cfg['_config_sha256'],'jobagg_implementation_sha256':'f'*64})
     config['_fixture_storage_budget'] = config.pop('storage_budget')
     config['runtime_control'] = True
     config['native_publication_escrow'] = 'per_bounded_batch' 

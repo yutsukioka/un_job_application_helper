@@ -1,11 +1,11 @@
 """Independent captured-page censuses for reviewed UNICEF and FAO endpoints."""
 from copy import deepcopy
 from datetime import datetime
-import gzip
 import hashlib
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+from jobagg.verification_budget import read as verification_read, VerificationBudgetExceeded
 import re
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -38,7 +38,7 @@ def _page(path, meta, expected_url, result, request_body=None):
     else:
         require(meta.get("request_body_sha256") in (None, hashlib.sha256(b"").hexdigest()),
                 "Unexpected PageUp listing POST body")
-    body = gzip.decompress(Path(meta["artifact"]).read_bytes())
+    body = verification_read(Path(meta["artifact"]), compressed=True)
     require(hashlib.sha256(body).hexdigest() == meta.get("body_sha256"), "Listing body hash differs")
     payload = json.loads(body)
     require(isinstance(payload, dict), "Listing body is not an object")
@@ -203,6 +203,8 @@ def verify_vacancy_listing(source, jobs, capture_paths):
         (_pageup if source.id == "unicef_pageup" else _taleo)(source, jobs, capture_paths, result)
         starts, finishes = result.pop("capture_started_at"), result.pop("capture_finished_at")
         result.update(started_at=min(starts), finished_at=max(finishes))
+    except VerificationBudgetExceeded:
+        raise
     except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         result["complete"] = False
         result["reasons"].append(str(exc))
