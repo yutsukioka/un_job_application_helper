@@ -1,0 +1,251 @@
+{
+  "schema": "jobagg-m1-local-validation-1",
+  "observed_at_utc": "2026-10-22T21:37:01.014162+00:00",
+  "observed_at_eat": "2026-10-23T00:37:01.014162+03:00",
+  "status": "complete immediate M1 implementation candidate; not activated or accepted as restored production service",
+  "provenance": {
+    "branch": "codex/jobagg-m1-runtime",
+    "runtime_code_commit": "11bdab2340286cc724b5817f9c8d5996c6a63394",
+    "m0_commit": "30ea183c",
+    "m0_baseline_unchanged": true,
+    "m0_baseline_sha256": {
+      "runtime-m0-baseline.json": "19e40338f0ab1400f69c262636f0ddd6a87430ce6ffc56d513453b963f06d952",
+      "runtime-m0-baseline.md": "a99306f6738792a03b8a253b1644136d70dc7e96a6a4e5a6bc22923126f2a7b5"
+    },
+    "module_count": 166,
+    "implementation_sha256": "a7c2a699bddfeb17ba17a01962ea5e16dbf8fdb05f4d42be1383fa7aa2d28e63",
+    "reviewed_successor_scope_sha256": "66a4a5330d9695297b955f35a1f53d2d4769e69b6af415d6118827efe26f47bb",
+    "scope_recipe": "sorted package Python path -> SHA256; successor scope substitutes only the declared successor seal literal; no package Python exclusions",
+    "post_code_commit_delta": "tests/documentation only; history fixture measurement labels clarified; runtime tree unchanged"
+  },
+  "environment": {
+    "python": "3.11.12 (main, May 22 2025, 01:39:08) [Clang 20.1.4 ]",
+    "sqlite": "3.47.1",
+    "storage": "local synthetic temporary roots; no production/external-volume writes"
+  },
+  "checks": {
+    "package": {
+      "cwd": "packages/jobagg",
+      "command": "python -m pytest tests -q --tb=short",
+      "source": "immutable git archive of runtime_code_commit",
+      "passed": 3798,
+      "skipped": 9,
+      "subtests_passed": 0,
+      "seconds": 504.09,
+      "log_sha256": "c23d6b8fa20712d6537cbc699d22ee6bb0d5bd9da39285be7d3050b417d0badf"
+    },
+    "dispatcher": {
+      "cwd": ".",
+      "command": "python -m pytest reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests -q --tb=short",
+      "source": "same immutable git archive; separate process",
+      "passed": 166,
+      "skipped": 0,
+      "subtests_passed": 17,
+      "seconds": 21.09,
+      "log_sha256": "bde6af07238452d851f5f12768731616724a5d8173ea848689f49e58b4904ef4"
+    },
+    "http_ssrf_security": {
+      "cwd": ".",
+      "command": "python -m pytest tests/security/test_B3_http_safe_ssrf.py -q --tb=short",
+      "source": "same immutable git archive",
+      "passed": 14,
+      "skipped": 0,
+      "subtests_passed": 0,
+      "seconds": 0.03,
+      "log_sha256": "33c930eade6286ef5ddd39f98dab7b7067892f96d99a96cffb302925675837f3"
+    },
+    "artifact_hygiene": {
+      "command": "python -m pytest tests/test_repo_hygiene.py -q --tb=short",
+      "passed": 1
+    },
+    "lint": {
+      "new_python_modules_and_fixtures": "ruff check --no-cache: passed",
+      "configured_jobagg_security_scope": "ruff check --select=S --ignore=S104: passed",
+      "git_diff_check": "passed"
+    },
+    "focused_history_measurement": {
+      "passed": 1,
+      "seconds": 2.47,
+      "note": "post-code-commit correction of descriptive labels only; unchanged projection assertions; overlaps package scope"
+    },
+    "skip_reasons": [
+      {
+        "count": 1,
+        "fixture": "tests/test_classification.py:2124",
+        "reason": "full CCOG markdown resource is local/ignored"
+      },
+      {
+        "count": 1,
+        "fixture": "tests/test_inline_description_repair.py:80",
+        "reason": "Private original audit capture is not installed"
+      },
+      {
+        "count": 7,
+        "fixture": "tests/test_inline_description_repair.py:97",
+        "reason": "Private browser review and staged capture are not installed"
+      }
+    ],
+    "counting": "Separate scopes are not summed; focused groups overlap the package suite."
+  },
+  "history_growth": {
+    "scope": "synthetic local storage; separate fresh SQLite connections on first/repeat projection passes; OS cache not flushed; no external-volume or production gate claim",
+    "samples": [
+      {
+        "history_versions": 0,
+        "active_jobs": 1,
+        "connection": "first_projection_pass",
+        "sql_vm_instructions": 23447,
+        "sql_statements": 56,
+        "seconds": 0.013127875001373468,
+        "lineage_components": {
+          "sql_seconds": 0.0003326250007376075,
+          "artifact_metadata_seconds": 1.5166999219218269e-05,
+          "artifact_open_seconds": 5.866599894943647e-05,
+          "artifact_hash_read_seconds": 1.4125002053333446e-05,
+          "artifact_hash_cpu_seconds": 1.8330028979107738e-06,
+          "artifact_text_read_seconds": 3.691599704325199e-05,
+          "artifact_parse_seconds": 8.457998774247244e-06,
+          "proof_check_seconds": 2.4170003598555923e-06
+        },
+        "projection_bytes": 143360
+      },
+      {
+        "history_versions": 0,
+        "active_jobs": 1,
+        "connection": "repeat_projection_pass",
+        "sql_vm_instructions": 23447,
+        "sql_statements": 56,
+        "seconds": 0.012783833000867162,
+        "lineage_components": {
+          "sql_seconds": 0.0003087920013058465,
+          "artifact_metadata_seconds": 2.5082998035941273e-05,
+          "artifact_open_seconds": 6.204099918249995e-05,
+          "artifact_hash_read_seconds": 1.2958997103851289e-05,
+          "artifact_hash_cpu_seconds": 1.7909987946040928e-06,
+          "artifact_text_read_seconds": 4.141599856666289e-05,
+          "artifact_parse_seconds": 8.292001439258456e-06,
+          "proof_check_seconds": 2.5419976736884564e-06
+        },
+        "projection_bytes": 143360
+      },
+      {
+        "history_versions": 1024,
+        "active_jobs": 1,
+        "connection": "first_projection_pass",
+        "sql_vm_instructions": 23449,
+        "sql_statements": 56,
+        "seconds": 0.012862208001024555,
+        "lineage_components": {
+          "sql_seconds": 0.00034270800097147003,
+          "artifact_metadata_seconds": 1.2916996638523415e-05,
+          "artifact_open_seconds": 3.795899829128757e-05,
+          "artifact_hash_read_seconds": 8.125003660097718e-06,
+          "artifact_hash_cpu_seconds": 1.8330028979107738e-06,
+          "artifact_text_read_seconds": 4.166699727647938e-05,
+          "artifact_parse_seconds": 8.333998266607523e-06,
+          "proof_check_seconds": 2.291999408043921e-06
+        },
+        "projection_bytes": 143360
+      },
+      {
+        "history_versions": 1024,
+        "active_jobs": 1,
+        "connection": "repeat_projection_pass",
+        "sql_vm_instructions": 23449,
+        "sql_statements": 56,
+        "seconds": 0.012920500001200708,
+        "lineage_components": {
+          "sql_seconds": 0.0003190420029568486,
+          "artifact_metadata_seconds": 1.5041001461213455e-05,
+          "artifact_open_seconds": 3.929200101993047e-05,
+          "artifact_hash_read_seconds": 7.790997187839821e-06,
+          "artifact_hash_cpu_seconds": 1.7090023902710527e-06,
+          "artifact_text_read_seconds": 3.9375001506414264e-05,
+          "artifact_parse_seconds": 7.99999907030724e-06,
+          "proof_check_seconds": 2.292003046022728e-06
+        },
+        "projection_bytes": 143360
+      },
+      {
+        "history_versions": 8192,
+        "active_jobs": 1,
+        "connection": "first_projection_pass",
+        "sql_vm_instructions": 23449,
+        "sql_statements": 56,
+        "seconds": 0.01279883299866924,
+        "lineage_components": {
+          "sql_seconds": 0.00033995899866567925,
+          "artifact_metadata_seconds": 2.2000000171829015e-05,
+          "artifact_open_seconds": 5.887500083190389e-05,
+          "artifact_hash_read_seconds": 8.708000677870587e-06,
+          "artifact_hash_cpu_seconds": 1.8339997041039169e-06,
+          "artifact_text_read_seconds": 4.1541999962646514e-05,
+          "artifact_parse_seconds": 8.167000487446785e-06,
+          "proof_check_seconds": 2.3749998945277184e-06
+        },
+        "projection_bytes": 143360
+      },
+      {
+        "history_versions": 8192,
+        "active_jobs": 1,
+        "connection": "repeat_projection_pass",
+        "sql_vm_instructions": 23449,
+        "sql_statements": 56,
+        "seconds": 0.012697624999418622,
+        "lineage_components": {
+          "sql_seconds": 0.0003265409977757372,
+          "artifact_metadata_seconds": 2.308300099684857e-05,
+          "artifact_open_seconds": 4.979099685442634e-05,
+          "artifact_hash_read_seconds": 7.70800033933483e-06,
+          "artifact_hash_cpu_seconds": 1.7079983081202954e-06,
+          "artifact_text_read_seconds": 3.574999936972745e-05,
+          "artifact_parse_seconds": 8.125000022118911e-06,
+          "proof_check_seconds": 2.125001628883183e-06
+        },
+        "projection_bytes": 143360
+      }
+    ]
+  },
+  "local_review": {
+    "mode": "implementation self-review and regression checks",
+    "independent_review_completed": false,
+    "scope": [
+      "atomic acceptance and original control retention",
+      "single quota authority, all-writer migration and old-writer exclusion",
+      "source/destination owner and restore fencing",
+      "dirty/CAS/no-op and exact selected evidence",
+      "phase clocks, bounded continuation and export settlement",
+      "recurrence/controller/observer reporting"
+    ]
+  },
+  "production": {
+    "final_candidate_activated": false,
+    "early_live_dispatcher_edit": true,
+    "native_schema_migrated": false,
+    "provider_probe_performed": false,
+    "schedule_or_configuration_changed": false,
+    "holds_reset": false,
+    "natural_a8_or_24h_observation_started": false,
+    "initial_live_path_incident": "Five scheduled invocations held before dispatch on 2026-10-22 19:30-20:30 EAT; original files restored in c636e280 at 20:31:52 EAT. See runtime-m1-progress.md.",
+    "restored_primary_files_readonly_reverified_sha256": {
+      "reports/jobagg-remediation-plan-2026-09-10/proposed_runner/runner.py": "c27dcd9856c53905d21722ce94db376e55b0af540f840ccf7ed6a521336ed306",
+      "reports/jobagg-remediation-plan-2026-09-10/proposed_runner/runner_observability.py": "bc0e2b718e24ea1bdfd217b080c3b07685a1b33ee31593fa2181e04a4c8a2f58"
+    }
+  },
+  "remaining_release_gates": [
+    "external-volume cold/warm history growth and nonempty/empty performance",
+    "under-two-second ordinary pre-dispatch and 840-second cycle objectives",
+    "production throughput/backlog drain/oldest age and fairness",
+    "independent R7 review and full CI/dependency-security review",
+    "approved owner-fenced production migration/cutover and exact rollback plan",
+    "M4 three successful natural cycles with actual qualified overlap and downshift",
+    "separately authorized 24-hour read-only observation"
+  ],
+  "limitations": [
+    "Synthetic first/repeat projection passes each use a fresh SQLite connection; OS cache was not flushed.",
+    "Local A8 fixture selected [1,1,2] through qualified history; this is not natural-cycle acceptance.",
+    "Full repository/service security checks are not claimed. B2 atomic JSON checks require unavailable pydantic; bandit is unavailable in this local environment.",
+    "No all-source completeness, external-volume capacity, production throughput or service-restoration claim.",
+    "Blocked kernel I/O and large indivisible parser calls rely on the supervisor; cooperative deadlines alone do not guarantee their interruption."
+  ]
+}

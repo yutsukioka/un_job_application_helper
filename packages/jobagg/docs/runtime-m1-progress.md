@@ -1,239 +1,178 @@
-# Runtime M1 implementation checkpoint
+# Runtime M1 implementation and validation
 
-M1 is in progress and is **not activation-ready**. Preserve the immutable
-[M0 baseline](runtime-m0-baseline.md), its JSON manifest and commit `30ea183c`.
-Implementation stages include `d1a3273f`, `db542499` and `685c2a85`.
+The complete immediate M1 correction is prepared on `codex/jobagg-m1-runtime`.
+This is an isolated implementation candidate, **not production activation or
+service-restoration acceptance**. The immutable [M0 baseline](runtime-m0-baseline.md),
+its [manifest](runtime-m0-baseline.json) and commit `30ea183c` are preserved.
+Final runtime code is commit `11bdab2340286cc724b5817f9c8d5996c6a63394`;
+subsequent handoff changes contain only tests and documentation.
 
-## Development and production separation
+The 22 October production cron algorithm handover is the runtime contract;
+[the change policy](change-and-review-policy.md) and its
+[evidence map](change-and-review-evidence.md) remain authoritative. This record
+supersedes intermediate M1 checkpoints and their overlapping test counts.
 
-Continue implementation in the attached `codex/jobagg-m1-runtime` worktree.
-The primary checkout's tracked dispatcher is an actual cron entry point. Do not
-merge or copy candidate dispatcher files there during ordinary development.
-Prepare candidate code, tests and review in isolation; activation remains a
-separately approved, fenced operation under the handover and R1–R8.
+## Implemented behavior
 
-The initial M1 edits were mistakenly made at that live dispatcher path. A bounded
-read of internal attempt receipts establishes five held scheduled invocations at
-19:30, 19:45, 20:00, 20:15 and 20:30 EAT on 22 October 2026, each reporting that
-`runtime_authority` was missing from the selected production release. All five
-explicitly record `worker_dispatched=false` and `publisher_dispatched=false`.
-The original runner and observability helper were restored byte-for-byte and
-committed in the primary checkout as `c636e280` at 20:31:52 EAT. No process,
-schedule, configuration, database, recovery journal or hold was reset. The health
-record retains the interruption evidence, including fields introduced by the
-candidate helper; do not infer accepted backlog from those fields alone.
+- Accepted work is fenced before projection, independently of storage-budget
+  enablement. Both worker-result-to-marker and marker-to-intent interruptions
+  continue the original accepted run before new fetching. Native atomic
+  acceptance survives worker loss without inventing exit zero; separate
+  certificates retain failed controls and exact original request identity.
+- One indexed SQL quota authority retains all charges, failures, missing finishes,
+  imported reservations and historical source scope. Transactional task/service/
+  count/hold summaries and scheduling headers replace repeated history discovery.
+  Durable claims recheck actual owner, revision, source/host gates and quotas.
+  Reports do not call `choose()` or silently treat partial eligibility as zero.
+- Immutable accepted detail, listing and document references bind exact attempts,
+  observations, identities, artifacts and validation contracts. A failed refresh
+  cannot erase prior acceptance. Legacy backfill requires exact successful-exit
+  controls; done rows alone are rejected.
+- Atomic dirty versions cover details, metadata, freshness, listing presence/
+  absence, lifecycle/readiness/holds, source health and document/blob dependencies.
+  Time and reviewed contract changes enqueue revalidation. Version N cannot
+  acknowledge N+1. Unknown and oversized work remains explicitly held.
+- A verified empty path skips projection/publisher execution only with zero new
+  acceptance, unchanged source revision, an empty authoritative work set and
+  verified source/consolidated destinations and all four exports per destination.
+  Missing authority or uncertain export references require repair.
+- Projection version 5 copies exact selected accepted occurrences and required
+  dependencies, rather than all retained versions or a broad database snapshot.
+  Earlier validators retain their contracts. Selected artifact hashing, identity,
+  main-text, replacement, proof and complete-listing checks remain enforced.
+- Finite source/cohort, candidate, unit, destination-union, byte and measured time
+  admission includes listing fan-out, consolidated output, DB/WAL/SHM, comparator/
+  document/blob reads, beforeimages and current/history JSON/CSV exports. Aged
+  cohorts retain service order; individually oversized work stays visible.
+- Entry deadlines precede configuration/fingerprinting; a supervisor covers
+  imports and blocking work before cooperative checks. Elapsed and wall clocks
+  propagate without resetting the bound. Projection/publication share one phase
+  envelope with measured viability and cleanup/report reserve. Inner SQL, hashes
+  and decompression check budgets. Local verification expiry retains charges,
+  captures and pending tasks, without provider-failure or progress credit.
+- Each bounded publication batch retains its own intent, original controls,
+  exact terminal/export evidence and storage settlement. Further admission uses
+  fresh finite tokens under unchanged ceilings. Proven no-generation/no-write
+  deferrals reuse sealed selections in separate child batches. Escrow-settlement
+  interruption resumes that exact settlement without refetching.
+- Stage/class and end-to-end recurrence survives WAL changes and alternating
+  failures. Only relevant actual progress earns stage credit; zero-task deadline
+  exits do not reset worker episodes. Reviewed probes are single use; episode
+  history is retained.
+- The read-only monitor has an executable loop, bounded producer-index polling,
+  overflow-as-incomplete behavior, restart deduplication and failure/recovery.
+  It distinguishes verified readback, genuine no-op and stalled work, and never
+  dispatches work.
+
+## Authority, migration and rollback boundary
+
+Native source/destination fences bind complete schema, actual owner FD, store
+identity, epoch, revision and contract. External transaction heads reject stale
+in-place restores and uncertain transactions. Commit checks reject owner loss;
+raw control writers cannot rewrite phase, revision or acknowledgements.
+
+The full runtime contract covers all **166 package Python modules**, resources,
+dispatcher/helpers, relevant Python/runtime/dependency bytes and configuration/
+registry identities. It is checked per invocation and by worker/publisher
+children. Timestamps never approve changed bytes. Dirty-epoch changes require
+explicit reviewed revalidation; startup never reseals or rebuilds authority.
+Reviewed successor-scope seal:
+`66a4a5330d9695297b955f35a1f53d2d4769e69b6af415d6118827efe26f47bb`.
+The validation manifest records the full implementation fingerprint separately.
+
+Preparation order: retain M0; review every control root and writer; page quota/
+control imports and accepted-occurrence backfill; prepare summaries and dirty/
+freshness schema; bind destinations/exports; reconcile exact legacy outcomes and
+unresolved generations; establish the native source epoch. Every bounded step
+needs the actual owner and applicable reviewed storage/maintenance budgets.
+Missing or conflicting proof remains repair.
+
+Policy authority version 2 / import version 3 uses checkpointed evidence
+verification and owner-fenced cutover. A nonempty `attempt_index.json` directory
+stops actual old reserve ordering before provider dispatch; original JSON remains
+archived evidence. Original bootstrap proofs join bounded audits. Source-hold
+edits require review. Orphan policy charges stay charged; unmatched task attempts
+are flagged. Overdue audit holds until explicit bounded catch-up completes.
+
+The legacy control catalogue binds reviewed complete root/writer inventories,
+source hashes, schema and epoch. Indexed unresolved references replace normal
+completed-history scans. Closure recomputes exact occurrence, destination-journal
+and current-export reconciliation; later rows and supplied booleans cannot
+substitute. Existing generations retain original journals/configuration.
+Earlier pre-release native schema/staging versions require explicit compatible
+migration. No native M1 schema was activated here. Never restore an old database
+as a code rollback or refund uncertain charges.
+
+## Regression evidence
+
+Exact results, timestamps, code provenance and synthetic growth measurements are
+in [the validation manifest](runtime-m1-validation.json). Package, dispatcher and
+security results are separate scopes; focused overlapping runs are not summed.
+Validated at **00:37 EAT on 23 October 2026** against the immutable runtime commit:
+
+- Package: **3,798 passed, 9 skipped**, 504.09 seconds.
+- Dispatcher: **166 passed, 17 subtests passed**, 21.09 seconds.
+- HTTP/SSRF security: **14 passed**, 0.03 seconds.
+- Tracked-artifact hygiene: **1 passed**. New-module/fixture lint, configured
+  JobAgg security lint and `git diff --check` passed.
+
+One skip requires the ignored full CCOG resource; eight require private original
+or staged audit captures. Full repository/service security and dependency audit
+are not claimed: this local environment lacks `pydantic` for the B2 suite and
+has no `bandit`. Full CI and independent review remain release gates.
+
+| Contract | Principal package fixtures |
+| --- | --- |
+| M0 joint schema, eight timeouts/WAL and interruption baseline | `test_runtime_m0_baseline.py` |
+| Both pre-intent windows, budget absent/false/true, empty path and clocks | `test_runtime_m1.py` |
+| Cold first useful worker, real quota/storage/semantic fences, killed-worker acceptance | `test_native_worker.py` |
+| Quota equivalence, paged migration/cutover, old-writer fence and audit | `test_policy_authority.py` |
+| All-root catalogue and exact legacy readback | `test_runtime_control_catalog.py`, `test_runtime_reconciliation.py` |
+| Mutation versions, CAS, selected inputs, freshness/contracts, aged/oversized/fan-out work | `test_publication_work.py` |
+| Multiple generations, no-write deferral and escrow crash continuation | `test_native_publication_drain.py` |
+| Restore/owner/target/schema/export uncertainty | `test_runtime_source_head.py`, `test_publication_fence.py` |
+| Runtime byte changes and full reseal | `test_runtime_contract.py`, `test_worker_implementation_binding.py` |
+| Inner expiry with retained capture/charge | `test_verification_budget.py` |
+| Qualified three-cycle overlap/downshift and readback | `test_runtime_a8.py` |
+| Fixed work with 0/1,024/8,192 retained versions | `test_runtime_history_growth.py` |
+
+The local growth fixture keeps one active job. First/repeat passes use separate
+fresh SQLite connections; OS cache is **not flushed**. These measurements prove
+selected-work behavior on synthetic local storage, not external-volume cold/warm
+performance or production capacity. SQL, metadata/open/read, hashing, parsing and
+proof costs are reported separately.
+
+The A8 fixture runs actual offline worker/publisher work for three cycles,
+selects `[1, 1, 2]` only through qualifying controller history, verifies distinct
+source/host overlap and exact readback, then checks pressure downshift and
+duplicate callbacks. It does not establish natural-cycle acceptance.
+
+## Production separation and release gates
+
+The live cron dispatcher is in the primary checkout; this candidate remains
+isolated. Do not merge/copy candidate dispatcher files there during development.
+No completed native M1 cutover, provider probe, control migration, schedule/
+configuration change or hold reset was performed. The early live-path incident
+is retained below.
+
+Initial M1 edits mistakenly touched the live dispatcher. Internal receipts show
+five held scheduled invocations at 19:30, 19:45, 20:00, 20:15 and 20:30 EAT on
+22 October 2026, each reporting missing `runtime_authority` in the selected
+release and explicitly recording no worker/publisher dispatch. Original files
+were restored byte-for-byte in primary commit `c636e280` at 20:31:52 EAT.
+No process, schedule, database, journal or hold was reset. The health record
+retains interruption evidence.
 
 Restored live-path SHA-256 values:
 
 - `runner.py`: `c27dcd9856c53905d21722ce94db376e55b0af540f840ccf7ed6a521336ed306`
 - `runner_observability.py`: `bc0e2b718e24ea1bdfd217b080c3b07685a1b33ee31593fa2181e04a4c8a2f58`
 
-## Prepared components
-
-- Budget-independent active-run authority with transactional source revision,
-  complete schema binding, actual owner inode binding and explicit legacy repair.
-- Both pre-intent windows preserve and resume the original accepted batch, with
-  storage budget absent, false and true; failed/killed workers are not accepted.
-- Task-led selective lineage with shared canonical identity and legacy crosswalk;
-  older successful evidence survives newer failures. SQL and artifact costs are
-  instrumented separately from deterministic projection manifests.
-- Transactional task-count summaries; shared-policy owner-batch snapshots and
-  source revision caches; final evidence audit; report eligibility derived from
-  bounded health summaries without report-time `choose()`.
-- Entry-anchored clocks, supervisor entry watchdog and measured phase-admission
-  contract. Missing viability measurements defer accepted work rather than
-  fabricating a numerical production threshold.
-- Stable stage/class recurrence, one reviewed probe per evidence version, durable
-  episode history and stage-success-only reset.
-- Bounded producer-owned attempt index, tested observer entry point, restart
-  deduplication, failure/recovery and quiet-versus-readback distinctions.
-- A real local fixture runs worker and publisher for three cycles, selects limits
-  `[1,1,2]` through qualified controller history, verifies actual overlap and text
-  readback, then verifies conservative pressure downshift and duplicate callbacks.
-
-The next prepared stage adds indexed persistent quota authority, explicit
-all-writer import, conservative restore/head fencing, bounded evidence audit,
-scheduling headers, immutable accepted-evidence references and a versioned
-selected publication projection. Its focused worker/lineage/snapshot/policy
-regression batch passed 134 tests. These APIs still require end-to-end dispatcher
-continuation, migration and fault-boundary validation before activation.
-
-## Integrated runtime continuation
-
-The native dispatcher now selects bounded dirty dependencies before projection,
-retains original worker proofs, journals each publication batch separately, and
-drains the same accepted run before fetching again. A real three-generation
-fixture verifies destination commits/exports and then a genuine empty fast path.
-A cold native worker fixture performs useful work without a historical policy
-census and records its accepted reference in the acceptance transaction. The
-combined M0/M1, snapshot, policy, budget and binding regression batch passed
-151 tests. This is one combined denominator; earlier overlapping results are not
-additional tests.
-
-Native source cohorts retain service order and explicit oversized/unknown holds.
-Closing-time transitions invalidate no-op truth and enqueue selected revalidation.
-Entry wall/elapsed bounds also cover pending-work and artifact hashing. Alternating
-stage failures retain an end-to-end episode; a zero-task work-deadline exit cannot
-reset the worker episode. Native controller/policy SQL allocation requires reviewed
-finite caps under the existing storage escrow.
-
-## Remaining immediate scope
-
-The native idle-start path now continues older queued work using a typed,
-revision-fenced publication-only certificate; it does not invent a worker exit.
-Native budget admission is explicitly `per_bounded_batch`: each completed batch
-retains an exact final escrow receipt before fresh finite tokens are admitted for
-the same frozen accepted run. The fixed total/category ceilings and quota charges
-remain in force. A real budget/semantic/runtime fixture covers three batches,
-verified exports, empty follow-up and interruption after the durable escrow
-receipt; its combined routing/budget regression batch passed 58 tests.
-
-The full package suite on immutable commit `08d8546d` produced 3,760 passes,
-9 skips and one clock-injection failure. The local monotonic seam was restored
-alongside entry propagation; its 17-test targeted batch passed. The dispatcher
-suite then passed 166 tests and 17 subtests after updating the three-total-failure
-end-to-end ceiling. Later candidate changes still require final broad validation.
-
-The next ownership stage binds source mutations to the actual shared-owner FD
-and checks ownership again at commit. A source transaction head outside the
-SQLite file prevents an in-place stale restore or an uncertain rollback from
-certifying an empty queue. Native phase/revision controls reject raw writers;
-only explicitly named control tables are exempt from domain history tracking.
-Its source-restore/owner, real native drain and complete binding batch passed
-19 tests; the broader current routing/native-worker batch passed 28 tests before
-those dedicated negative cases were added. These groups overlap and are not
-summed. All 161 package Python modules are included in the reviewed seal.
-
-Complete checkpointed all-writer migration and exact historical listing/document/
-export reconciliation, native budget/semantic-fence integration and its crash
-faults, retained-history scale/cold-output gates, and the full regression/review
-pass. In particular, preparation APIs and bounded fixtures do not prove that the
-actual production control roots have been reconciled or are activation-ready.
-
-No production A8 or 24-hour observation has been started. No claim is made about
-current all-source completeness, capacity compliance, production throughput or
-external-volume scale performance.
-
-## Acceptance and migration continuation
-
-The next stage replaces legacy done-row inference with an exact successful-exit
-catalogue and immutable observation snapshots. Native successful listing, detail
-and document occurrences also record independent acceptance in the same source
-transaction. Selected projection version 4 carries explicit backfill dispositions;
-versions 1–3 retain their original validator contracts.
-
-Quota preparation now commits finite payload/replay/verification pages, imports
-unindexed reservations, fences legacy APIs throughout preparation and journals
-cutover before rename. A fault after rename resumes the same charged authority.
-Task/shared-policy reconciliation retains orphan charges and flags unmatched task
-attempts. An overdue audit holds read-only; explicit bounded catch-up retains its
-old completion timestamp until the complete evidence pass finishes.
-
-Freshness transitions and reviewed, checkpointed contract revalidation invalidate
-empty-work truth. A full destination/export cursor is checked before fetching.
-Proven no-generation publisher deferrals keep the original sealed projection and
-selection, preserve old intent/outcome and resume in a new bounded publisher batch
-with unchanged storage ceilings. The real native drain fixture passes five
-profiles, including deferral with storage budget disabled/enabled and the prior
-escrow-receipt interruption. Policy migration/audit/reconciliation passes eight
-focused cases; these are separate scopes, not a package-wide result.
-
-## Complete immediate correction candidate
-
-The next stage completes the prepared M1 correction paths. It does not activate
-any production migration, process, configuration, schedule or provider request.
-
-- Native atomic acceptance can survive a killed worker without inventing exit 0.
-  Separate recovery certificates retain the original failed controls, and exact
-  selected artifacts are verified before publication. New worker runs clear old
-  recovery/projection controls while retaining their verified destination cursor.
-- Listing and document references now survive a failed refresh. Projection 5
-  copies their exact accepted occurrences and only current selected detail
-  versions, including when one vacancy has many retained historical versions.
-  Old projection validators retain their original contracts.
-- The explicit legacy-control catalogue imports reviewed complete root/writer
-  inventories in finite pages, retains uncertain claims/generations and provides
-  indexed active references. A missing/incomplete/changed catalogue holds before
-  fetching. Accepted legacy work may drain through bounded native publication;
-  closure requires exact occurrence and current export reconciliation.
-- Historical reconciliation covers detail, listing and document readback. A
-  superseded occurrence needs its exact reviewed completed generation plan and
-  actual destination journals. Current full-scope export consistency is an
-  independent condition; current row counts or a later row never substitute.
-- Publication admission includes database/WAL/SHM families, existing current and
-  history exports, the union of destinations and the consolidated target once.
-  Service history protects aged cohorts; oversized/fan-out work has explicit
-  held dispositions. Fixed source, request, concurrency and storage ceilings stay
-  intact. Freshness and contract revalidation remain durable, resumable work.
-- Independent census readers decompress in checked chunks and preserve every
-  source-specific verification condition. Typed local expiry retains the charge,
-  capture and pending task, uses only the existing reporting reserve for cleanup,
-  and earns no provider failure or accepted progress. Publication SQL readers and
-  capture hashing also enforce the inherited phase clocks.
-- Dirty epochs bind actual package Python/resource, dispatcher/helper, Python and
-  relevant installed dependency bytes. The value is computed for each invocation;
-  this is not a persistent timestamp cache or automatic approval. Changed bytes
-  require explicit reviewed dirty-epoch revalidation before fetching. Worker
-  startup is pinned to the admitted implementation. All **166** package Python
-  modules participate in the reviewed implementation seal.
-
-The immutable `b128bf9f` package run produced 3,771 passes, 9 skips and three
-failures. Two exposed compatibility with legacy fixtures lacking an event table;
-the third was a direct storage test that bypassed the actual owner lifetime.
-Compatibility is preserved, and the storage fixture now performs its authorized
-mutation under the real owner. Focused reruns pass. Final full-package/dispatcher
-validation of this later stage is recorded below once completed.
-
-### Preparation and activation boundary
-
-Preparation order is explicit: retain M0; inventory/review every control root and
-writer; page quota/control imports and acceptance backfill (including typed
-listing/document events); prepare task headers, dirty/freshness schema, complete
-destination fences and current export references; reconcile exact legacy accepted
-identities and unresolved generations; then bind the native source/owner/epoch
-with the catalogue receipt. Missing proof stays a scoped repair state. Never
-replace a live authority with an old database to roll back code.
-
-The APIs expose bounded steps; they are not permission to run against production.
-Preparation must use the actual shared owner and the applicable reviewed storage
-escrow, maintenance and migration budgets. Native normal operation refuses a
-missing catalogue, policy head, freshness contract or measured admission contract.
-Existing control/accepted artifacts remain retained across a compatible roll-forward.
-
-External-volume cold/warm scale, production throughput/age, independent R7 review,
-CI/security review, exact activation/rollback approval and M4 natural A8/24-hour
-observations remain release gates. The synthetic local history-growth fixture
-keeps one active job while adding 0/1,024/8,192 retained versions; it records SQL
-work, projection bytes and separate lineage timing without claiming an OS-cold
-cache or external-volume performance. Compression, retirement enablement and
-dispatcher relocation remain separate deliverables.
-
-## Final handoff corrections
-
-The `e41475b1` immutable package run produced **3,787 passes, 9 skips and two
-failures** in controlled suspend/resume returns. A pending generation now returns
-its bounded resumable result without being replaced by a deadline exception.
-An initial dispatcher run exposed an unconditional new-helper dependency on
-legacy custom-worker paths; that compatibility path was corrected. Its complete
-separate rerun passed **166 tests and 17 subtests**. These are distinct scopes
-and are not summed.
-
-Worker and publisher children now independently check their admitted complete
-runtime contract; successful worker reports carry its digest. Original request
-identity is recorded in native atomic acceptance (exact file hash through the
-CLI), and a worker cannot restart a batch after its source revision changed.
-Existing recovery identities retain their old representation when the new
-optional contract field is absent. A verified no-write resolution can also
-continue a native batch with its sealed projection and original failed controls.
-An interruption after its final escrow receipt resumes that exact settlement.
-
-The explicit quota import now uses policy authority version 2 / import version 3.
-Its kernel-enforced legacy index directory stops the actual old reserve ordering
-before provider dispatch; an object marker alone was insufficient. Original
-bootstrap evidence joins the paged final verification and bounded audit. The
-source-hold file is part of the trusted immutable boundary: changing it requires
-review and cannot silently release gates. Additional migrated sources may be
-supplied with their reviewed pause contracts so disabled historical charges
-are retained. Earlier pre-release native schema/staging versions require an
-explicit compatible migration; normal startup never rebuilds them. No native
-M1 schema has been activated by this task.
+External-volume cold/warm scale, under-two-second ordinary pre-dispatch and
+840-second whole-cycle objectives, throughput, backlog drain/age and production
+fairness remain unproved. Independent R7 review, full CI/dependency-security
+review, exact activation/rollback approval and M4 natural A8/24-hour observation
+remain release gates. No production observation window was started. No all-source
+completeness, capacity compliance or restored-service claim is made. M2
+generalization, compression/retirement enablement and dispatcher relocation remain
+separate deliverables.

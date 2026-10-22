@@ -68,7 +68,7 @@ def test_fixed_selected_work_does_not_copy_or_hash_retained_versions(tmp_path):
                     ),
                 )
             selected = select(fixture, conn)
-        for temperature in ("fresh_connection", "warm_connection"):
+        for temperature in ("first_projection_pass", "repeat_projection_pass"):
             origin = sqlite3.connect(fixture["worker"].path, factory=Meter)
             destination = sqlite3.connect(root / (temperature + ".sqlite3"))
             statements = []
@@ -110,7 +110,7 @@ def test_fixed_selected_work_does_not_copy_or_hash_retained_versions(tmp_path):
         Path(target).write_text(
             json.dumps(
                 {
-                    "scope": "synthetic local storage; application connection cold/warm; OS cache not flushed; no external-volume or production gate claim",
+                    "scope": "synthetic local storage; separate fresh SQLite connections on first/repeat projection passes; OS cache not flushed; no external-volume or production gate claim",
                     "samples": samples,
                 },
                 indent=2,
