@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import gzip
 import hashlib
 import json
@@ -821,3 +822,283 @@ def test_explicit_codecs_round_trip_and_recover(
     restored = storage.resolve_artifact(tmp_path, path)
     assert restored.descriptor.codec == codec
     assert restored.data == payload
+
+
+def test_restored_sqlite_uri_percent_encodes_scratch_delimiters(tmp_path: Path) -> None:
+    database = tmp_path / "evidence.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE evidence (id INTEGER PRIMARY KEY, body TEXT)")
+    connection.executemany("INSERT INTO evidence(body) VALUES (?)", [("x" * 512,)] * 100)
+    connection.commit()
+    connection.close()
+    _compress(tmp_path, database, sealed_sqlite=True)
+
+    scratch_parent = tmp_path / "scratch#private?x"
+    scratch_parent.mkdir()
+    decoy = tmp_path / "scratch"
+    decoy_connection = sqlite3.connect(decoy)
+    decoy_connection.execute("CREATE TABLE evidence (id INTEGER PRIMARY KEY, body TEXT)")
+    decoy_connection.execute("INSERT INTO evidence(body) VALUES ('decoy')")
+    decoy_connection.commit()
+    decoy_connection.close()
+
+    snapshot = storage.restore_sqlite(tmp_path, database, scratch_parent=scratch_parent)
+    try:
+        assert snapshot.path.parent == snapshot.scratch_root
+        assert snapshot.scratch_root.parent == scratch_parent
+        connection = snapshot.open_readonly()
+        try:
+            assert connection.execute("SELECT count(*) FROM evidence").fetchone()[0] == 100
+            assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        finally:
+            connection.close()
+    finally:
+        snapshot.cleanup()
+    # The delimiter-prefix path must remain the untouched decoy, not the database
+    # SQLite opened while validating the restored snapshot.
+    decoy_connection = sqlite3.connect(decoy)
+    try:
+        assert decoy_connection.execute("SELECT count(*) FROM evidence").fetchone()[0] == 1
+    finally:
+        decoy_connection.close()
+
+
+def test_retirement_reports_only_bytes_removed_by_each_operation(tmp_path: Path) -> None:
+    path, payload = _write_json(tmp_path)
+    first = _compress(tmp_path, path)
+    assert first["retired"] is True
+    assert first["removed_bytes"] == len(payload)
+    assert not path.exists()
+
+    storage.copy_artifact(tmp_path, path, path)
+    assert path.read_bytes() == payload
+    second = _compress(tmp_path, path)
+    assert second["retired"] is True
+    assert second["removed_bytes"] == len(payload)
+    assert not path.exists()
+
+    third = _compress(tmp_path, path)
+    assert third["retired"] is False
+    assert third["removed_bytes"] == 0
+
+
+def test_reconcile_attributes_interrupted_retirement_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, payload = _write_json(tmp_path)
+    real_sync = storage._sync_dir
+
+    def fail_after_unlink(parent: Path) -> None:
+        if parent == path.parent and not path.exists():
+            raise RuntimeError("simulated crash after unlink")
+        return real_sync(parent)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "_sync_dir", fail_after_unlink)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _compress(tmp_path, path)
+    assert not path.exists()
+    assert _representation(tmp_path, "artifact.json")["legacy"]["retired"] is False
+
+    summary = _reconcile(tmp_path)
+    assert summary["open_intents"] == 1
+    assert summary["completed"] == 1
+    assert summary["retired"] == 1
+    assert summary["removed_bytes"] == len(payload)
+    entry = _representation(tmp_path, "artifact.json")
+    assert entry["legacy"]["retired"] is True
+    assert entry["legacy"]["removed_bytes"] == len(payload)
+    records = [
+        json.loads(line)
+        for line in (tmp_path / ".jobagg-storage" / storage.JOURNAL_NAME).read_text().splitlines()
+    ]
+    retired = [record for record in records if record.get("kind") == "retired"]
+    assert len(retired) == 1
+    assert retired[0]["removed_bytes"] == len(payload)
+    complete = [record for record in records if record.get("kind") == "complete"]
+    assert complete[-1]["removed_bytes"] == len(payload)
+    assert _reconcile(tmp_path)["retired"] == 0
+
+
+def test_manifest_lock_symlink_is_rejected_without_chmod(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / storage.STORAGE_DIRECTORY
+    store.mkdir(mode=0o700)
+    outside = tmp_path / "unrelated-lock"
+    outside.write_bytes(b"unrelated service lock")
+    outside.chmod(0o644)
+    (store / f"{storage.MANIFEST_NAME}.lock").symlink_to(outside)
+
+    with pytest.raises(storage.ArtifactContractError, match="linked"):
+        _reconcile(tmp_path)
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o644
+    assert outside.read_bytes() == b"unrelated service lock"
+
+
+
+def test_cold_archive_fallback_cannot_change_the_manifest_identity(tmp_path: Path) -> None:
+    generation_id = "4" * 32
+    generation = tmp_path / "generations" / generation_id
+    generation.mkdir(parents=True)
+    payload = b'{"cold": "manifest-bound evidence", "pad": "' + b"x" * 8192 + b'"}\n'
+    hot = generation / "plan.json"
+    hot.write_bytes(payload)
+    logical_sha = hashlib.sha256(payload).hexdigest()
+    archive_root = tmp_path / "cold_archive"
+    object_path = archive_root / "objects" / logical_sha[:2] / f"{logical_sha}.json.gz"
+    object_path.parent.mkdir(parents=True)
+    object_path.write_bytes(gzip.compress(payload, mtime=0))
+    receipt = {
+        "schema_version": storage.COLD_ARCHIVE_SCHEMA_VERSION,
+        "generation_id": generation_id,
+        "archive_root": str(archive_root),
+        "objects": {
+            "plan.json": {
+                "sha256": logical_sha,
+                "object_sha256": hashlib.sha256(object_path.read_bytes()).hexdigest(),
+                "size_bytes": len(payload),
+                "object_size_bytes": object_path.stat().st_size,
+                "object_path": str(object_path),
+            }
+        },
+    }
+    (generation / storage.COLD_ARCHIVE_MANIFEST).write_text(json.dumps(receipt))
+
+    report = _compress(tmp_path, hot)
+    (tmp_path / report["physical_path"]).unlink()
+    assert not hot.exists()
+
+    wrong = b'{"cold": "different valid evidence"}\n'
+    wrong_sha = hashlib.sha256(wrong).hexdigest()
+    wrong_object = archive_root / "objects" / wrong_sha[:2] / f"{wrong_sha}.json.gz"
+    wrong_object.parent.mkdir(parents=True, exist_ok=True)
+    wrong_object.write_bytes(gzip.compress(wrong, mtime=0))
+    receipt["objects"]["plan.json"] = {
+        "sha256": wrong_sha,
+        "object_sha256": hashlib.sha256(wrong_object.read_bytes()).hexdigest(),
+        "size_bytes": len(wrong),
+        "object_size_bytes": wrong_object.stat().st_size,
+        "object_path": str(wrong_object),
+    }
+    (generation / storage.COLD_ARCHIVE_MANIFEST).write_text(json.dumps(receipt))
+
+    with pytest.raises(
+        storage.ArtifactIntegrityError,
+        match="Cold archive receipt differs from the manifest binding",
+    ):
+        storage.resolve_artifact(tmp_path, hot)
+
+
+def test_reuse_verifies_source_bytes_after_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, payload = _write_json(tmp_path)
+    _compress(tmp_path, path, retire=False)
+    changed = payload.replace(b"x", b"y")
+    assert changed != payload
+    real_shared = storage._shared_owner
+
+    @contextmanager
+    def mutate_before_lock(shared_lock):
+        path.write_bytes(changed)
+        with real_shared(shared_lock):
+            yield
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "_shared_owner", mutate_before_lock)
+        with pytest.raises(storage.ArtifactIntegrityError, match="Source changed after preview"):
+            _compress(tmp_path, path, retire=False)
+
+    entry = _representation(tmp_path, "artifact.json")
+    assert entry["logical_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert path.read_bytes() == changed
+
+
+def test_uncertain_manifest_commit_preserves_object_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, payload = _write_json(tmp_path)
+    store = tmp_path / storage.STORAGE_DIRECTORY
+    manifest_path = store / storage.MANIFEST_NAME
+    real_sync = storage._sync_dir
+    failed = False
+
+    def fail_manifest_sync_once(parent: Path) -> None:
+        nonlocal failed
+        if parent == store and manifest_path.exists() and not failed:
+            failed = True
+            raise RuntimeError("simulated manifest directory fsync failure")
+        return real_sync(parent)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "_sync_dir", fail_manifest_sync_once)
+        with pytest.raises(RuntimeError, match="simulated manifest directory fsync"):
+            _compress(tmp_path, path, retire=False)
+
+    assert failed
+    entry = _representation(tmp_path, "artifact.json")
+    object_path = next(
+        tmp_path / representation["physical_path"]
+        for representation in entry["representations"]
+        if representation["codec"] == "gzip"
+    )
+    assert object_path.is_file()
+    records = [
+        json.loads(line)
+        for line in (store / storage.JOURNAL_NAME).read_text().splitlines()
+    ]
+    assert any(record.get("kind") == "commit_uncertain" for record in records)
+    assert not any(record.get("kind") == "failed" for record in records)
+
+    summary = _reconcile(tmp_path)
+    assert summary["open_intents"] == 1
+    assert summary["completed"] == 1
+    assert storage.resolve_artifact(tmp_path, path).data == payload
+
+
+
+@pytest.mark.parametrize(
+    "dictionary_sha256",
+    [None, hashlib.sha256(b"missing-zstd-dictionary").hexdigest()],
+)
+def test_unavailable_zstd_representation_falls_back_to_gzip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dictionary_sha256: str | None,
+) -> None:
+    path, payload = _write_json(tmp_path)
+    _compress(tmp_path, path)
+    manifest_path = tmp_path / storage.STORAGE_DIRECTORY / storage.MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    entry = manifest["artifacts"]["artifact.json"]
+    zstd_physical = (
+        tmp_path
+        / storage.STORAGE_DIRECTORY
+        / storage.OBJECTS_DIRECTORY
+        / "aa"
+        / f"{'a' * 64}.zst"
+    )
+    zstd_physical.parent.mkdir(parents=True, exist_ok=True)
+    zstd_physical.write_bytes(b"not-really-zstd")
+    entry["representations"].append(
+        {
+            "codec": "zstd",
+            "codec_params": {"level": 3, "dictionary_sha256": dictionary_sha256},
+            "physical_path": zstd_physical.relative_to(tmp_path).as_posix(),
+            "physical_sha256": "a" * 64,
+            "physical_bytes": zstd_physical.stat().st_size,
+            "installed_utc": None,
+            "verified_utc": None,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(
+        storage, "zstd_available", lambda: dictionary_sha256 is not None
+    )
+
+    expected_skip = "zstd:unavailable" if dictionary_sha256 is None else "zstd:dictionary_missing"
+    with storage.stream_artifact(tmp_path, path) as stream:
+        assert tuple(stream.attempts) == (expected_skip, "gzip:selected")
+        assert stream.descriptor.codec == "gzip"
+        assert b"".join(stream) == payload

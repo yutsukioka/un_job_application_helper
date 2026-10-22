@@ -219,7 +219,9 @@ class RestoredSnapshot:
     size: int
 
     def open_readonly(self) -> sqlite3.Connection:
-        uri = f"file:{self.path.as_posix()}?mode=ro&immutable=1"
+        # ``as_uri`` percent-encodes URI delimiters (for example ``#`` and ``?``)
+        # so SQLite opens the verified snapshot rather than a truncated prefix.
+        uri = f"{self.path.absolute().as_uri()}?mode=ro&immutable=1"
         connection = sqlite3.connect(uri, uri=True)
         connection.execute("PRAGMA query_only = ON")
         return connection
@@ -1026,6 +1028,24 @@ def _read_journal(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _journal_event_logged(
+    records: list[dict[str, Any]],
+    *,
+    kind: str,
+    logical_path: str | None = None,
+    intent_id: str | None = None,
+) -> bool:
+    for record in records:
+        if record.get("kind") != kind:
+            continue
+        if logical_path is not None and record.get("logical_path") != logical_path:
+            continue
+        if intent_id is not None and record.get("intent_id") != intent_id:
+            continue
+        return True
+    return False
+
+
 @dataclass(frozen=True)
 class JournalIntent:
     intent_id: str
@@ -1375,6 +1395,7 @@ def _open_logical_artifact(
                 raise ArtifactIntegrityError(
                     f"Legacy artifact differs from its manifest binding: {relative}"
                 )
+        deferred_errors: list[ArtifactStorageError] = []
         for representation in sorted(entry["representations"], key=_representation_sort_key):
             descriptor = _representation_descriptor(relative, entry, representation, legacy=False)
             confirmed(descriptor)
@@ -1382,13 +1403,48 @@ def _open_logical_artifact(
             if not physical.exists() and not physical.is_symlink():
                 attempts.append(f"{descriptor.codec}:missing")
                 continue
+            effective_dictionaries = dictionaries
+            if descriptor.codec == CODEC_ZSTD:
+                if not zstd_available():
+                    attempts.append("zstd:unavailable")
+                    deferred_errors.append(
+                        CompressionUnavailableError(
+                            "Zstandard runtime is not packaged for this interpreter"
+                        )
+                    )
+                    continue
+                dictionary_sha = descriptor.dictionary_sha256
+                if dictionary_sha:
+                    supplied = dictionaries is not None and dictionary_sha in dictionaries
+                    if not supplied and dictionary_path is None:
+                        attempts.append("zstd:dictionary_missing")
+                        deferred_errors.append(
+                            ArtifactContractError(
+                                "Representation requires a Zstandard dictionary that was not supplied"
+                            )
+                        )
+                        continue
+                    if not supplied:
+                        try:
+                            dictionary_data = _load_dictionary(
+                                dictionary_sha,
+                                dictionaries=dictionaries,
+                                dictionary_path=dictionary_path,
+                                deadline_at=deadline_at,
+                            )
+                        except ArtifactStorageError as exc:
+                            attempts.append("zstd:dictionary_missing")
+                            deferred_errors.append(exc)
+                            continue
+                        effective_dictionaries = dict(dictionaries or {})
+                        effective_dictionaries[dictionary_sha] = dictionary_data
             attempts.append(f"{descriptor.codec}:selected")
             return (
                 descriptor,
                 _iter_manifest_representation(
                     root,
                     descriptor,
-                    dictionaries=dictionaries,
+                    dictionaries=effective_dictionaries,
                     dictionary_path=dictionary_path,
                     deadline_at=deadline_at,
                     max_output_bytes=max_output_bytes,
@@ -1432,9 +1488,18 @@ def _open_logical_artifact(
                 deadline_at=deadline_at,
                 max_output_bytes=max_output_bytes,
             )
+            if (
+                descriptor.logical_sha256 != entry["logical_sha256"]
+                or descriptor.logical_bytes != entry["logical_bytes"]
+            ):
+                raise ArtifactIntegrityError(
+                    f"Cold archive receipt differs from the manifest binding: {relative}"
+                )
             confirmed(descriptor)
             attempts.append("legacy_cold_archive:selected")
             return descriptor, iterator, attempts
+        if deferred_errors:
+            raise deferred_errors[0]
         raise ArtifactMissingError(
             f"No installed representation can serve {relative}: {', '.join(attempts)}"
         )
@@ -1728,7 +1793,31 @@ def _store_lock(manifest_path: Path, *, wait_seconds: float | None = 30.0) -> It
     lock_path = manifest_path.with_name(f"{manifest_path.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + wait_seconds if wait_seconds is not None else None
-    with lock_path.open("a+b") as handle:
+    # This writable metadata open must not follow a locally planted symlink: an
+    # fchmod through one would change an unrelated file outside the store.
+    before = _regular(lock_path) if lock_path.exists() or lock_path.is_symlink() else None
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ArtifactContractError(f"Storage lock is not a regular file: {lock_path}")
+        latest = lock_path.lstat()
+        if (latest.st_dev, latest.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ArtifactIntegrityError("Storage lock changed while opening")
+        if before is not None and (before.st_dev, before.st_ino) != (
+            opened.st_dev,
+            opened.st_ino,
+        ):
+            raise ArtifactIntegrityError("Storage lock changed while opening")
+        handle = os.fdopen(descriptor, "r+b")
+    except Exception:
+        os.close(descriptor)
+        raise
+    with handle:
         if os.name != "nt":
             os.fchmod(handle.fileno(), 0o600)
         while True:
@@ -2230,6 +2319,15 @@ def _install_representation(
             deadline_at=deadline_at,
             max_bytes=physical_bytes,
         )
+        # Deduplication must not skip the current-evidence check: the hot file may
+        # have changed after preview while the measured object already existed.
+        if logical.exists() or logical.is_symlink():
+            source_digest, source_bytes, _ = _digest(logical, deadline_at=deadline_at)
+            if (
+                source_digest != preview["logical_sha256"]
+                or source_bytes != preview["logical_bytes"]
+            ):
+                raise ArtifactIntegrityError("Source changed after preview")
         physical = {"sha256": physical_digest, "size": physical_bytes}
     else:
         staged: Path | None = None
@@ -2401,17 +2499,18 @@ def _commit_representation(
                 manifest_sha=manifest_sha,
                 deadline_at=deadline_at,
             )
-            _append_journal(
-                layout["journal"],
-                _journal_event(
-                    intent_id,
-                    "retired",
-                    logical_path=relative,
-                    removed_bytes=removed_bytes,
-                    manifest_sha256=manifest_sha,
-                ),
-                deadline_at=deadline_at,
-            )
+            if removed_bytes:
+                _append_journal(
+                    layout["journal"],
+                    _journal_event(
+                        intent_id,
+                        "retired",
+                        logical_path=relative,
+                        removed_bytes=removed_bytes,
+                        manifest_sha256=manifest_sha,
+                    ),
+                    deadline_at=deadline_at,
+                )
         _append_journal(
             layout["journal"],
             _journal_event(
@@ -2428,13 +2527,58 @@ def _commit_representation(
         )
     except Exception as exc:
         if not manifest_sha:
-            if created:
-                target.unlink(missing_ok=True)
-            _append_journal(
-                layout["journal"],
-                _journal_event(intent_id, "failed", error=f"{type(exc).__name__}: {exc}"),
-                deadline_at=deadline_at,
-            )
+            # ``_write_manifest`` replaces the manifest before its directory fsync.
+            # A failure after that point leaves a committed manifest even though the
+            # return assignment never completed, so an empty ``manifest_sha`` alone
+            # is not proof that nothing was written.  Preserve the object and keep
+            # the intent open for journal reconciliation instead of deleting evidence.
+            committed = False
+            recovered_sha = ""
+            try:
+                current = _read_manifest(layout["manifest"], root)
+                item = current["artifacts"].get(relative)
+                if (
+                    item is not None
+                    and item["logical_sha256"] == descriptor.logical_sha256
+                    and item["logical_bytes"] == descriptor.logical_bytes
+                ):
+                    committed = any(
+                        representation["physical_path"] == descriptor.physical_path
+                        and representation["physical_sha256"] == descriptor.physical_sha256
+                        and representation["physical_bytes"] == descriptor.physical_bytes
+                        for representation in item["representations"]
+                    )
+                if committed:
+                    recovered_sha = hashlib.sha256(
+                        layout["manifest"].read_bytes()
+                    ).hexdigest()
+                    manifest_sha = recovered_sha
+            except Exception:
+                committed = False
+            if committed:
+                try:
+                    _append_journal(
+                        layout["journal"],
+                        _journal_event(
+                            intent_id,
+                            "commit_uncertain",
+                            logical_path=relative,
+                            physical_path=descriptor.physical_path,
+                            manifest_sha256=recovered_sha,
+                            error=f"{type(exc).__name__}: {exc}",
+                        ),
+                        deadline_at=deadline_at,
+                    )
+                except Exception:
+                    pass
+            else:
+                if created:
+                    target.unlink(missing_ok=True)
+                _append_journal(
+                    layout["journal"],
+                    _journal_event(intent_id, "failed", error=f"{type(exc).__name__}: {exc}"),
+                    deadline_at=deadline_at,
+                )
         raise
     return {
         "retired": removed_bytes > 0,
@@ -2463,31 +2607,43 @@ def _retire_legacy(
     entry = current["artifacts"].get(relative)
     if entry is None:
         raise ArtifactContractError("Retirement requires a committed manifest entry")
-    if entry["legacy"]["retired"]:
-        return entry["legacy"]["removed_bytes"], manifest_sha
-    if not logical.exists() and not logical.is_symlink():
-        return 0, manifest_sha
-    digest, size, _ = _digest(logical, deadline_at=deadline_at)
-    if digest != descriptor.logical_sha256 or size != descriptor.logical_bytes:
-        raise ArtifactIntegrityError("Legacy file changed before retirement")
-    logical.unlink()
-    _sync_dir(logical.parent)
-    current = _read_manifest(layout["manifest"], root)
-    entry = current["artifacts"][relative]
-    entry["legacy"] = {
-        "path": relative,
-        "retired": True,
-        "retired_utc": _utc(),
-        "removed_bytes": size,
-    }
-    entry["representations"] = [
-        representation
-        for representation in entry["representations"]
-        if representation["codec"] != CODEC_IDENTITY
-    ]
-    entry["updated_utc"] = _utc()
-    manifest_sha = _write_manifest(layout["manifest"], current, deadline_at=deadline_at)
-    return size, manifest_sha
+    removed_bytes = 0
+    if logical.exists() or logical.is_symlink():
+        digest, size, _ = _digest(logical, deadline_at=deadline_at)
+        if digest != descriptor.logical_sha256 or size != descriptor.logical_bytes:
+            raise ArtifactIntegrityError("Legacy file changed before retirement")
+        logical.unlink()
+        _sync_dir(logical.parent)
+        removed_bytes = size
+        current = _read_manifest(layout["manifest"], root)
+        entry = current["artifacts"][relative]
+        entry["legacy"] = {
+            "path": relative,
+            "retired": True,
+            "retired_utc": _utc(),
+            "removed_bytes": removed_bytes,
+        }
+        entry["representations"] = [
+            representation
+            for representation in entry["representations"]
+            if representation["codec"] != CODEC_IDENTITY
+        ]
+        entry["updated_utc"] = _utc()
+        manifest_sha = _write_manifest(layout["manifest"], current, deadline_at=deadline_at)
+    elif not entry["legacy"]["retired"]:
+        # The hot file is already absent.  Record the observed state without
+        # claiming historical bytes as newly removed by this operation.
+        entry["legacy"]["retired"] = True
+        entry["legacy"]["retired_utc"] = _utc()
+        entry["legacy"]["removed_bytes"] = 0
+        entry["representations"] = [
+            representation
+            for representation in entry["representations"]
+            if representation["codec"] != CODEC_IDENTITY
+        ]
+        entry["updated_utc"] = _utc()
+        manifest_sha = _write_manifest(layout["manifest"], current, deadline_at=deadline_at)
+    return removed_bytes, manifest_sha
 
 
 def _descriptor_from_intent(intent: JournalIntent) -> ObjectDescriptor:
@@ -2563,7 +2719,8 @@ def reconcile_artifacts(
     with _shared_owner(shared_lock):
         layout = _ensure_store(root_path, manifest)
         with _store_lock(manifest, wait_seconds=owner_lock_seconds):
-            intents = _open_intents(_read_journal(layout["journal"]))
+            records = _read_journal(layout["journal"])
+            intents = _open_intents(records)
             summary["open_intents"] = len(intents)
             current = _read_manifest(layout["manifest"], root_path)
             for intent_id, intent in sorted(intents.items())[:max_objects]:
@@ -2575,6 +2732,7 @@ def reconcile_artifacts(
                     intent,
                     deadline_at=deadline_at,
                     dictionaries=dictionaries, dictionary_path=dictionary_path,
+                    journal_records=records,
                 )
                 current = outcome["manifest"]
                 summary[outcome["state"]] = summary.get(outcome["state"], 0) + 1
@@ -2610,6 +2768,7 @@ def _reconcile_intent(
     dictionaries: Mapping[str, bytes] | None = None,
     dictionary_path: str | Path | None = None,
     deadline_at: float | None,
+    journal_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     relative = intent.logical_path
     object_path = _inside_root(root, intent.physical_path)
@@ -2655,6 +2814,9 @@ def _reconcile_intent(
         _write_manifest(layout["manifest"], manifest, deadline_at=deadline_at)
     removed = 0
     if intent.retired_legacy:
+        retired_logged = _journal_event_logged(
+            journal_records or [], kind="retired", logical_path=relative
+        )
         logical = _inside_root(root, relative)
         if logical.exists() or logical.is_symlink():
             digest, size, _ = _digest(logical, deadline_at=deadline_at)
@@ -2666,39 +2828,53 @@ def _reconcile_intent(
                 )
                 return {"state": "held", "manifest": manifest}
             descriptor = _descriptor_from_intent(intent)
-            removed, manifest_sha = _retire_legacy(
+            removed, _ = _retire_legacy(
                 root,
                 layout,
                 descriptor,
                 manifest_sha="",
                 deadline_at=deadline_at,
             )
-            _append_journal(
-                layout["journal"],
-                _journal_event(
-                    intent.intent_id,
-                    "retired",
-                    logical_path=relative,
-                    removed_bytes=removed,
-                    manifest_sha256=manifest_sha,
-                ),
-                deadline_at=deadline_at,
-            )
         else:
             entry = manifest["artifacts"].get(relative)
-            if entry is not None and not entry["legacy"]["retired"]:
-                entry["legacy"]["retired"] = True
-                entry["legacy"]["retired_utc"] = _utc()
-                entry["legacy"]["removed_bytes"] = entry["legacy"]["removed_bytes"]
-                entry["representations"] = [
-                    representation
-                    for representation in entry["representations"]
-                    if representation["codec"] != CODEC_IDENTITY
-                ]
-                entry["updated_utc"] = _utc()
-                _write_manifest(layout["manifest"], manifest, deadline_at=deadline_at)
+            if entry is not None and not retired_logged:
+                if entry["legacy"]["retired"]:
+                    # The manifest already recorded this retirement, including the
+                    # bytes that were removed.  Attribute them once to the recovery
+                    # summary instead of reporting zero merely because the hot file
+                    # is gone by the time reconciliation observes it.
+                    removed = entry["legacy"]["removed_bytes"]
+                else:
+                    removed = intent.logical_bytes
+                    entry["legacy"]["retired"] = True
+                    entry["legacy"]["retired_utc"] = _utc()
+                    entry["legacy"]["removed_bytes"] = removed
+                    entry["representations"] = [
+                        representation
+                        for representation in entry["representations"]
+                        if representation["codec"] != CODEC_IDENTITY
+                    ]
+                    entry["updated_utc"] = _utc()
+                    _write_manifest(layout["manifest"], manifest, deadline_at=deadline_at)
     final = _read_manifest(layout["manifest"], root)
     manifest_sha = hashlib.sha256(_manifest_bytes(final)).hexdigest()
+    if removed and not _journal_event_logged(
+        journal_records or [], kind="retired", logical_path=relative
+    ):
+        retired_event = _journal_event(
+            intent.intent_id,
+            "retired",
+            logical_path=relative,
+            removed_bytes=removed,
+            manifest_sha256=manifest_sha,
+        )
+        _append_journal(
+            layout["journal"],
+            retired_event,
+            deadline_at=deadline_at,
+        )
+        if journal_records is not None:
+            journal_records.append(retired_event)
     _append_journal(
         layout["journal"],
         _journal_event(
