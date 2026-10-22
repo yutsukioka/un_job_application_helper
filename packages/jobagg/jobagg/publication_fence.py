@@ -234,3 +234,10 @@ def prepare_target_schema(conn):
     from jobagg.pipelines.live_inventory import apply_frames
     conn.execute("CREATE TABLE IF NOT EXISTS jobagg_publication_receipts(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)")
     apply_frames(conn, [], 'schema-preparation')
+
+
+def source_paths(registry_path, output_root):
+    from jobagg.pipelines.sync_source import load_sources
+    from jobagg.pipelines.bundles import source_output_slug
+    return {source.id: str(Path(output_root).absolute() / (source_output_slug(source)+'_jobs.sqlite3'))
+            for source in load_sources(registry_path) if source.enabled}

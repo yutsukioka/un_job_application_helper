@@ -16,6 +16,9 @@ from test_budgeted_dispatcher import configured, runner  # noqa: F401
 @pytest.fixture
 def runtime(configured, monkeypatch):
     config, calls = configured
+    # This routing fixture has synthetic SQL/children; native capability coverage
+    # lives in real selected-publication tests rather than a production bypass.
+    monkeypatch.setattr(runner, 'require_native_capabilities', lambda *_: None)
     config['_fixture_storage_budget'] = config.pop('storage_budget')
     config['runtime_control'] = True
     config['phase_budgets'] = dict(projection_max_seconds=3, projection_min_seconds=.01,
@@ -196,7 +199,7 @@ def test_monitor_observation_deduplicates_and_recovers_without_production_writes
     with pytest.raises(ValueError, match='outside production'):
         monitor.sample(cfg, path, production/'bad-output')
     rows = [{'terminal': True, 'started_at': str(i), 'origin': 'natural', 'worker_exit_code': 0,
-             'publication_ok': True, 'readback_verified': True, 'controller_approved': True,
+             'publication_ok': True, 'readback_verified': True, 'controller_approved': True, 'pressure_free': True,
              'parallel_sources': 2 if i == 2 else 1, 'peak_active_sources': 2 if i == 2 else 1,
              'safe_downshift_verified': i == 2} for i in range(3)]
     assert monitor.a8_readiness(rows)['ready'] is True
@@ -385,10 +388,13 @@ def test_reviewed_stage_probe_is_single_use_and_success_archives_episode(configu
         obs.authorize_stage_probe(config, 'worker', evidence_path=evidence, evidence_sha256=digest, expires_at=time.time()+60)
     obs.record_failure(config, 'success', {'status': 'incomplete', 'worker_exit_code': 0,
         'worker_status': 'incomplete', 'run_id': 'verified-success'})
-    assert obs.failure_hold(config, 'success') is None
+    assert obs.failure_hold(config, 'success')['stage'] == 'end_to_end'
+    obs.record_failure(config, 'published', {'status':'incomplete', 'publication_status':'published',
+        'publication_exit_code':0, 'readback_verified':True, 'run_id':'verified-service-success'})
+    assert obs.failure_hold(config, 'published') is None
     histories = list((config['attempt_state_dir']/'circuit-history').glob('*.json'))
-    assert len(histories) == 1
-    assert json.loads(histories[0].read_text())['episode']['unchanged_failures'] == 3
+    assert len(histories) == 2
+    assert all(json.loads(path.read_text())['episode']['unchanged_failures'] == 3 for path in histories)
 
 
 def test_monitor_uses_compact_receipt_index_with_large_retained_history(tmp_path):
@@ -416,3 +422,20 @@ def test_monitor_uses_compact_receipt_index_with_large_retained_history(tmp_path
     (attempt/'outcome.json').write_text('{}')
     damaged = monitor.sample(config, path, tmp_path/'monitor', max_attempts=1)
     assert damaged['discovery_complete'] is False
+
+
+def test_alternating_stage_failures_and_zero_task_deadline_do_not_erase_service_episode(runtime):
+    config, _ = runtime
+    observer = runner.OBSERVABILITY
+    for index, stage in enumerate(('projection', 'publication', 'worker')):
+        observer.record_failure(config, str(index), {'status':'process_failure', 'failure_stage':stage,
+            'failure_type':'TimeoutError', 'worker_exit_code':0, 'worker_status':'incomplete',
+            'worker_stop_reason':'work_deadline', 'worker_progress':0, 'reasons':['fixture deadline']})
+    held = observer.failure_hold(config, 'changed-WAL', stage='projection')
+    assert held['stage'] == 'end_to_end'
+    assert held['unchanged_failures'] == 3
+    value = json.loads((config['attempt_state_dir']/'failure_condition.json').read_text())
+    assert value['circuits']['worker']['failure_class'] == 'zero_task_work_deadline'
+    observer.record_failure(config, 'new', {'status':'incomplete', 'worker_exit_code':0,
+        'worker_status':'incomplete', 'worker_stop_reason':'work_deadline','worker_progress':0})
+    assert observer.failure_hold(config, 'new', stage='projection')

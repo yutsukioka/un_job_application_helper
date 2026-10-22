@@ -438,6 +438,11 @@ def failure_hold(config, fingerprint, *, stage=None):
         return None
     prior = json.loads(path.read_text())
     selected = stage or prior.get("stage", "worker")
+    end_to_end = prior.get('circuits', {}).get('end_to_end', {})
+    selected_episode = prior.get('circuits', {}).get(selected, {})
+    stage_failures = max([selected_episode.get('unchanged_failures', 0), *[value.get('unchanged_failures', 0) for value in selected_episode.get('class_episodes', {}).values()]])
+    if end_to_end.get('unchanged_failures', 0) >= 3 and stage_failures < 3:
+        selected = 'end_to_end'
     circuit = prior.get("circuits", {}).get(selected)
     # Preserve pre-M1 holds until explicitly reviewed; a release change isn't recovery.
     if circuit is None and prior.get("unchanged_failures", 0) >= 3:
@@ -472,7 +477,9 @@ def record_failure(config, fingerprint, result):
     stamp = utc()
     # Reset only stages that actually reached their validated success boundary.
     successful = []
-    if result.get("worker_exit_code") == 0 and result.get("worker_status") in {"complete", "incomplete"}:
+    starved_worker = (result.get('worker_stop_reason') == 'work_deadline'
+                      and result.get('worker_progress') == 0)
+    if not starved_worker and result.get("worker_exit_code") == 0 and result.get("worker_status") in {"complete", "incomplete"}:
         successful.append("worker")
     if result.get("publication_status") in {"published", "noop"} and result.get("publication_exit_code") == 0:
         successful.extend(["projection", "publication"])
@@ -494,14 +501,41 @@ def record_failure(config, fingerprint, result):
                 write(target, history)
             history_refs = [*history_refs, {"path": str(target), "episode_sha256": key}][-64:]
         circuits.pop(stage, None)
-    if (result.get("status") == "process_failure" or
+    failed = (starved_worker or result.get('status') == 'process_failure' or
+              (result.get('status') == 'accepted_work_pending' and
+               any(str(reason).startswith('TimeoutError:') for reason in result.get('reasons', []))))
+    durable_progress = ((result.get('publication_status') in {'published', 'noop'}
+                         and result.get('publication_exit_code') == 0
+                         and result.get('readback_verified') is True)
+                        or (result.get('publication_status') == 'proven_empty'
+                            and result.get('backlog_authoritatively_empty') is True and not starved_worker))
+    if durable_progress:
+        successful.append('end_to_end')
+    # Stage successes above never erase a whole-service failure episode.
+    if failed and not durable_progress:
+        prior_service = circuits.get('end_to_end', {})
+        circuits['end_to_end'] = {**prior_service, 'stage':'end_to_end', 'failure_class':'no_end_to_end_progress',
+            'scope':stable_failure_scope(config, 'end_to_end'),
+            'unchanged_failures':prior_service.get('unchanged_failures',0)+1,
+            'first_occurrence_at':prior_service.get('first_occurrence_at',stamp), 'updated_at':stamp,
+            'retry_ceiling':3, 'reasons':result.get('reasons',[]),
+            'recovery_path':'reviewed single probe with preserved stage episodes'}
+    if durable_progress and 'end_to_end' in circuits:
+        resolved_service = circuits.pop('end_to_end')
+        history = {'stage':'end_to_end','episode':resolved_service,'resolution':'verified_publication_or_authoritative_empty','resolved_at':stamp}
+        key = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+        target = config['attempt_state_dir'] / 'circuit-history' / (key+'.json')
+        if not target.exists():
+            write(target, history)
+        history_refs = [*history_refs, {'path':str(target),'episode_sha256':key}][-64:]
+    if (starved_worker or result.get("status") == "process_failure" or
             (result.get("status") == "accepted_work_pending" and
              any(str(reason).startswith("TimeoutError:") for reason in result.get("reasons", [])))):
-        raw_stage = result.get("failure_stage", "worker")
+        raw_stage = 'worker' if starved_worker else result.get("failure_stage", "worker")
         stage = ("publication" if raw_stage.startswith("publication") else
                  "projection" if raw_stage in {"projection", "worker_validated"} else "worker")
         envelope = circuits.get(stage, {})
-        failure_class = ("timeout" if result.get(stage + "_timeout") else
+        failure_class = ('zero_task_work_deadline' if starved_worker else "timeout" if result.get(stage + "_timeout") else
                          "process_exit" if result.get(stage + "_exit_code") not in (None, 0)
                          else result.get("failure_type", "unknown_process_failure"))
         episodes = dict(envelope.get("class_episodes", {}))
@@ -535,7 +569,7 @@ def authorize_stage_probe(config, stage, *, evidence_path, evidence_sha256, expi
     Call under the actual shared owner after reviewing the corrected release and
     configuration. This API is never invoked by a natural dispatcher tick.
     """
-    if stage not in {"worker", "projection", "publication"}:
+    if stage not in {"worker", "projection", "publication", "end_to_end"}:
         raise ValueError("Unknown reviewed probe stage")
     evidence = Path(evidence_path)
     if sha(evidence) != evidence_sha256 or type(expires_at) not in (int, float) or not time.time() < expires_at:

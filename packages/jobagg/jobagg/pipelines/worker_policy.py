@@ -252,7 +252,7 @@ class SharedPolicy:
         return authority.due(source_id, now, **policy) if authority else None
 
     @_synchronized
-    def begin_batch(self, *, check_deadline=None, owner_fd=None, audit=None):
+    def begin_batch(self, *, check_deadline=None, owner_fd=None, audit=None, storage=None):
         """One full audit under the shared owner; subsequent claims use this revision.
 
         Every cooperating writer uses reserve/finish, which update this same
@@ -262,6 +262,7 @@ class SharedPolicy:
         authority = self.native_authority()
         if authority:
             authority.owner_fd = owner_fd
+            authority.storage = storage
             authority.check_deadline = check_deadline or (lambda: None)
             if not audit:
                 raise ValueError('reviewed_policy_audit_bounds_required')
@@ -310,6 +311,7 @@ class SharedPolicy:
                 self._native.revision()
             finally:
                 self._native.owner_fd = None
+                self._native.storage = None
                 self._native.check_deadline = lambda: None
                 if hasattr(self, '_batch_events'):
                     del self._batch_events

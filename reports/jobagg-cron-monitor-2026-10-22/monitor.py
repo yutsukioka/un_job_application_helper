@@ -478,7 +478,10 @@ def a8_readiness(records: list[dict[str, Any]]) -> dict[str, Any]:
     overlap = downshift = False
     for record in terminal:
         success = (record.get('origin') == 'natural' and record.get('worker_exit_code') == 0
-                   and record.get('publication_ok') and record.get('readback_verified') is True)
+                   and record.get('publication_ok') and record.get('readback_verified') is True
+                   and record.get('pressure_free') is True
+                   and record.get('publication_held') is None
+                   and record.get('worker_stop_reason') != 'work_deadline')
         streak = streak + 1 if success else 0
         overlap = overlap or bool(success and record.get('controller_approved') is True
                                   and (record.get('parallel_sources') or 0) >= 2
@@ -565,7 +568,10 @@ def sample(config: dict[str, Any], config_path: Path, output: Path, *, max_attem
                           controller_approved=concurrency.get('controller_approved'),
                           parallel_sources=concurrency.get('limit_used'),
                           peak_active_sources=concurrency.get('peak_active_sources'),
-                          safe_downshift_verified=concurrency.get('safe_downshift_verified'))
+                          safe_downshift_verified=concurrency.get('safe_downshift_verified'),
+                          pressure_free=concurrency.get('qualifying') is True,
+                          publication_held=result.get('publication_held'),
+                          worker_stop_reason=result.get('worker_stop_reason'))
             records.append(record)
         elif path.name in index:
             incomplete = True

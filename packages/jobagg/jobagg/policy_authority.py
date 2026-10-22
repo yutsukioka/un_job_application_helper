@@ -6,7 +6,7 @@ stale database cannot silently become an empty quota window. A reviewed repair
 may reconcile a pending head; ordinary startup never rebuilds it from history.
 """
 
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -29,6 +29,17 @@ def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _schema_hash(conn):
+    return hashlib.sha256(
+        _dump(
+            [
+                tuple(row)
+                for row in conn.execute("SELECT name,type,sql FROM sqlite_master ORDER BY name")
+            ]
+        ).encode()
+    ).hexdigest()
+
+
 def _signature(path):
     path = Path(path)
     if path.resolve() != path or not path.is_file():
@@ -43,6 +54,7 @@ class PolicyAuthority:
         self.path = policy.root / "authority.sqlite3"
         self.head = policy.root / "authority.json"
         self.owner_fd = None
+        self.storage = None
         self.check_deadline = lambda: None
 
     @contextmanager
@@ -60,6 +72,11 @@ class PolicyAuthority:
             raise ValueError("policy_authority_restore_or_pending_repair_required")
         with closing(sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=1)) as conn:
             conn.row_factory = sqlite3.Row
+            conn.create_function("jobagg_policy_write_allowed", 0, lambda: 0)
+            if _schema_hash(conn) != head.get("schema_sha256"):
+                raise ValueError("policy_authority_schema_or_fence_changed")
+            if time.time() < head.get("last_wall_at", 0):
+                raise ValueError("policy_clock_regressed_review_required")
             conn.execute("PRAGMA synchronous=FULL")
             conn.set_progress_handler(lambda: self._expired(), 256)
             value = dict(conn.execute("SELECT * FROM authority WHERE id=1").fetchone())
@@ -74,24 +91,38 @@ class PolicyAuthority:
                 if self.owner_fd is None:
                     raise ValueError("policy_authority_live_owner_required")
                 _owner(self.owner_fd, self.policy.owner)
-                transaction_id = uuid.uuid4().hex
-                # Durable pending head precedes any SQL mutation. Failure is a
-                # repair state even if SQLite rolled back: no automatic refund.
-                atomic_write_text(
-                    self.head,
-                    _dump({**head, "pending": True, "next_transaction_id": transaction_id}),
+                conn.create_function(
+                    "jobagg_policy_write_allowed",
+                    0,
+                    lambda: int(os.fstat(self.owner_fd).st_ino == self.policy.owner.stat().st_ino),
                 )
-                try:
-                    with conn:
-                        conn.execute(
-                            "UPDATE authority SET revision=revision+1,transaction_id=? WHERE id=1",
-                            (transaction_id,),
+                with (
+                    self.storage.policy_database_write(conn, self.path)
+                    if self.storage is not None
+                    else nullcontext()
+                ):
+                    transaction_id = uuid.uuid4().hex
+                    # Durable pending head precedes any SQL mutation. Failure is a
+                    # repair state even if SQLite rolled back: no automatic refund.
+                    atomic_write_text(
+                        self.head,
+                        _dump({**head, "pending": True, "next_transaction_id": transaction_id}),
+                    )
+                    try:
+                        with conn:
+                            conn.execute(
+                                "UPDATE authority SET revision=revision+1,transaction_id=? WHERE id=1",
+                                (transaction_id,),
+                            )
+                            yield conn
+                        head.update(
+                            revision=value["revision"] + 1,
+                            transaction_id=transaction_id,
+                            last_wall_at=time.time(),
                         )
-                        yield conn
-                    head.update(revision=value["revision"] + 1, transaction_id=transaction_id)
-                    atomic_write_text(self.head, _dump(head))
-                except BaseException:
-                    raise
+                        atomic_write_text(self.head, _dump(head))
+                    except BaseException:
+                        raise
             else:
                 yield conn
         self.check_deadline()
@@ -285,6 +316,7 @@ def migrate(policy, *, owner_fd, epoch, pauses, reviewed_writers, check_deadline
     staging = authority.path.with_suffix(".import.sqlite3")
     with closing(sqlite3.connect(staging)) as conn:
         conn.row_factory = sqlite3.Row
+        conn.create_function("jobagg_policy_write_allowed", 0, lambda: 1)
         conn.executescript("""CREATE TABLE IF NOT EXISTS authority(id INTEGER PRIMARY KEY,epoch TEXT,revision INTEGER,transaction_id TEXT,audit_cursor TEXT,audit_completed_at REAL);
 CREATE TABLE IF NOT EXISTS sources(source_id TEXT PRIMARY KEY,pause REAL,n INTEGER);
 CREATE TABLE IF NOT EXISTS attempts(attempt_id TEXT PRIMARY KEY,source_id TEXT,kind TEXT,sequence INTEGER,started_at REAL,effective_end REAL,batch_break INTEGER,event_json TEXT);
@@ -304,8 +336,14 @@ CREATE TABLE IF NOT EXISTS migration_receipt(id INTEGER PRIMARY KEY,receipt_json
                 conn.execute(
                     "INSERT OR IGNORE INTO sources VALUES(?,?,0)", (source, pauses[source])
                 )
+            replay_order = {
+                row["attempt_id"]: index
+                for group in events.values()
+                for index, row in enumerate(group)
+            }
             for event in sorted(
-                records, key=lambda value: (value["started_at"], value["attempt_id"])
+                records,
+                key=lambda value: (value["started_at"], replay_order.get(value["attempt_id"], 0)),
             ):
                 check_deadline()
                 _insert(conn, event)
@@ -328,6 +366,13 @@ CREATE TABLE IF NOT EXISTS migration_receipt(id INTEGER PRIMARY KEY,receipt_json
                     ),
                 ),
             )
+        for table in ("authority", "sources", "attempts", "evidence", "migration_receipt"):
+            for op in ("INSERT", "UPDATE", "DELETE"):
+                conn.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS policy_guard_{table}_{op} BEFORE {op} ON {table} BEGIN SELECT CASE WHEN jobagg_policy_write_allowed()!=1 THEN RAISE(ABORT,'policy_writer_not_admitted') END; END"
+                )
+        schema_hash = _schema_hash(conn)
+        conn.commit()
     os.replace(staging, authority.path)
     # Legacy claim/reservation APIs cannot consume an index with this schema.
     atomic_write_text(
@@ -343,6 +388,8 @@ CREATE TABLE IF NOT EXISTS migration_receipt(id INTEGER PRIMARY KEY,receipt_json
         "revision": 0,
         "transaction_id": "bootstrap",
         "pending": False,
+        "schema_sha256": schema_hash,
+        "last_wall_at": time.time(),
         "database_identity": _signature(authority.path),
         "owner_identity": _signature(policy.owner),
         "legacy_boundaries": boundaries,

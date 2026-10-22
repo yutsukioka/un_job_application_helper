@@ -139,6 +139,7 @@ def main(argv=None):
                     publication_policy=policy,
                     storage_budget_lease=lease,
                     previous_publication_boundary=request.get("previous_publication_boundary"),
+                    publication_selection=request.get('publication_selection'),
                 )
         if recovery and (
             result.get("generation_id") != recovery["binding"]["generation_id"]

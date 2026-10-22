@@ -13,6 +13,8 @@ from pathlib import Path
 import sqlite3
 import time
 
+from jobagg.publication_deadline import expired
+
 from jobagg.remediation_scheduling import task_key
 
 
@@ -42,7 +44,7 @@ class _LineageDeadlineExceeded(TimeoutError):
 
 
 def _check(deadline_at):
-    if deadline_at is not None and time.monotonic() >= deadline_at:
+    if expired(deadline_at):
         raise _LineageDeadlineExceeded("Accepted detail lineage deadline exhausted")
 
 

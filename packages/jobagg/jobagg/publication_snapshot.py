@@ -15,6 +15,8 @@ import re
 import stat
 import tempfile
 import time
+
+from jobagg.publication_deadline import expired
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,7 +27,7 @@ from jobagg.storage_budget import (
 
 
 def _check(deadline_at):
-    if deadline_at is not None and time.monotonic() >= deadline_at:
+    if expired(deadline_at):
         raise TimeoutError("Publication snapshot deadline exhausted")
 
 
@@ -354,7 +356,7 @@ def _create_budgeted_projection(source, target, acceptance_sha256, budget, max_b
     if source.resolve() != source or target.resolve() != target or not target.parent.parent.is_dir():
         raise StorageBudgetError("Budgeted projection requires direct paths and an existing scratch parent")
     budget.validate_writer(expected_cycle_id=budget.cycle_id, expected_scope_hash=budget.scope_hash,
-                           expected_ledger_path=budget.path, allowed_phases=("accepted_pending",), required_path=target)
+                           expected_ledger_path=budget.path, allowed_phases=("accepted_pending", "publication_admitted") if selection is not None else ("accepted_pending",), required_path=target)
     if budget.category_for(target) != "work":
         raise StorageBudgetError("Projection target must be registered work")
     binding = {"source_database": str(source), "target": str(target),

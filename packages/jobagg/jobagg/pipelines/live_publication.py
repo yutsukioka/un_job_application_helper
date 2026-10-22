@@ -285,8 +285,8 @@ def _latest_detail(row, conn):
     return max((_epoch(value) for value in clocks if value), default=0.0)
 
 
-def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20, deadline_at=None, job_keys=None):
-    _validate_targets(worker_database, output_dir)
+def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20, deadline_at=None, job_keys=None, selected_targets=None):
+    _validate_targets(worker_database, output_dir, known_paths=selected_targets)
     output = Path(output_dir).resolve()
     sources = {source.id: source for source in load_sources(registry_path)}
     targets = {
@@ -366,6 +366,9 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                 plan["budget_exhausted"] = True
                 break
             row = _row(worker, observation["job_key"])
+            selected_unit = next((item for item in plan.get('publication_selection', {}).get('units', [])
+                                  if item['job_key'] == observation['job_key']), {})
+            force_revalidation = selected_unit.get('operation') in {'time_transition_revalidation', 'contract_revalidation'}
             try:
                 if not row or row["source_id"] not in targets:
                     raise ValueError("source_missing_or_disabled")
@@ -383,7 +386,7 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                 key = _publication_key(row, observation, [])
                 with closing(_ro(target)) as source_conn:
                     if (
-                        not document_manifest_rows
+                        not force_revalidation and not document_manifest_rows
                         and _receipt_exists(source_conn, key)
                         and _receipt_exists(consolidated, key)
                     ):
@@ -393,13 +396,16 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
                 documents, document_rejected = (_documents(worker, row, proof)
                     if attachments_in_scope else ([], []))
                 key = _publication_key(row, observation, documents)
+                if force_revalidation:
+                    key = _digest({'accepted_publication_key': key, 'revalidation_version': selected_unit['version'],
+                                   'contract': plan['publication_selection']['contract_sha256']})
                 plan["rejected"].extend(
                     {"job_key": row["job_key"], **item} for item in document_rejected
                 )
                 with closing(_ro(target)) as source_conn:
                     source_row = _resolve(source_conn, row)
                     all_row = _resolve(consolidated, row)
-                    if not attachments_in_scope and all(
+                    if not force_revalidation and not attachments_in_scope and all(
                         previous and _raw(previous).get("_deterministic_fetch_observation") == proof
                         and all(previous.get(field) == row.get(field) for field in _PUBLIC_FIELDS)
                         for previous in (source_row, all_row)
@@ -532,10 +538,10 @@ def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20,
     return plan
 
 
-def _validate_targets(worker_database, output_dir):
+def _validate_targets(worker_database, output_dir, *, known_paths=None):
     output = Path(output_dir)
     worker = Path(worker_database)
-    paths = [
+    paths = [worker, *(Path(path) for path in known_paths)] if known_paths is not None else [
         worker,
         *output.glob("*_jobs.sqlite3"),
         *output.glob("*_jobs_*.json"),
@@ -1264,6 +1270,7 @@ def _publish_incremental(
     publication_policy=None,
     storage_budget_lease=None,
     previous_publication_boundary=None,
+    publication_selection=None,
 ):
     """Publish while the caller holds the shared owner; never acquires it twice.
 
@@ -1271,7 +1278,7 @@ def _publish_incremental(
     ``deadline_at`` is a monotonic clock. An individual transaction/export is a
     bounded indivisible unit; the caller must provide a hard outer deadline.
     """
-    _validate_targets(worker_database, output_dir)
+    _validate_targets(worker_database, output_dir, known_paths=publication_selection['target_paths'] if publication_selection else None)
     gate_path = Path(output_dir).resolve() / GATE_NAME
     gate = json.loads(gate_path.read_text()) if gate_path.exists() else None
     if gate and gate.get("state") != "complete":
@@ -1287,8 +1294,11 @@ def _publish_incremental(
             raise ValueError("recovery_publication_policy_changed")
         return _finish_generation(plan, gate, gate_path, deadline_at, fault, lease=storage_budget_lease)
     plan = plan_publication(
-        worker_database, registry_path, output_dir, max_jobs=max_jobs, deadline_at=deadline_at, job_keys=job_keys
+        worker_database, registry_path, output_dir, max_jobs=max_jobs, deadline_at=deadline_at, job_keys=job_keys,
+        selected_targets=publication_selection['target_paths'] if publication_selection else None
     )
+    if publication_selection is not None and plan.get('publication_selection') != publication_selection:
+        raise ValueError('selected_projection_dependency_seal_differs')
     if publication_policy is not None:
         plan["publication_policy"] = publication_policy
     if previous_publication_boundary is not None:

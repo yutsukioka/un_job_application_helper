@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "091af9973bd8b348b75af3efd32d162fca73a494805397cba88aec4666da6e2f"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "621193bd1e442e32e3a2f836f11202569f07ffa68bb821563a2f8c3236bdda74"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -486,6 +486,23 @@ class WorkerStorage:
         bound = (maximum * (page + 24) + 32 + growth_pages * page
                  + ((maximum + 4095) // 4096) * 32768 + 65536)
         return maximum, bound
+
+    @contextmanager
+    def policy_database_write(self, conn, path):
+        # Narrow native SQL mutates a constant number of indexed rows. The
+        # reviewed bound must include its largest retained event and WAL/scratch;
+        # do not substitute a guessed production threshold for measurement.
+        maximum = self.limits.get('policy_transaction_cap_bytes')
+        if type(maximum) is not int or maximum < 4096:
+            raise StorageBudgetDeferred('measured_native_policy_transaction_cap_required')
+        grant = self.reserve('database', maximum, path)
+        grant.consume(maximum)
+        try:
+            conn.execute('PRAGMA cache_spill=OFF')
+            conn.execute('PRAGMA wal_autocheckpoint=0')
+            yield
+        finally:
+            grant.close()
 
     def preclaim(self, task):
         source = self.worker.by_id[task["source_id"]]
@@ -2559,6 +2576,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self._runtime_run_id = None
                 if getattr(self.shared_policy, '_native', None) is not None:
                     self.shared_policy._native.owner_fd = None
+                    self.shared_policy._native.storage = None
                     self.shared_policy._native.check_deadline = lambda: None
                 self._policy_due_cache = {}
                 if hasattr(self, "_report_policy_events"):
@@ -2596,7 +2614,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self.storage.activate((request or {}).get("semantic_history_policy"))
             self.initialize()
             self.shared_policy.begin_batch(check_deadline=lambda: self.check_deadline(deadline),
-                owner_fd=owner_fd, audit=(request or {}).get('policy_audit'))
+                owner_fd=owner_fd, audit=(request or {}).get('policy_audit'), storage=self.storage)
             register_builtin_adapters()
             self.seed_listings()
             outcomes = []

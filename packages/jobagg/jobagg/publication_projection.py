@@ -11,6 +11,8 @@ import json
 import sqlite3
 import time
 
+from jobagg.publication_deadline import expired
+
 from jobagg.accepted_detail_lineage import matching_detail_attempts
 
 VERSION = "publication-projection-2"
@@ -42,7 +44,7 @@ def _sha(value):
 
 
 def _check(deadline):
-    if deadline is not None and time.monotonic() >= deadline:
+    if expired(deadline):
         raise TimeoutError("Publication projection deadline exhausted")
 
 

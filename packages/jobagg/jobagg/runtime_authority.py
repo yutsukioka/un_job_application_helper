@@ -247,3 +247,26 @@ def controller(conn, *, run_id, owner_fd):
         yield
     finally:
         conn.create_function('jobagg_runtime_write_allowed', 0, lambda: 0)
+
+
+def advance_publication(conn, *, run_id, controls, outcome_sha256, worker_result_sha256):
+    value = validate(conn)
+    if value['run_id'] != run_id or value['phase'] != 'publisher':
+        raise RuntimeRepairRequired('runtime_continuation_phase_differs')
+    control = json.loads(value['control_json'])
+    if str(controls) != control['publication_control_dir']:
+        raise RuntimeRepairRequired('runtime_continuation_control_differs')
+    sequence = control['publication_sequence'] + 1
+    if sequence > 999999:
+        raise RuntimeRepairRequired('runtime_continuation_ceiling_requires_review')
+    root = Path(controls) if control['publication_sequence'] == 0 else Path(controls).parent.parent
+    target = root / 'publication_batches' / f'{sequence:06d}'
+    if target.resolve() != target:
+        raise RuntimeRepairRequired('runtime_continuation_alias')
+    target.mkdir(parents=True, exist_ok=True)
+    control.update(publication_sequence=sequence, publication_control_dir=str(target),
+        previous_publication_control_dir=str(controls), previous_outcome_sha256=outcome_sha256,
+        accepted_worker_result_sha256=worker_result_sha256)
+    conn.execute("UPDATE jobagg_runtime_state SET phase='accepted',control_json=? WHERE id=1",
+                 (json.dumps(control, sort_keys=True),))
+    return control

@@ -58,15 +58,32 @@ selected publication projection. Its focused worker/lineage/snapshot/policy
 regression batch passed 134 tests. These APIs still require end-to-end dispatcher
 continuation, migration and fault-boundary validation before activation.
 
+## Integrated runtime continuation
+
+The native dispatcher now selects bounded dirty dependencies before projection,
+retains original worker proofs, journals each publication batch separately, and
+drains the same accepted run before fetching again. A real three-generation
+fixture verifies destination commits/exports and then a genuine empty fast path.
+A cold native worker fixture performs useful work without a historical policy
+census and records its accepted reference in the acceptance transaction. The
+combined M0/M1, snapshot, policy, budget and binding regression batch passed
+151 tests. This is one combined denominator; earlier overlapping results are not
+additional tests.
+
+Native source cohorts retain service order and explicit oversized/unknown holds.
+Closing-time transitions invalidate no-op truth and enqueue selected revalidation.
+Entry wall/elapsed bounds also cover pending-work and artifact hashing. Alternating
+stage failures retain an end-to-end episode; a zero-task work-deadline exit cannot
+reset the worker episode. Native controller/policy SQL allocation requires reviewed
+finite caps under the existing storage escrow.
+
 ## Remaining immediate scope
 
-The publication boundary is being completed. A worker revision alone does not
-prove that source/consolidated destinations, exports and older pending work are
-clear; the fast no-op path stays disabled without that independent validation.
-A completed bounded generation with residual accepted/rejected work currently
-remains explicitly fenced. It must gain bounded continuation before M1 can be
-called complete. Persistent all-writer policy authority/migration and historical
-listing/document/export reconciliation still require acceptance evidence.
+Complete checkpointed all-writer migration and exact historical listing/document/
+export reconciliation, native budget/semantic-fence integration and its crash
+faults, retained-history scale/cold-output gates, and the full regression/review
+pass. In particular, preparation APIs and bounded fixtures do not prove that the
+actual production control roots have been reconciled or are activation-ready.
 
 No production A8 or 24-hour observation has been started. No claim is made about
 current all-source completeness, capacity compliance, production throughput or

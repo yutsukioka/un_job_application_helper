@@ -107,3 +107,24 @@ def test_oversized_unit_remains_explicit_hold_and_cannot_clear_backlog(setup):
         assert selection["held"][0]["reason"] == "oversized_unit_requires_reviewed_measured_path"
         work.acknowledge(conn, selection, result_sha256="b" * 64)
         assert work.vector(conn, contract_sha256="contract", now=time.time())["held"]
+
+
+def test_time_and_delete_invalidation_never_disappear_behind_old_acknowledgement(setup):
+    add_detail(setup)
+    prepare(setup)
+    with setup['worker'].connect() as conn:
+        selection=select(setup,conn)
+        key=selection['units'][0]['job_key']
+        work.acknowledge(conn,selection,result_sha256='a'*64)
+        conn.execute("UPDATE jobs SET closes_at='2000-01-01T00:00:00+00:00' WHERE job_key=?",(key,))
+        metadata=select(setup,conn)
+        work.acknowledge(conn,metadata,result_sha256='b'*64)
+        assert work.vector(conn,contract_sha256='contract',now=time.time())['empty'] is False
+        assert work.advance_time(conn,now=time.time(),limit=1)==1
+        timed=select(setup,conn)
+        assert timed['units'][0]['operation']=='time_transition_revalidation'
+        work.acknowledge(conn,metadata,result_sha256='c'*64)
+        assert work.vector(conn,contract_sha256='contract',now=time.time())['pending']
+        conn.execute('DELETE FROM remediation_observations WHERE job_key=?',(key,))
+        missing=select(setup,conn)
+        assert any(item['reason']=='unknown_or_disabled_scope_requires_review' for item in missing['held'])

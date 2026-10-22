@@ -40,6 +40,20 @@ def configure(conn):
         row = json.loads(payload)
         source = row.get("source_id")
         job = row.get("job_key")
+        if row.get("_operation") == "DELETE":
+            return _dump(
+                [
+                    {
+                        "unit": "deleted:"
+                        + table
+                        + ":"
+                        + str(job or source or row.get("task_id") or row.get("content_sha256")),
+                        "kind": "unknown",
+                        "source": source or "*",
+                        "job": job,
+                    }
+                ]
+            )
         if job and not source:
             match = conn.execute("SELECT source_id FROM jobs WHERE job_key=?", (job,)).fetchone()
             source = match[0] if match else None
@@ -106,7 +120,23 @@ def prepare(conn, *, contract_sha256, epoch):
     conn.execute(
         "CREATE INDEX jobagg_dirty_source ON jobagg_dirty_current(source_id,disposition,first_changed_at,unit)"
     )
+    conn.execute("CREATE INDEX jobagg_dirty_version_order ON jobagg_dirty_current(version)")
     conn.execute("CREATE TABLE jobagg_dirty_bootstrap(unit TEXT PRIMARY KEY)")
+    conn.execute(
+        "CREATE TABLE jobagg_dirty_cohorts(source_id TEXT PRIMARY KEY,last_service INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE jobagg_dirty_transitions(object_key TEXT PRIMARY KEY,source_id TEXT,job_key TEXT,due_at REAL,fired INTEGER)"
+    )
+    conn.execute(
+        "CREATE INDEX jobagg_dirty_due ON jobagg_dirty_transitions(fired,due_at,object_key)"
+    )
+    for operation in ("INSERT", "UPDATE"):
+        conn.execute(f"""CREATE TRIGGER jobagg_dirty_closing_{operation.lower()} AFTER {operation} ON jobs BEGIN
+            INSERT INTO jobagg_dirty_transitions VALUES('closing:'||new.job_key,new.source_id,new.job_key,
+                (julianday(new.closes_at)-2440587.5)*86400,0)
+            ON CONFLICT(object_key) DO UPDATE SET source_id=excluded.source_id,due_at=excluded.due_at,
+                fired=CASE WHEN due_at IS excluded.due_at THEN fired ELSE 0 END; END""")
     tables = [
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -133,6 +163,7 @@ def prepare(conn, *, contract_sha256, epoch):
                     else "(new.last_list_at IS NOT old.last_list_at OR new.listing_ids IS NOT old.listing_ids OR new.listing_proof IS NOT old.listing_proof)"
                 )
                 fields += ",'listing_changed'," + changed
+            fields += ("," if fields else "") + "'_operation','" + op + "'"
             payload = "json_object(" + fields + ")"
             name = "jobagg_dirty_" + hashlib.sha256((table + op).encode()).hexdigest()
             conn.execute(f'''CREATE TRIGGER "{name}" AFTER {op} ON "{table}" BEGIN
@@ -143,6 +174,7 @@ def prepare(conn, *, contract_sha256, epoch):
                 SELECT unit,version,source_id,job_key,kind,changed_at,changed_at,'pending',NULL,NULL
                 FROM jobagg_dirty_versions WHERE version>coalesce((SELECT max(version) FROM jobagg_dirty_current),0)
                 ON CONFLICT(unit) DO UPDATE SET version=excluded.version,last_changed_at=excluded.last_changed_at,
+                    first_changed_at=CASE WHEN disposition='acknowledged' THEN excluded.first_changed_at ELSE first_changed_at END,
                     disposition='pending',reason=NULL,acknowledgement_sha256=NULL; END''')
 
 
@@ -153,7 +185,7 @@ def _mark(conn, unit, source, job, kind, operation):
         (unit, source, job, kind, at, operation),
     ).lastrowid
     conn.execute(
-        "INSERT INTO jobagg_dirty_current VALUES(?,?,?,?,?,?,?,'pending',NULL,NULL) ON CONFLICT(unit) DO UPDATE SET version=excluded.version,last_changed_at=excluded.last_changed_at,disposition='pending',reason=NULL,acknowledgement_sha256=NULL",
+        "INSERT INTO jobagg_dirty_current VALUES(?,?,?,?,?,?,?,'pending',NULL,NULL) ON CONFLICT(unit) DO UPDATE SET version=excluded.version,last_changed_at=excluded.last_changed_at,first_changed_at=CASE WHEN disposition='acknowledged' THEN excluded.first_changed_at ELSE first_changed_at END,disposition='pending',reason=NULL,acknowledgement_sha256=NULL",
         (unit, version, source, job, kind, at, at),
     )
 
@@ -191,6 +223,11 @@ def bootstrap(conn, *, limit, deadline_at):
                 "verified_legacy_import",
             )
             conn.execute("INSERT INTO jobagg_dirty_bootstrap VALUES(?)", (kind + ":" + key,))
+            if kind == "job":
+                conn.execute(
+                    "INSERT OR IGNORE INTO jobagg_dirty_transitions SELECT 'closing:'||job_key,source_id,job_key,(julianday(closes_at)-2440587.5)*86400,0 FROM jobs WHERE job_key=?",
+                    (key,),
+                )
         remaining -= len(rows)
         if remaining <= 0:
             return False
@@ -212,6 +249,15 @@ def vector(conn, *, contract_sha256, now):
     )
     if state["schema"] != SCHEMA or not state["bootstrap_complete"]:
         raise ValueError("publication_work_bootstrap_incomplete")
+    due = conn.execute(
+        "SELECT min(due_at) FROM jobagg_dirty_transitions WHERE fired=0 AND due_at IS NOT NULL"
+    ).fetchone()[0]
+    if due is not None:
+        state["next_transition_at"] = (
+            min(due, state["next_transition_at"])
+            if state["next_transition_at"] is not None
+            else due
+        )
     reasons = []
     if state["contract_sha256"] != contract_sha256:
         reasons.append("contract_epoch_changed")
@@ -257,14 +303,32 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
     ):
         raise ValueError("finite_publication_admission_required")
     work = vector(conn, contract_sha256=contract_sha256, now=time.time())
-    if work["revalidation_reasons"]:
+    if any(reason != "time_transition_due" for reason in work["revalidation_reasons"]):
         raise ValueError("publication_revalidation_requires_explicit_epoch_migration")
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
-    rows = cursor.execute(
-        "SELECT * FROM jobagg_dirty_current WHERE disposition='pending' ORDER BY first_changed_at,unit LIMIT ?",
-        (policy["max_candidates"],),
-    ).fetchall()
+    cohorts = []
+    for source in [*source_paths, "*"]:
+        first = cursor.execute(
+            "SELECT first_changed_at FROM jobagg_dirty_current WHERE source_id=? AND disposition='pending' ORDER BY first_changed_at,unit LIMIT 1",
+            (source,),
+        ).fetchone()
+        if first:
+            served = cursor.execute(
+                "SELECT last_service FROM jobagg_dirty_cohorts WHERE source_id=?", (source,)
+            ).fetchone()
+            cohorts.append((served[0] if served else 0, first[0], source))
+    rows = []
+    for _, _, source in sorted(cohorts):
+        available = policy["max_candidates"] - len(rows)
+        if available <= 0:
+            break
+        rows.extend(
+            cursor.execute(
+                "SELECT c.*,v.operation FROM jobagg_dirty_current c JOIN jobagg_dirty_versions v ON v.version=c.version WHERE c.source_id=? AND c.disposition='pending' ORDER BY c.first_changed_at,c.unit LIMIT ?",
+                (source, available),
+            ).fetchall()
+        )
     chosen = []
     sources = set()
     targets = set()
@@ -338,8 +402,7 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
         "estimated_bytes": total,
         "candidate_count": len(rows),
         "policy": policy,
-        "all_work_selected": len(rows) < policy["max_candidates"]
-        and len(chosen) + len(holds) == len(rows),
+        "all_work_selected": False,
     }
     result["sha256"] = hashlib.sha256(_dump(result).encode()).hexdigest()
     return result
@@ -364,8 +427,25 @@ def acknowledge(conn, selection, *, result_sha256, rejected=()):
                 row["version"],
             ),
         )
+    for source in {row["source_id"] for row in selection["units"]}:
+        last = max(row["version"] for row in selection["units"] if row["source_id"] == source)
+        conn.execute(
+            "INSERT INTO jobagg_dirty_cohorts VALUES(?,?) ON CONFLICT(source_id) DO UPDATE SET last_service=max(last_service,excluded.last_service)",
+            (source, last),
+        )
     for row in selection["held"]:
         conn.execute(
             "UPDATE jobagg_dirty_current SET disposition='held',reason=? WHERE unit=? AND version=?",
             (row["reason"], row["unit"], row["version"]),
         )
+
+
+def advance_time(conn, *, now, limit):
+    rows = conn.execute(
+        "SELECT object_key,source_id,job_key FROM jobagg_dirty_transitions WHERE fired=0 AND due_at<=? ORDER BY due_at,object_key LIMIT ?",
+        (now, limit),
+    ).fetchall()
+    for key, source, job in rows:
+        _mark(conn, "job:" + job, source, job, "job", "time_transition_revalidation")
+        conn.execute("UPDATE jobagg_dirty_transitions SET fired=1 WHERE object_key=?", (key,))
+    return len(rows)
