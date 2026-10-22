@@ -5,9 +5,12 @@ an explicit reviewed bootstrap; silently resetting prior writer state is refused
 """
 
 from datetime import datetime, UTC
+from copy import deepcopy
 import hashlib
 import json
+import os
 import re
+import stat
 from pathlib import Path
 import time
 from functools import wraps
@@ -173,8 +176,9 @@ class SharedPolicy:
         """Validate and read history once per selection while the caller owns the lock.
 
         Include unindexed reservation files: a crash between the durable reservation
-        and index update must never refund an attempt. This snapshot is deliberately
-        not cached across selections or used as authority for a later claim.
+        and index update must never refund an attempt. Each call repeats the index
+        and complete directory metadata census. Only unchanged parsed file bytes
+        are reused within this process; a selection never authorizes a later claim.
         """
         check = check_deadline or (lambda: None)
         check()
@@ -188,22 +192,48 @@ class SharedPolicy:
             or len(expected) != len(set(expected))
         ):
             raise ValueError("Malformed shared attempt history index")
-        paths = {path.name: path for path in (self.root / "attempts").glob("*.json")}
+        paths = {}
+        with os.scandir(self.root / "attempts") as entries:
+            for index, entry in enumerate(entries):
+                if index % 64 == 0:
+                    check()
+                if not entry.name.endswith(".json"):
+                    continue
+                metadata = entry.stat(follow_symlinks=False)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError("Shared attempt history removed/aliased; no quota reset permitted")
+                paths[entry.name] = (Path(entry.path), metadata)
         if not set(expected).issubset(paths):
             raise ValueError("Shared attempt history removed; no quota reset permitted")
+        previous = getattr(self, "_event_cache", {})
+        refreshed = {}
         grouped = {}
-        for index, path in enumerate(paths.values()):
+        for index, (name, (path, metadata)) in enumerate(paths.items()):
             if index % 64 == 0:
                 check()
-            if not path.is_file() or path.is_symlink():
-                raise ValueError("Shared attempt history removed/aliased; no quota reset permitted")
-            event = json.loads(path.read_text())
+            signature = (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                         metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+                         metadata.st_nlink)
+            saved = previous.get(name)
+            if saved is not None and saved[0] == signature:
+                event = saved[1]
+            else:
+                event = json.loads(path.read_text())
+                after = path.stat(follow_symlinks=False)
+                current = (after.st_dev, after.st_ino, after.st_mode,
+                           after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+                           after.st_nlink)
+                if signature != current:
+                    raise ValueError("Shared attempt history changed during validation")
+            refreshed[name] = (signature, event)
             if event["kind"] == "detail":
                 grouped.setdefault(event["source_id"], []).append(event)
         for events in grouped.values():
             events.sort(key=lambda event: event["started_at"])
         check()
-        return grouped
+        self._event_cache = refreshed
+        # Callers must not be able to mutate future admission authority.
+        return deepcopy(grouped)
 
     def events(self, source_id):
         return self.event_snapshot().get(source_id, [])

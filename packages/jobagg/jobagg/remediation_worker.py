@@ -66,6 +66,10 @@ VERSION = "deterministic-fetch-v1"
 # startup integrity and every new receipt still use the full current binding.
 # Registry, robots, owner and semantic-input changes are never aliased.
 RETRY_EQUIVALENT_IMPLEMENTATIONS = (
+    # Exact active local repair; standalone compression preserves task retry meaning.
+    "48f37af1a7b4e674547cc10a8d6db13cf3b27bf70c65cb2d4da3a31f5acda903",
+    # Exact deployed predecessor: local scheduling repair preserves retry accounting.
+    "72f7e64ad22881759854b4fc33bbcddc83bc7998e758e872f1c678c399bc2b08",
     "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
     "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
     # Merged inventory-verifier release 33edfb9c; the storage delta preserves retries.
@@ -76,7 +80,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "2e2e03c4266f22fedc8cc86f8b4502469d01cb98e8b208b50af4c7e734bf2020"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "7dc2c0261e714b644b0a546163fd1d3a10566076ad3916dfdaeb511e6e00027c"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -863,6 +867,16 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
 """.replace("DEFAULT0", "DEFAULT 0")
             )
             ensure_detail_lineage_indexes(conn)
+            conn.executescript("""
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_task_started
+ ON remediation_attempts(task_id,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_kind_started
+ ON remediation_attempts(kind,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_tasks_status_kind_source
+ ON remediation_tasks(status,kind,source_id);
+CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
+ ON remediation_tasks(source_id,kind,status);
+""")
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
             if "host" not in columns:
                 conn.execute("ALTER TABLE remediation_sources ADD COLUMN host TEXT")
@@ -1072,10 +1086,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         with self.db.connect() as conn:
             rows = [
                 dict(row)
-                for row in conn.execute("""SELECT t.*,coalesce(a.last_attempt_at,0) AS last_attempt_at
-                    FROM remediation_tasks t LEFT JOIN
-                    (SELECT task_id,max(started_at) AS last_attempt_at FROM remediation_attempts GROUP BY task_id) a
-                    ON a.task_id=t.task_id WHERE t.status='pending'""")
+                for row in conn.execute("""SELECT t.*,coalesce(
+                    (SELECT max(a.started_at) FROM remediation_attempts a WHERE a.task_id=t.task_id),0
+                    ) AS last_attempt_at FROM remediation_tasks t WHERE t.status='pending'""")
                 if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
             ]
             source_states = {row["source_id"]: dict(row) for row in conn.execute(
@@ -1093,8 +1106,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 )
             }
         self.check_deadline(deadline)
-        # One complete history validation, never one scan per job. Claims perform
-        # a fresh validation so a selection snapshot cannot authorize a request.
+        # Every call validates the complete history inventory and file metadata;
+        # unchanged parsed bytes are reused only inside this process. Claims
+        # still validate again, so a selection cannot authorize a later request.
         events = (
             self.shared_policy.event_snapshot(check_deadline=lambda: self.check_deadline(deadline))
             if any(row["kind"] == "detail" for row in rows)
