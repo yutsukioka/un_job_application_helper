@@ -29,6 +29,7 @@ EXCLUDED = {
     "jobagg_legacy_control_state",
     "jobagg_legacy_controls",
     "jobagg_legacy_dependencies",
+    "jobagg_legacy_review_holds",
     "semantic_history_state",
     "remediation_task_counts",
     "jobagg_task_headers",
@@ -144,6 +145,55 @@ def validate(conn):
         raise ValueError("publication_work_schema_or_fence_changed")
 
 
+def _install_freshness(conn, freshness):
+    for kind in ("detail", "listing"):
+        age = freshness[kind + "_max_age_seconds"]
+        if type(age) not in (int, float) or not 0 < age < float("inf"):
+            raise ValueError("finite_freshness_transition_contract_required")
+    for kind, table, key, timestamp in (
+        ("detail", "remediation_observations", "job_key", "checked_at"),
+        ("listing", "remediation_sources", "source_id", "last_list_at"),
+    ):
+        age = freshness[kind + "_max_age_seconds"]
+        job = "new.job_key" if kind == "detail" else "NULL"
+        for operation in ("INSERT", "UPDATE"):
+            conn.execute(f"""CREATE TRIGGER jobagg_dirty_freshness_{kind}_{operation} AFTER {operation} ON {table} BEGIN
+                INSERT INTO jobagg_dirty_transitions VALUES('freshness:{kind}:'||new.{key},new.source_id,{job},new.{timestamp}+{float(age)},0)
+                ON CONFLICT(object_key) DO UPDATE SET due_at=excluded.due_at,
+                fired=CASE WHEN due_at IS excluded.due_at THEN fired ELSE 0 END; END""")
+        job = "job_key" if kind == "detail" else "NULL"
+        conn.execute(
+            f"INSERT INTO jobagg_dirty_transitions SELECT 'freshness:{kind}:'||{key},source_id,{job},{timestamp}+?,0 FROM {table} WHERE {timestamp} IS NOT NULL",
+            (age,),
+        )
+
+
+def prepare_freshness(conn, *, freshness, owner_fd, owner_path):
+    """Explicit inactive migration; retain all dirty versions and acknowledgements."""
+    from jobagg.runtime_source_head import owner
+    owner(owner_fd, owner_path)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobagg_runtime_state'").fetchone():
+        raise ValueError("publication_freshness_preparation_requires_inactive_runtime")
+    validate(conn)
+    expected = {key: freshness[key] for key in ("listing_max_age_seconds", "detail_max_age_seconds")}
+    prior = conn.execute("SELECT freshness_json FROM jobagg_dirty_contract WHERE id=1").fetchone()[0]
+    if prior is not None:
+        if json.loads(prior) != expected:
+            raise ValueError("publication_freshness_change_requires_review")
+        return
+    conn.execute("SAVEPOINT prepare_freshness")
+    try:
+        _install_freshness(conn, expected)
+        conn.execute("UPDATE jobagg_dirty_contract SET freshness_json=? WHERE id=1", (_dump(expected),))
+        conn.execute("UPDATE jobagg_dirty_state SET schema_sha256=? WHERE id=1", (_schema_hash(conn),))
+        validate(conn)
+    except BaseException:
+        conn.execute("ROLLBACK TO prepare_freshness")
+        conn.execute("RELEASE prepare_freshness")
+        raise
+    conn.execute("RELEASE prepare_freshness")
+
+
 def prepare(conn, *, contract_sha256, epoch, freshness=None):
     """Explicit staged schema preparation before runtime fence activation."""
     if exists(conn):
@@ -188,24 +238,7 @@ def prepare(conn, *, contract_sha256, epoch, freshness=None):
         "INSERT INTO jobagg_dirty_contract VALUES(1,?)", (_dump(freshness) if freshness else None,)
     )
     if freshness:
-        for kind, table, key, timestamp in (
-            ("detail", "remediation_observations", "job_key", "checked_at"),
-            ("listing", "remediation_sources", "source_id", "last_list_at"),
-        ):
-            age = freshness[kind + "_max_age_seconds"]
-            if not isinstance(age, (int, float)) or not 0 < age < float("inf"):
-                raise ValueError("finite_freshness_transition_contract_required")
-            job = "new.job_key" if kind == "detail" else "NULL"
-            for operation in ("INSERT", "UPDATE"):
-                conn.execute(f"""CREATE TRIGGER jobagg_dirty_freshness_{kind}_{operation} AFTER {operation} ON {table} BEGIN
-                    INSERT INTO jobagg_dirty_transitions VALUES('freshness:{kind}:'||new.{key},new.source_id,{job},new.{timestamp}+{float(age)},0)
-                    ON CONFLICT(object_key) DO UPDATE SET due_at=excluded.due_at,
-                    fired=CASE WHEN due_at IS excluded.due_at THEN fired ELSE 0 END; END""")
-            job = "job_key" if kind == "detail" else "NULL"
-            conn.execute(
-                f"INSERT INTO jobagg_dirty_transitions SELECT 'freshness:{kind}:'||{key},source_id,{job},{timestamp}+?,0 FROM {table} WHERE {timestamp} IS NOT NULL",
-                (age,),
-            )
+        _install_freshness(conn, freshness)
     for operation in ("INSERT", "UPDATE"):
         conn.execute(f"""CREATE TRIGGER jobagg_dirty_closing_{operation.lower()} AFTER {operation} ON jobs BEGIN
             INSERT INTO jobagg_dirty_transitions VALUES('closing:'||new.job_key,new.source_id,new.job_key,

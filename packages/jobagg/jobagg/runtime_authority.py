@@ -86,11 +86,13 @@ def validate(conn):
     return value
 
 
-def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
+def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt, restore_head_root=None):
     """Caller proves shared owner, explicit complete historical reconciliation.
 
-    Receipt must cover all accepted/published identities and unresolved controls;
-    this function refuses a nonempty pending set rather than dropping it.
+    Receipt must index all accepted/published identities and unresolved controls.
+    Retained unresolved work stays gated; no pending identity is discarded.
+    An explicit external restore-head root permits a copy-only rehearsal while
+    retaining the actual shared owner and independent restore protection.
     """
     import fcntl
     owner_path = Path(owner_path).absolute()
@@ -120,7 +122,15 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
         existing = validate(conn)
         if existing['epoch'] != epoch or existing['owner_path'] != str(Path(owner_path).absolute()):
             raise RuntimeRepairRequired('runtime_activation_binding_changed')
+        if restore_head_root is not None and json.loads(existing['bootstrap_json']).get('restore_head_root') != str(Path(restore_head_root).absolute()):
+            raise RuntimeRepairRequired('runtime_source_head_root_handoff_requires_review')
         return existing
+    from jobagg.publication_work import exists as native_work
+    if native_work(conn):
+        from jobagg.runtime_source_head import path_for
+        head_path = path_for(conn, owner_path, head_root=restore_head_root)
+        if os.path.lexists(head_path):
+            raise RuntimeRepairRequired('runtime_source_head_exists_reviewed_epoch_handoff_required')
     conn.execute("CREATE TABLE jobagg_runtime_state(id INTEGER PRIMARY KEY CHECK(id=1),schema TEXT,epoch TEXT,owner_path TEXT,revision INTEGER,tables_json TEXT,bootstrap_json TEXT,run_id TEXT,phase TEXT,config_sha256 TEXT,start_revision INTEGER,control_json TEXT NOT NULL DEFAULT '{}',source_transaction_id TEXT)")
     tables = _tables(conn)
     conn.execute('INSERT INTO jobagg_runtime_state VALUES(1,?,?,?,?,?,?,NULL,\'idle\',NULL,0,\'{}\',NULL)',
@@ -146,7 +156,7 @@ def activate(conn, *, epoch, owner_path, owner_fd, bootstrap_receipt):
     from jobagg.publication_work import exists as native_work
     if native_work(conn):
         from jobagg.runtime_source_head import activate as activate_head
-        activate_head(conn, owner_fd=owner_fd)
+        activate_head(conn, owner_fd=owner_fd, head_root=restore_head_root)
         bootstrap_receipt = json.loads(state(conn)['bootstrap_json'])
         conn.execute("CREATE TRIGGER runtime_state_control_guard BEFORE UPDATE OF schema,epoch,owner_path,tables_json,bootstrap_json,run_id,phase,config_sha256,start_revision,control_json ON jobagg_runtime_state BEGIN SELECT CASE WHEN jobagg_runtime_control_allowed()!=1 THEN RAISE(ABORT,'runtime_control_not_admitted') END; END")
         conn.execute("CREATE TRIGGER runtime_state_mutation_guard BEFORE UPDATE OF revision,source_transaction_id ON jobagg_runtime_state BEGIN SELECT CASE WHEN jobagg_runtime_mutation_allowed()!=1 THEN RAISE(ABORT,'runtime_mutation_not_admitted') END; END")

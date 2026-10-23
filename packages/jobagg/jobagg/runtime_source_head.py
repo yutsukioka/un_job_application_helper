@@ -48,9 +48,29 @@ def _database(conn):
     return {"path": str(path), "device": info.st_dev, "inode": info.st_ino}
 
 
-def path_for(conn, owner_path):
+def _head_root(conn, root):
+    root = Path(root).absolute()
+    database = Path(_database(conn)["path"])
+    if (
+        root.resolve() != root
+        or not root.is_dir()
+        or root == database.parent
+        or root.is_relative_to(database.parent)
+        or database.parent.is_relative_to(root)
+    ):
+        raise ValueError("runtime_source_head_root_must_be_external_and_direct")
+    info = root.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise ValueError("runtime_source_head_root_requires_private_operator_ownership")
+    return root, {"device": info.st_dev, "inode": info.st_ino}
+
+
+def path_for(conn, owner_path, *, head_root=None):
     database = _database(conn)
     key = hashlib.sha256(database["path"].encode()).hexdigest()
+    name = Path(owner_path).name + ".source-" + key + ".json"
+    if head_root is not None:
+        return _head_root(conn, head_root)[0] / name
     return Path(str(owner_path) + ".source-" + key + ".json")
 
 
@@ -61,6 +81,12 @@ def validate(conn, value=None):
     if path is None:
         return None  # Legacy routing/profile schemas keep their old contract.
     path = Path(path)
+    if bootstrap.get("restore_head_root") is not None:
+        root, identity = _head_root(conn, bootstrap["restore_head_root"])
+        if identity != bootstrap.get("restore_head_root_identity") or path != path_for(
+            conn, value["owner_path"], head_root=root
+        ):
+            raise ValueError("runtime_source_head_root_identity_changed")
     if path.resolve() != path or path.is_symlink() or path.stat().st_size > 65536:
         raise ValueError("runtime_source_head_missing_aliased_or_oversized")
     head = json.loads(path.read_text())
@@ -80,21 +106,19 @@ def validate(conn, value=None):
     return head
 
 
-def activate(conn, *, owner_fd):
+def activate(conn, *, owner_fd, head_root=None):
     value = _state(conn)
     owner(owner_fd, value["owner_path"])
     bootstrap = json.loads(value["bootstrap_json"])
-    path = path_for(conn, value["owner_path"])
-    if path.exists():
+    path = path_for(conn, value["owner_path"], head_root=head_root)
+    if os.path.lexists(path):
         raise ValueError("runtime_source_head_exists_reviewed_epoch_handoff_required")
     token = uuid.uuid4().hex
     bootstrap["restore_head_path"] = str(path)
-    conn.execute(
-        "UPDATE jobagg_runtime_state SET bootstrap_json=?,source_transaction_id=? WHERE id=1",
-        (json.dumps(bootstrap, sort_keys=True), token),
-    )
-    atomic_write_text(
-        path,
+    if head_root is not None:
+        root, identity = _head_root(conn, head_root)
+        bootstrap.update(restore_head_root=str(root), restore_head_root_identity=identity)
+    payload = (
         json.dumps(
             {
                 "schema": "runtime-source-head-1",
@@ -106,7 +130,25 @@ def activate(conn, *, owner_fd):
             },
             sort_keys=True,
         )
-        + "\n",
+        + "\n"
+    )
+    # An interrupted initial write remains explicit uncertainty. Never replace
+    # an existing head, including another operation's dangling symlink.
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600
+    )
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    conn.execute(
+        "UPDATE jobagg_runtime_state SET bootstrap_json=?,source_transaction_id=? WHERE id=1",
+        (json.dumps(bootstrap, sort_keys=True), token),
     )
 
 

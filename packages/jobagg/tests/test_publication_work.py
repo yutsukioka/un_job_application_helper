@@ -389,3 +389,33 @@ def test_aged_cohort_target_union_and_existing_export_cost_are_bounded(setup):
             item["reason"] == "destination_fanout_exceeds_reviewed_bound"
             for item in too_narrow["held"]
         )
+
+
+def test_explicit_freshness_upgrade_preserves_dirty_history_and_excludes_review_controls(setup):
+    from jobagg.remediation_worker import shared_owner
+    add_detail(setup)
+    with shared_owner(setup["root"] / "owner.lock") as fd, setup["worker"].connect() as conn:
+        conn.execute("CREATE TABLE jobagg_legacy_review_holds(run_id TEXT PRIMARY KEY, review_json TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)")
+        work.prepare(conn, contract_sha256="original", epoch="epoch")
+        while not work.bootstrap(conn, limit=10, deadline_at=time.monotonic() + 10):
+            pass
+        before = list(conn.execute("SELECT * FROM jobagg_dirty_current ORDER BY unit"))
+        versions = list(conn.execute("SELECT * FROM jobagg_dirty_versions ORDER BY version"))
+        conn.execute("INSERT INTO jobagg_legacy_review_holds VALUES('held','unreviewed')")
+        assert list(conn.execute("SELECT * FROM jobagg_dirty_current ORDER BY unit")) == before
+        freshness = {"detail_max_age_seconds": 86400, "listing_max_age_seconds": 10800}
+        work.prepare_freshness(conn, freshness=freshness, owner_fd=fd, owner_path=setup["root"] / "owner.lock")
+        work.validate_freshness(conn, freshness)
+        assert list(conn.execute("SELECT * FROM jobagg_dirty_current ORDER BY unit")) == before
+        assert list(conn.execute("SELECT * FROM jobagg_dirty_versions ORDER BY version")) == versions
+        transitions = list(conn.execute("SELECT * FROM jobagg_dirty_transitions ORDER BY object_key"))
+        assert transitions
+        work.prepare_freshness(conn, freshness=freshness, owner_fd=fd, owner_path=setup["root"] / "owner.lock")
+        assert list(conn.execute("SELECT * FROM jobagg_dirty_transitions ORDER BY object_key")) == transitions
+        import pytest
+        with pytest.raises(ValueError, match="change_requires_review"):
+            work.prepare_freshness(conn, freshness={**freshness, "detail_max_age_seconds": 1}, owner_fd=fd, owner_path=setup["root"] / "owner.lock")
+        conn.execute("CREATE TABLE jobagg_runtime_state(id INTEGER)")
+        with pytest.raises(ValueError, match="inactive_runtime"):
+            work.prepare_freshness(conn, freshness=freshness, owner_fd=fd, owner_path=setup["root"] / "owner.lock")
