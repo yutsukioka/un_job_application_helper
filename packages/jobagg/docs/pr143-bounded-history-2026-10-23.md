@@ -145,7 +145,8 @@ for exact locator review; eight listing controls retain further semantic-review
 requirements. No sample outcome reconstructs the 187 missing run exits or
 certifies enumeration, whole public text, publication, freshness or retirement.
 The original diagnostic receipt is preserved. Corrected sample receipt SHA-256:
-`16d6579eb0b259e82b28ddd88e7bbaf6f461ea80c579c844d697a33162d4346d`.
+`6ecfc6278e92ac8846a3e1b087450d5a6a2e85d3ffa1c8197f29b6d8f064194b`
+(final immutable-source repetition; earlier receipts remain retained).
 
 The scoped control review preserved 23,438 jobs, 9,500 tasks, 67,017 attempts,
 7,265 observations, 26,451 accepted-exit attempt identities and 7,314 dirty units.
@@ -183,3 +184,37 @@ production alias guards, deleted evidence and corrupted capture bodies.
 Changed-file lint and staged whitespace checks pass. This validates the tested
 local candidate; it is not provider validation, fresh completeness, a completed
 admitted-cycle rehearsal or production activation.
+
+## Final immutable rehearsal and production boundary
+
+Committed runtime **`6d029df64afaa72570626cf89ff0969967aa2d83`** is staged
+read-only at **`pr143-6d029df6-1d2f34c6cd56`**, containing 1,968 source files.
+Source-manifest SHA-256:
+`e7de5a0febdb434bb14185c2ae022b9eeea2323ab06761979c0ea908e3c34f07`.
+Only inactive preparation drafts reference this release. The documentation
+follow-up does not change its tested package bytes or implementation seal.
+
+At **19:42 EAT**, final immutable entry returned `maintenance_paused`. OS-level
+network and production-write denials were demonstrated. Preflight separately
+rejected missing measured phase, admission and audit contracts; those settings
+remain null and unapproved. No provider worker or publisher was dispatched.
+The 50-store/200-export boundary verifies; policy revision remains zero and its
+database hash is unchanged. Backup locator identities are current without a
+new payload copy. This is a fenced entry rehearsal, not a full admitted cycle.
+
+The first explicit immutable code-contract revalidation retained all dirty units
+and advanced copied dirty versions from 36,592 to 43,906. The corrected seal's
+separate explicit revalidation added another 7,314 versions: **51,220 total**,
+with **7,314 dirty units** still pending. Jobs, tasks, attempts, observations,
+accepted-exit identities, source revision 26,196 and the idle phase are preserved.
+The earlier native head was not discarded or recreated. Each code/configuration
+transition and its prior receipt remain retained. Final rehearsal receipt:
+`6a5f46139fc98eba7bf95080ee08ad68d004aaf39114ef0853c2b205c7495b17`.
+
+At **19:43 EAT**, production configuration, maintenance, health and publication
+state hashes matched the preserved boundary. Deployed M0 and both tracked M0
+baseline files were unchanged. Owner inode **4728** remained empty and available;
+there were no production source heads, active JobAgg cron entries, or matching
+worker/publisher processes. No native maintenance handoff, code switch, quota
+reset, payload retirement or HDD-to-SSD payload copy occurred. Readiness remains
+**false** with the 5,510 explicit unresolved controls and other gates above.
