@@ -1,10 +1,10 @@
 """Independent proof for OSCE's public same-session server document census."""
 
 from datetime import datetime, timezone
-import gzip
 import hashlib
 import json
 from pathlib import Path
+from jobagg.verification_budget import read as verification_read
 import re
 
 from jobagg.adapters.osce_inventory import SEARCH_URL, pagination_state, reconcile
@@ -48,7 +48,7 @@ def _capture(source, path):
             == meta.get("request_url_sha256"), "OSCE document request/response URL differs")
     artifact = Path(meta["artifact"]).resolve()
     require(artifact == path.with_suffix(".body.gz"), "OSCE document artifact outside capture")
-    raw = gzip.decompress(artifact.read_bytes())
+    raw = verification_read(artifact, compressed=True)
     require(hashlib.sha256(raw).hexdigest() == meta.get("body_sha256")
             and len(raw) == meta.get("body_bytes"), "OSCE document body hash/size differs")
     return meta, raw, hashlib.sha256(encoded).hexdigest(), _interval(meta)

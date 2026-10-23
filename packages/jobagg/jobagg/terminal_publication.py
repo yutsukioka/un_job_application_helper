@@ -20,8 +20,8 @@ PUBLICATION_BINDINGS = (
     "worker_acceptance_path", "worker_acceptance_sha256", "worker_database",
     "worker_database_files",
 )
-_REQUEST_BINDINGS = (*PUBLICATION_BINDINGS, "publication_snapshot", "publication_policy")
-_OPTIONAL_BINDINGS = ("publication_snapshot", "publication_policy", "recovery_generation_binding")
+_REQUEST_BINDINGS = (*PUBLICATION_BINDINGS, "publication_snapshot", "publication_policy", "runtime_contract")
+_OPTIONAL_BINDINGS = ("publication_snapshot", "publication_policy", "recovery_generation_binding", "runtime_contract")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _GENERATION = re.compile(r"[0-9a-f]{32}")
 

@@ -26,8 +26,11 @@ class PendingPublicationError(ValueError):
 
 def _sha(path: Path) -> str:
     value = hashlib.sha256()
+    from jobagg.publication_deadline import expired
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
+            if expired(None):
+                raise TimeoutError('Pending accepted-work verification deadline exhausted')
             value.update(block)
     return value.hexdigest()
 
@@ -66,8 +69,27 @@ def database_binding(path: Path) -> dict:
                       "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns})
     from jobagg import semantic_history
 
-    semantic = semantic_history.semantic_database_binding(path)
+    from jobagg.runtime_authority import binding as runtime_binding
+    semantic = runtime_binding(path) or semantic_history.semantic_database_binding(path)
     return {"files": files, "semantic": semantic}
+
+
+def same_database_binding(expected, actual):
+    """A fenced M1 revision survives WAL checkpoints, never data or inode changes.
+
+    Original semantic-history and legacy binding schemas retain exact comparison.
+    Physical WAL evidence is retained in the seal even when the runtime authority
+    proves a checkpoint did not change the accepted database revision.
+    """
+    if expected.get("semantic", {}).get("schema") not in {"jobagg-runtime-authority-1", "jobagg-runtime-authority-2", "jobagg-runtime-authority-3"}:
+        return expected == actual
+    if expected.get("semantic") != actual.get("semantic"):
+        return False
+    before, after = expected.get("files", []), actual.get("files", [])
+    if not before or not after:
+        return before == after
+    return all(before[0].get(key) == after[0].get(key) for key in
+               ("path", "exists", "device", "inode"))
 
 
 def _run(state_dir: Path, run_id: str) -> Path:
@@ -88,31 +110,62 @@ def _target(run: Path, supplied=None) -> Path:
     return target
 
 
+def control_dir(state_dir, value):
+    run = _run(Path(state_dir), value['run_id'])
+    target = Path(value.get('publication_control_dir', run))
+    if target != run and (target.parent != run / 'publication_batches'
+            or re.fullmatch(r'[0-9]{6}', target.name) is None):
+        raise PendingPublicationError('Invalid publication continuation directory')
+    if target.resolve() != target:
+        raise PendingPublicationError('Aliased publication continuation directory')
+    return target
+
+
 def _no_intent(run):
     if os.path.lexists(run / "publication_intent.json"):
         raise PendingPublicationError("Pending work crossed publisher intent; use publication recovery")
+
+
+def proof_paths(run, files=None):
+    files=files or {'acceptance':'acceptance.json','worker_result':'worker_result.json'}
+    if files not in ({'acceptance':'acceptance.json','worker_result':'worker_result.json'},
+                     {'acceptance':'recovered_acceptance.json','worker_result':'recovered_worker_result.json'}):
+        raise PendingPublicationError('Unknown accepted proof filenames')
+    return {key:Path(run)/name for key,name in files.items()}
 
 
 def _accepted_proofs(value, run):
     for field, filename in (("request_sha256", "request.json"),
                             ("acceptance_sha256", "acceptance.json"),
                             ("worker_result_sha256", "worker_result.json")):
-        path = run / filename
+        paths = proof_paths(run, value.get('proof_files'))
+        path = run / filename if filename == 'request.json' else paths['acceptance' if filename == 'acceptance.json' else 'worker_result']
         _json(path)
         if value[field] != _sha(path):
             raise PendingPublicationError("Pending accepted-work proof changed: " + filename)
 
 
-def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, projection_target=None):
+def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, projection_target=None, publication_control_dir=None, proof_files=None):
     """Seal successful worker evidence before any projection allocation."""
     run = _run(Path(state_dir), run_id)
-    _no_intent(run)
-    target = _target(run, projection_target)
+    controls = control_dir(state_dir, {'run_id': run_id, **({'publication_control_dir': str(publication_control_dir)} if publication_control_dir else {})})
+    _no_intent(controls)
+    target = _target(run, projection_target or (controls / 'publication_snapshot.sqlite3'))
     request = _json(run / "request.json")
-    worker = _json(run / "worker_result.json")
-    acceptance = run / "acceptance.json"
+    paths = proof_paths(run, proof_files)
+    worker = _json(paths['worker_result'])
+    acceptance = paths['acceptance']
+    native_queue = worker.get('schema') == 'native-accepted-queue-proof-1'
+    if native_queue:
+        certificate = _json(acceptance)
+        actual = database_binding(Path(database))
+        semantic = actual.get('semantic') or {}
+        if (certificate.get('kind') != 'native_accepted_queue' or semantic.get('phase') != 'accepted'
+                or semantic.get('run_id') != run_id or not semantic.get('writer_fenced')
+                or not same_database_binding(worker.get('database_binding', {}), actual)):
+            raise PendingPublicationError('Native queue acceptance lacks its frozen revision fence')
     if (request.get("run_id") != run_id or worker.get("run_id") != run_id
-            or worker.get("worker_exit_code") != 0
+            or (not native_queue and worker.get("worker_exit_code") != 0)
             or worker.get("report_sha256") != _sha(acceptance)):
         raise PendingPublicationError("Accepted worker exit/report proof does not match")
     value = {
@@ -120,12 +173,16 @@ def seal(state_dir, run_id, *, config_sha256, database, lease, binding=None, pro
         "config_sha256": config_sha256,
         "request_sha256": _sha(run / "request.json"),
         "acceptance_sha256": _sha(acceptance),
-        "worker_result_sha256": _sha(run / "worker_result.json"),
+        "worker_result_sha256": _sha(paths['worker_result']),
         "database": str(Path(database).absolute()),
         "database_binding": binding if binding is not None else database_binding(Path(database)),
         "lease": lease,
         "projection": None, "projection_target": str(target), "publisher_intent_recorded": False,
     }
+    if proof_files:
+        value['proof_files'] = proof_files
+    if controls != run:
+        value['publication_control_dir'] = str(controls)
     path = marker_path(Path(state_dir))
     if path.exists():
         existing = _json(path)
@@ -154,17 +211,17 @@ def validate(state_dir, *, config_sha256, database, binding=None, projection_tar
     run = _run(Path(state_dir), value["run_id"])
     if value["config_sha256"] != config_sha256 or value["database"] != str(Path(database).absolute()):
         raise PendingPublicationError("Pending-work configuration or database changed")
-    target = _target(run, projection_target)
+    target = _target(run, projection_target or (control_dir(state_dir, value) / 'publication_snapshot.sqlite3'))
     if value.get("projection_target", str(run / "publication_snapshot.sqlite3")) != str(target):
         raise PendingPublicationError("Pending projection target binding differs")
     _accepted_proofs(value, run)
-    _no_intent(run)
+    _no_intent(control_dir(state_dir, value))
     if value.get("projection") is None:
         actual = binding if binding is not None else database_binding(Path(database))
         semantic = actual.get("semantic") or {}
         if not semantic.get("writer_fenced"):
             raise PendingPublicationError("Unsealed accepted database lacks a certified writer fence")
-        if actual != value["database_binding"]:
+        if not same_database_binding(value["database_binding"], actual):
             raise PendingPublicationError("Accepted database changed; automatic projection is held")
     else:
         projection = value["projection"]
@@ -269,9 +326,10 @@ def prepare_resume(state_dir, process_evidence):
     value = inspect(state_dir)
     if value is None:
         raise PendingPublicationError("No accepted-work fence to resume")
-    run = _run(Path(state_dir), value["run_id"])
+    proof_run = _run(Path(state_dir), value["run_id"])
+    run = control_dir(state_dir, value)
     _no_intent(run)
-    _accepted_proofs(value, run)
+    _accepted_proofs(value, proof_run)
     head_path = run / "accepted_work_continuation.json"
     names = ("outcome.json", "publication_request.json")
     accepted = {key: value[key] for key in ("run_id", "request_sha256", "acceptance_sha256", "worker_result_sha256")}
@@ -343,7 +401,7 @@ def prepare_resume(state_dir, process_evidence):
         _sync_directory(archive.parent)
     # The receipt covers all archives before the first unlink, including a
     # crash between the two removals. Recheck proof/intent immediately before it.
-    _accepted_proofs(value, run)
+    _accepted_proofs(value, proof_run)
     for name, proof in head["files"].items():
         _no_intent(run)
         source = run / name
@@ -373,7 +431,7 @@ def release_after_intent(state_dir, *, run_id):
     value = inspect(state_dir)
     if value is None or value["run_id"] != run_id:
         raise PendingPublicationError("Pending-work release identity differs")
-    run = _run(Path(state_dir), run_id)
+    run = control_dir(state_dir, value)
     intent = _json(run / "publication_intent.json")
     if intent.get("run_id") != run_id or intent.get("request_sha256") != _sha(run / "publication_request.json"):
         raise PendingPublicationError("Durable publication intent is not bound to its request")
@@ -383,3 +441,15 @@ def release_after_intent(state_dir, *, run_id):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def record_selection(state_dir, selection):
+    value = inspect(state_dir)
+    if value is None:
+        raise PendingPublicationError('Selection requires accepted-work fence')
+    _no_intent(control_dir(state_dir, value))
+    if value.get('selection') is not None and value['selection'] != selection:
+        raise PendingPublicationError('Already admitted dependency selection differs')
+    value['selection'] = selection
+    atomic_write_text(marker_path(Path(state_dir)), json.dumps(value, sort_keys=True) + '\n')
+    return value

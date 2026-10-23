@@ -5,13 +5,17 @@ an explicit reviewed bootstrap; silently resetting prior writer state is refused
 """
 
 from datetime import datetime, UTC
+from copy import deepcopy
 import hashlib
 import json
+import os
 import re
+import stat
 from pathlib import Path
 import time
 from functools import wraps
 import threading
+from types import MappingProxyType
 
 from jobagg.atomic_files import atomic_write_text
 
@@ -52,6 +56,18 @@ class SharedPolicy:
     def inspect(self):
         if self.root.resolve() != self.root or self.marker.resolve() != self.marker:
             raise ValueError("Shared policy paths must not be symlinked/aliased")
+        if (self.root / 'authority.json').exists():
+            authority = self.native_authority()
+            authority.revision()
+            with authority.connect() as conn:
+                covered = {row[0] for row in conn.execute('SELECT source_id FROM sources')}
+            if not self.source_ids.issubset(covered):
+                raise ValueError('Source scope not covered by native policy migration')
+            return {'status':'existing', 'path':str(self.root), 'authority':'indexed_sql'}
+        if (self.root / 'authority_migration.json').exists():
+            raise ValueError('policy_authority_migration_incomplete_review_required')
+        if (self.root / 'authority.sqlite3').exists():
+            raise ValueError('Native policy authority head missing; explicit repair required')
         if self.marker.exists():
             marker = json.loads(self.marker.read_text())
             manifest = self.root / "bootstrap.json"
@@ -173,8 +189,9 @@ class SharedPolicy:
         """Validate and read history once per selection while the caller owns the lock.
 
         Include unindexed reservation files: a crash between the durable reservation
-        and index update must never refund an attempt. This snapshot is deliberately
-        not cached across selections or used as authority for a later claim.
+        and index update must never refund an attempt. Each call repeats the index
+        and complete directory metadata census. Only unchanged parsed file bytes
+        are reused within this process; a selection never authorizes a later claim.
         """
         check = check_deadline or (lambda: None)
         check()
@@ -188,28 +205,161 @@ class SharedPolicy:
             or len(expected) != len(set(expected))
         ):
             raise ValueError("Malformed shared attempt history index")
-        paths = {path.name: path for path in (self.root / "attempts").glob("*.json")}
+        paths = {}
+        with os.scandir(self.root / "attempts") as entries:
+            for index, entry in enumerate(entries):
+                if index % 64 == 0:
+                    check()
+                if not entry.name.endswith(".json"):
+                    continue
+                metadata = entry.stat(follow_symlinks=False)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError("Shared attempt history removed/aliased; no quota reset permitted")
+                paths[entry.name] = (Path(entry.path), metadata)
         if not set(expected).issubset(paths):
             raise ValueError("Shared attempt history removed; no quota reset permitted")
+        previous = getattr(self, "_event_cache", {})
+        refreshed = {}
         grouped = {}
-        for index, path in enumerate(paths.values()):
+        for index, (name, (path, metadata)) in enumerate(paths.items()):
             if index % 64 == 0:
                 check()
-            if not path.is_file() or path.is_symlink():
-                raise ValueError("Shared attempt history removed/aliased; no quota reset permitted")
-            event = json.loads(path.read_text())
+            signature = (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                         metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+                         metadata.st_nlink)
+            saved = previous.get(name)
+            if saved is not None and saved[0] == signature:
+                event = saved[1]
+            else:
+                event = json.loads(path.read_text())
+                after = path.stat(follow_symlinks=False)
+                current = (after.st_dev, after.st_ino, after.st_mode,
+                           after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+                           after.st_nlink)
+                if signature != current:
+                    raise ValueError("Shared attempt history changed during validation")
+            refreshed[name] = (signature, event)
             if event["kind"] == "detail":
                 grouped.setdefault(event["source_id"], []).append(event)
         for events in grouped.values():
             events.sort(key=lambda event: event["started_at"])
         check()
-        return grouped
+        self._event_cache = refreshed
+        # Callers must not be able to mutate future admission authority.
+        return deepcopy(grouped)
+
+    def native_authority(self):
+        from jobagg.policy_authority import PolicyAuthority
+        if (self.root / 'authority.json').exists():
+            value = getattr(self, '_native', None)
+            if value is None:
+                value = self._native = PolicyAuthority(self)
+            return value
+        if (self.root / 'authority_migration.json').exists():
+            raise ValueError('policy_authority_migration_incomplete_review_required')
+        if (self.root / 'authority.sqlite3').exists():
+            raise ValueError('policy_authority_head_missing_review_required')
+        return None
+
+    def native_due(self, source_id, now, **policy):
+        authority = self.native_authority()
+        return authority.due(source_id, now, **policy) if authority else None
+
+    @_synchronized
+    def begin_batch(self, *, check_deadline=None, owner_fd=None, audit=None, storage=None):
+        """One full audit under the shared owner; subsequent claims use this revision.
+
+        Every cooperating writer uses reserve/finish, which update this same
+        process-wide projection under the root lock. Final audit detects external
+        history interference before a successful worker report can be emitted.
+        """
+        authority = self.native_authority()
+        if authority:
+            authority.owner_fd = owner_fd
+            authority.storage = storage
+            authority.check_deadline = check_deadline or (lambda: None)
+            if not audit:
+                raise ValueError('reviewed_policy_audit_bounds_required')
+            authority.audit(limit=audit['max_objects'], now=time.time(),
+                            maximum_lag_seconds=audit['maximum_lag_seconds'])
+            authority.revision()
+            self._batch_events = {}
+            return
+        events = self.event_snapshot(check_deadline=check_deadline)
+        self._batch_events = events
+        self._batch_revisions = {}
+        self._batch_readonly = {source: tuple(MappingProxyType(row) for row in rows)
+                                for source, rows in events.items()}
+        self._batch_signature = self._inventory_signature()
+
+    def _inventory_signature(self):
+        return tuple((path.stat().st_ino, path.stat().st_size,
+                      path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+                     for path in (self.root / 'attempts', self.root / 'attempt_index.json'))
+
+    @_synchronized
+    def admission_events(self, source_id=None):
+        if self.native_authority():
+            self._native.revision()
+            return () if source_id else MappingProxyType({})
+        if not hasattr(self, '_batch_events'):
+            return self.events(source_id) if source_id else self.event_snapshot()
+        if self._inventory_signature() != self._batch_signature:
+            raise ValueError('Shared policy changed outside the owner batch; review required')
+        return self._batch_readonly.get(source_id, ()) if source_id else MappingProxyType(self._batch_readonly)
+
+    @_synchronized
+    def admission_revision(self, source_id):
+        if self.native_authority():
+            return self._native.revision()
+        if not hasattr(self, '_batch_events'):
+            return None
+        if self._inventory_signature() != self._batch_signature:
+            raise ValueError('Shared policy changed outside the owner batch; review required')
+        return self._batch_revisions.get(source_id, 0)
+
+    @_synchronized
+    def finish_batch(self, *, check_deadline=None):
+        if self.native_authority():
+            try:
+                self._native.revision()
+            finally:
+                self._native.owner_fd = None
+                self._native.storage = None
+                self._native.check_deadline = lambda: None
+                if hasattr(self, '_batch_events'):
+                    del self._batch_events
+            return
+        if not hasattr(self, '_batch_events'):
+            return
+        try:
+            actual = self.event_snapshot(check_deadline=check_deadline)
+            if actual != self._batch_events:
+                raise ValueError('Shared policy evidence changed during owner batch')
+        finally:
+            del self._batch_events
+
+    def _batch_update(self, event):
+        if hasattr(self, '_batch_events'):
+            if event['kind'] == 'detail':
+                rows = self._batch_events.setdefault(event['source_id'], [])
+                rows[:] = [row for row in rows if row['attempt_id'] != event['attempt_id']]
+                rows.append(event)
+                rows.sort(key=lambda row: row['started_at'])
+                self._batch_revisions[event['source_id']] = self._batch_revisions.get(event['source_id'], 0) + 1
+                self._batch_readonly[event['source_id']] = tuple(MappingProxyType(row) for row in rows)
+            self._batch_signature = self._inventory_signature()
 
     def events(self, source_id):
         return self.event_snapshot().get(source_id, [])
 
     @_synchronized
     def reserve(self, attempt_id, source_id, kind, started_at, workspace, task_id):
+        if self.native_authority():
+            self._native.reserve({'attempt_id': attempt_id, 'source_id': source_id,
+                'kind': kind, 'started_at': started_at, 'finished_at': None,
+                'workspace': str(workspace), 'task_id': task_id, 'status': 'reserved'})
+            return
         path = self.root / "attempts" / (hashlib.sha256(attempt_id.encode()).hexdigest() + ".json")
         if path.exists():
             raise ValueError("Durable shared attempt already exists")
@@ -228,13 +378,18 @@ class SharedPolicy:
         )
         index = self.root / "attempt_index.json"
         save(index, sorted({*json.loads(index.read_text()), path.name}))
+        self._batch_update(json.loads(path.read_text()))
 
     @_synchronized
     def finish(self, attempt_id, status):
+        if self.native_authority():
+            self._native.finish(attempt_id, status)
+            return
         path = self.root / "attempts" / (hashlib.sha256(attempt_id.encode()).hexdigest() + ".json")
         event = json.loads(path.read_text())
         event.update(finished_at=time.time(), status=status)
         save(path, event)
+        self._batch_update(event)
 
     @_synchronized
     def source_hold(self, source_id):

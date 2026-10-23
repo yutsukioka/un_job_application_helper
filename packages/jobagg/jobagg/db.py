@@ -72,6 +72,13 @@ class JobDatabase:
         conn.row_factory = sqlite3.Row
         from jobagg.semantic_history import register_denied_writer
         register_denied_writer(conn)
+        conn.create_function("jobagg_runtime_write_allowed", 0, lambda: 0)
+        from jobagg.task_headers import configure as configure_task_headers
+        configure_task_headers(conn)
+        from jobagg.publication_work import configure as configure_publication_work
+        configure_publication_work(conn)
+        from jobagg.publication_fence import configure
+        configure(conn, self.path, read_only=self.read_only)
         try:
             if not self.read_only:
                 self._apply_pragmas(conn)
@@ -85,7 +92,11 @@ class JobDatabase:
         # journal_mode=WAL improves concurrent read/write throughput; the other
         # pragmas are safe defaults for an embedded single-writer workload.
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        native = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name IN "
+            "('jobagg_runtime_state','jobagg_publication_revision') LIMIT 1"
+        ).fetchone()
+        conn.execute("PRAGMA synchronous=" + ("FULL" if native else "NORMAL"))
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA temp_store=MEMORY")
 
@@ -842,6 +853,9 @@ class JobDatabase:
         updates / deletes propagate via triggers.
         """
 
+        existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs_fts'"
+        ).fetchone() is not None
         try:
             conn.execute(
                 """
@@ -879,11 +893,12 @@ class JobDatabase:
             """
         )
         # Backfill on first migration (FTS table just created and still empty).
-        existing = conn.execute("SELECT COUNT(*) AS c FROM jobs_fts").fetchone()
-        if existing is not None and existing["c"] == 0:
-            jobs_count = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()
-            if jobs_count is not None and jobs_count["c"] > 0:
-                conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES('rebuild')")
+        # External-content FTS reads delegate to jobs, so COUNT(*) scans the
+        # entire content table and does not establish whether an index exists.
+        # A newly created mirror needs one rebuild; existing trigger-maintained
+        # indexes need neither a content count nor a recurring rebuild.
+        if not existed and conn.execute("SELECT 1 FROM jobs LIMIT 1").fetchone() is not None:
+            conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES('rebuild')")
 
     def fts_available(self) -> bool:
         with self.connect() as conn:

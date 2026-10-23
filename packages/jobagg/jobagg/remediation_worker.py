@@ -51,7 +51,7 @@ from jobagg.pipelines.sync_source import (
     load_sources,
     register_builtin_adapters,
 )
-from jobagg.remediation_scheduling import Task, select_due
+from jobagg.remediation_scheduling import Task, select_due, task_key
 from jobagg.remediation_concurrency import HARD_CEILING
 from jobagg.source_health import worker_source_health, listing_recovery_pending
 from jobagg.robots import load_policy
@@ -66,6 +66,12 @@ VERSION = "deterministic-fetch-v1"
 # startup integrity and every new receipt still use the full current binding.
 # Registry, robots, owner and semantic-input changes are never aliased.
 RETRY_EQUIVALENT_IMPLEMENTATIONS = (
+    # M0 reconciled production predecessor; M1 preserves charged retry semantics.
+    "4642596ad8c19900a6d2cf474c144d22907df89b90e26ee78aa7d0c709f70c39",
+    # Exact active local repair; standalone compression preserves task retry meaning.
+    "48f37af1a7b4e674547cc10a8d6db13cf3b27bf70c65cb2d4da3a31f5acda903",
+    # Exact deployed predecessor: local scheduling repair preserves retry accounting.
+    "72f7e64ad22881759854b4fc33bbcddc83bc7998e758e872f1c678c399bc2b08",
     "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
     "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
     # Merged inventory-verifier release 33edfb9c; the storage delta preserves retries.
@@ -76,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "2e2e03c4266f22fedc8cc86f8b4502469d01cb98e8b208b50af4c7e734bf2020"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "f7ddc51178e8d4ca8b825e8091117b122a668fe649ac86f883962d318c8f1824"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -127,10 +133,6 @@ def record(payload):
             if key in {f.name for f in fields(JobRecord)}
         }
     )
-
-
-def task_key(source, kind, identity=""):
-    return hashlib.sha256(f"{source}\0{kind}\0{identity}".encode()).hexdigest()
 
 
 def document_disposition_changed(prior, current):
@@ -485,6 +487,23 @@ class WorkerStorage:
                  + ((maximum + 4095) // 4096) * 32768 + 65536)
         return maximum, bound
 
+    @contextmanager
+    def policy_database_write(self, conn, path):
+        # Narrow native SQL mutates a constant number of indexed rows. The
+        # reviewed bound must include its largest retained event and WAL/scratch;
+        # do not substitute a guessed production threshold for measurement.
+        maximum = self.limits.get('policy_transaction_cap_bytes')
+        if type(maximum) is not int or maximum < 4096:
+            raise StorageBudgetDeferred('measured_native_policy_transaction_cap_required')
+        grant = self.reserve('database', maximum, path)
+        grant.consume(maximum)
+        try:
+            conn.execute('PRAGMA cache_spill=OFF')
+            conn.execute('PRAGMA wal_autocheckpoint=0')
+            yield
+        finally:
+            grant.close()
+
     def preclaim(self, task):
         source = self.worker.by_id[task["source_id"]]
         if source.extra.get("browser_render") and task["kind"] != "document":
@@ -604,8 +623,14 @@ class WorkerStorage:
             nonlocal grant, admission_error
             if action in denied or action == sqlite3.SQLITE_SAVEPOINT:
                 return sqlite3.SQLITE_DENY
-            if action == sqlite3.SQLITE_TRANSACTION and first == "COMMIT" and not committing:
-                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_TRANSACTION and first == "COMMIT":
+                if not committing:
+                    return sqlite3.SQLITE_DENY
+                try:
+                    from jobagg.runtime_source_head import owner
+                    owner(self.worker._runtime_owner_fd, self.worker.shared_lock)
+                except (ValueError, OSError, TypeError):
+                    return sqlite3.SQLITE_DENY
             if (action == sqlite3.SQLITE_PRAGMA and second is not None
                     and first.lower() not in {"table_info", "table_xinfo", "index_list", "index_info", "index_xinfo", "foreign_key_list"}):
                 return sqlite3.SQLITE_DENY
@@ -700,9 +725,19 @@ class SerializedWorkerDatabase(JobDatabase):
             if storage is not None and not nested:
                 storage.validate_database_paths()
             with super().connection_scope() as conn:
+                deadline = getattr(self.worker, "_sql_deadline", getattr(self.worker, "_report_deadline", None))
+                if deadline is not None and not nested:
+                    self.worker.check_deadline(deadline)
+                    conn.execute("PRAGMA busy_timeout=" + str(max(1, int(min(1, max(0, deadline-time.time()))*1000))))
+                    from jobagg.publication_deadline import expired
+                    conn.set_progress_handler(lambda: int(time.time() >= deadline or time.monotonic() >= self.worker._elapsed_deadline or expired(None)), 256)
                 storage = getattr(self.worker, "storage", None)
+                from jobagg.runtime_authority import writer
                 with (storage.database_write(conn) if storage is not None and not nested else nullcontext()):
-                    yield conn
+                    with (writer(conn, run_id=getattr(self.worker, "_runtime_run_id", None),
+                                 owner_path=self.worker.shared_lock, owner_fd=getattr(self.worker, '_runtime_owner_fd', None),
+                                 budgeted=storage is not None) if not nested else nullcontext()):
+                        yield conn
 
 
 def source_request_host(source):
@@ -801,12 +836,15 @@ class Worker:
         counts = {}
         if self.db.path.exists():
             with self._database_lock, sqlite3.connect(self.db.path.as_uri() + "?mode=ro", uri=True) as conn:
-                counts = {
-                    f"{row[0]}:{row[1]}": row[2]
-                    for row in conn.execute(
-                        "SELECT kind,status,count(*) FROM remediation_tasks GROUP BY kind,status"
-                    )
-                }
+                conn.row_factory = sqlite3.Row
+                deadline = getattr(self, "_report_deadline", None)
+                if deadline is not None:
+                    conn.execute("PRAGMA busy_timeout=1000")
+                    conn.set_progress_handler(lambda: int(time.time() >= deadline or time.monotonic() >= self._elapsed_deadline), 256)
+                from jobagg.worker_summaries import counts as task_counts
+                for row in task_counts(conn):
+                    key = f"{row['kind']}:{row['status']}"
+                    counts[key] = counts.get(key, 0) + row["n"]
         return {
             "status": "dry_run",
             "network_requests": 0,
@@ -831,7 +869,9 @@ class Worker:
 
     def initialize(self):
         self.preview()
-        if self.storage is not None:
+        from jobagg.runtime_authority import binding as runtime_binding
+        runtime_prepared = self.db.path.exists() and runtime_binding(self.db.path) is not None
+        if self.storage is not None or runtime_prepared:
             if self.shared_policy.inspect()["status"] != "existing" or not self.db.path.exists():
                 raise StorageBudgetError("storage_activation_requires_initialized_workspace")
             # Schema migrations and activation are separately admitted setup.
@@ -863,6 +903,22 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
 """.replace("DEFAULT0", "DEFAULT 0")
             )
             ensure_detail_lineage_indexes(conn)
+            conn.executescript("""
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_task_started
+ ON remediation_attempts(task_id,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_kind_started
+ ON remediation_attempts(kind,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_source_started
+ ON remediation_attempts(source_id,started_at DESC,attempt_id DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_attempts_source_status_finished
+ ON remediation_attempts(source_id,status,finished_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remediation_tasks_status_kind_source
+ ON remediation_tasks(status,kind,source_id);
+CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
+ ON remediation_tasks(source_id,kind,status);
+""")
+            from jobagg.worker_summaries import ensure
+            ensure(conn)
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
             if "host" not in columns:
                 conn.execute("ALTER TABLE remediation_sources ADD COLUMN host TEXT")
@@ -996,6 +1052,11 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
     def policy_due(self, source, kind, now, *, attempts=None):
         if kind != "detail":
             return now
+        revision = self.shared_policy.admission_revision(source.id)
+        cache = getattr(self, "_policy_due_cache", {})
+        cached = cache.get(source.id)
+        if revision is not None and cached is not None and cached[0] == revision:
+            return max(now, cached[1])
         policy = fetch_schedule_policy(source)
         minimum = float(
             policy.get("detail_min_delay_seconds")
@@ -1011,8 +1072,12 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             or policy.get("oracle_detail_batch_pause_seconds")
             or 0
         )
+        native_due = self.shared_policy.native_due(source.id, now, minimum=minimum,
+            jitter=jitter, batch=batch, pause=pause)
+        if native_due is not None:
+            return native_due
         if attempts is None:
-            attempts = self.shared_policy.events(source.id)
+            attempts = self.shared_policy.admission_events(source.id)
         if not attempts:
             return now
         finishes = [
@@ -1033,11 +1098,19 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             active = sorted(end for end in finishes if end > now - 3600)
             if len(active) >= 10:
                 due = max(due, active[len(active) - 10] + 3600)
+        if revision is not None:
+            cache[source.id] = (revision, due)
+            self._policy_due_cache = cache
         return max(now, due)
 
-    @staticmethod
-    def check_deadline(deadline):
-        if deadline is not None and time.time() >= deadline:
+    def check_deadline(self, deadline):
+        from jobagg.publication_deadline import expired
+        from jobagg.runtime_clock import remaining
+        work_clock = getattr(self, '_work_clock', None)
+        work_expired = (work_clock is not None and deadline == getattr(self, '_work_deadline', None)
+                        and remaining(work_clock) <= 0)
+        if work_expired or expired(None) or ((deadline is not None and time.time() >= deadline)
+                or time.monotonic() >= getattr(self, "_elapsed_deadline", float("inf"))):
             raise HostIneligible(
                 "Work budget exhausted; preserving final-report time", category="budget"
             )
@@ -1057,6 +1130,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         return state
 
     def task_host(self, task):
+        if '_host' in task:
+            return task['_host']
         source = self.by_id[task["source_id"]]
         payload = json.loads(task["payload"])
         # Workday's public site and first API request can use different hosts.
@@ -1066,37 +1141,61 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         return source_request_host(source)
 
     def choose(self, *, excluded_kinds=(), excluded_sources=(), excluded_hosts=(), deadline=None):
+        from jobagg.publication_deadline import continuous_budget
+        work_clock = getattr(self, '_work_clock', None) if deadline == getattr(self, '_work_deadline', None) else None
+        try:
+            with continuous_budget(work_clock):
+                return self._choose(excluded_kinds=excluded_kinds, excluded_sources=excluded_sources,
+                                    excluded_hosts=excluded_hosts, deadline=deadline)
+        except sqlite3.OperationalError:
+            # A cancelled read is unknown selection, not an empty frontier.
+            self.check_deadline(deadline)
+            raise
+
+    def _choose(self, *, excluded_kinds=(), excluded_sources=(), excluded_hosts=(), deadline=None):
         """Choose without multiplying policy-file reads by the pending queue size."""
         self.check_deadline(deadline)
         now = time.time()
         with self.db.connect() as conn:
-            rows = [
-                dict(row)
-                for row in conn.execute("""SELECT t.*,coalesce(a.last_attempt_at,0) AS last_attempt_at
-                    FROM remediation_tasks t LEFT JOIN
-                    (SELECT task_id,max(started_at) AS last_attempt_at FROM remediation_attempts GROUP BY task_id) a
-                    ON a.task_id=t.task_id WHERE t.status='pending'""")
-                if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
-            ]
+            from jobagg.task_headers import exists as headers_exist, candidates
+            native_headers = headers_exist(conn)
+            if native_headers:
+                rows = candidates(conn, self, now, excluded_kinds=excluded_kinds,
+                    excluded_sources=excluded_sources, excluded_hosts=excluded_hosts)
+            else:
+                rows = [
+                    dict(row)
+                    for row in conn.execute("""SELECT t.*,coalesce(
+                        (SELECT max(a.started_at) FROM remediation_attempts a WHERE a.task_id=t.task_id),0
+                        ) AS last_attempt_at FROM remediation_tasks t WHERE t.status='pending'""")
+                    if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
+                ]
             source_states = {row["source_id"]: dict(row) for row in conn.execute(
                 "SELECT source_id,last_service,last_list_at,listing_proof FROM remediation_sources")}
             served = {key: state["last_service"] for key, state in source_states.items()}
-            kind_served = {
-                row["kind"]: row["last_service"]
-                for row in conn.execute(
-                    "SELECT kind,max(started_at) AS last_service FROM remediation_attempts GROUP BY kind"
-                )
-            }
+            if native_headers:
+                kind_served = dict(conn.execute('SELECT kind,last_service FROM jobagg_kind_service'))
+            else:
+                kind_served = {
+                    row["kind"]: row["last_service"]
+                    for row in conn.execute(
+                        "SELECT 'listing' AS kind,max(started_at) AS last_service FROM remediation_attempts WHERE kind='listing' "
+                        "UNION ALL SELECT 'detail',max(started_at) FROM remediation_attempts WHERE kind='detail' "
+                        "UNION ALL SELECT 'document',max(started_at) FROM remediation_attempts WHERE kind='document'"
+                    )
+                }
+                kind_served = {kind: stamp for kind, stamp in kind_served.items() if stamp is not None}
             circuit_sources = {
                 row["source_id"] for row in conn.execute(
                     "SELECT source_id FROM source_circuit_breakers WHERE state IN('open','half_open')"
                 )
             }
         self.check_deadline(deadline)
-        # One complete history validation, never one scan per job. Claims perform
-        # a fresh validation so a selection snapshot cannot authorize a request.
+        # Every call validates the complete history inventory and file metadata;
+        # unchanged parsed bytes are reused only inside this process. Claims
+        # still validate again, so a selection cannot authorize a later request.
         events = (
-            self.shared_policy.event_snapshot(check_deadline=lambda: self.check_deadline(deadline))
+            self.shared_policy.admission_events()
             if any(row["kind"] == "detail" for row in rows)
             else {}
         )
@@ -1162,7 +1261,12 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         )
         chosen = select_due(tasks, now=now, source_last_served=served, kind_last_served=kind_served)
         self.check_deadline(deadline)
-        return lookup.get(chosen.task_id) if chosen else None
+        if chosen is None:
+            return None
+        if native_headers:
+            with self.db.connect() as conn:
+                return dict(conn.execute('SELECT * FROM remediation_tasks WHERE task_id=?', (chosen.task_id,)).fetchone())
+        return lookup[chosen.task_id]
 
     def claim(self, task, *, deadline=None):
         self.check_deadline(deadline)
@@ -1229,6 +1333,13 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             "UPDATE remediation_attempts SET finished_at=?,status=?,evidence=? WHERE attempt_id=?",
             (time.time(), status, dump(receipt), token),
         )
+        if status == 'done':
+            from jobagg.accepted_evidence import record_event
+            record_event(conn, task=task, attempt_id=token, binding=self.binding,
+                         run_id=getattr(self, '_runtime_run_id', None),
+                         request_sha256=getattr(self,'_runtime_request_sha256',None),
+                         request_hash_kind='file' if getattr(self,'_dispatcher_request_sha256',None) else 'canonical',
+                         runtime_contract_sha256=(getattr(self,'_runtime_contract_value',None) or {}).get('sha256'))
 
     def context(self, source, target, task, deadline):
         client = self.client_factory(source, self.policy)
@@ -1527,7 +1638,7 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         # retain the original listing shape, especially Workday externalPath.
         dispatch_payloads = json.loads(dump(frame))["jobs"]
         paths = sorted((target / "http").glob("*.json"))
-        proof = verify_listing(source, jobs, paths)
+        proof = verify_listing(source, jobs, paths, deadline_at=getattr(self,"_elapsed_deadline",None), deadline_epoch=getattr(self,"_sql_deadline",None))
         with self.db.connection_scope() as conn:
             retained = {}
             for job in jobs:
@@ -1788,6 +1899,18 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     "scope_verified": False,
                 },
             )
+            from jobagg.accepted_evidence import record as record_accepted_evidence
+            from jobagg.runtime_authority import state as runtime_state
+            active = runtime_state(conn)
+            acceptance = None
+            if active is not None:
+                if self.binding['implementation_sha256'] != implementation_hash():
+                    raise ValueError('Code changed before atomic acceptance reference')
+                acceptance = {'kind':'native_atomic_acceptance','run_id':self._runtime_run_id,
+                              'binding':self.binding,'transaction_id':active['source_transaction_id']}
+            record_accepted_evidence(conn, job_key=detail.identity_key(), task_id=task['task_id'],
+                attempt_id=token, artifact_path=target / 'detail.json', artifact_sha256=sha(target / 'detail.json'),
+                job=stored_expected, proof=proof, body_sha256=body_sha, acceptance_proof=acceptance)
         return {"detail_stored": detail.identity_key(), "documents_queued": len(candidates)}
 
     def enqueue_document(self, conn, source_id, payload, *, refresh=False):
@@ -2132,7 +2255,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         try:
             with admitted_file_writes(self.storage.file_write if self.storage else None):
                 with (self.storage.task_scope(task["task_id"]) if self.storage else nullcontext()):
-                    result = self._perform_claimed(task, deadline, token)
+                    from jobagg.publication_deadline import continuous_budget
+                    with continuous_budget(getattr(self, '_phase_clock', None)):
+                        result = self._perform_claimed(task, deadline, token)
             interval["outcome"] = result
             return result
         except BaseException as exc:
@@ -2155,25 +2280,46 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             source, extra={**source.extra, "fetch_details": task["kind"] != "listing"}
         )
         capture = None
+        from jobagg import runtime_clock, publication_deadline
+        work_clock = getattr(self, '_work_clock', None) or runtime_clock.budget(
+            max(0,deadline-time.time()), parent=publication_deadline.current_budget())
         try:
-            self.check_deadline(deadline)
-            if self.storage:
-                self.storage.ensure_directory(
-                    target, grant=self.storage.initial.get(task["task_id"]), exist_ok=False,
-                )
-            else:
-                target.mkdir(parents=True)
-            adapter, client, capture = self.context(configured, target, task, deadline)
-            if task["kind"] == "listing":
-                adapter.listing_checkpoint_path = self.workspace / "listing_checkpoints" / (source.id + ".json")
-                return self.do_listing(source, adapter, capture, target, task, token)
-            if task["kind"] == "detail":
-                return self.do_detail(source, adapter, capture, target, task, token)
-            return self.do_document(source, client, capture, target, task, token)
+            with publication_deadline.continuous_budget(work_clock):
+                self.check_deadline(deadline)
+                if self.storage:
+                    self.storage.ensure_directory(
+                        target, grant=self.storage.initial.get(task["task_id"]), exist_ok=False,
+                    )
+                else:
+                    target.mkdir(parents=True)
+                adapter, client, capture = self.context(configured, target, task, deadline)
+                if task["kind"] == "listing":
+                    adapter.listing_checkpoint_path = self.workspace / "listing_checkpoints" / (source.id + ".json")
+                    return self.do_listing(source, adapter, capture, target, task, token)
+                if task["kind"] == "detail":
+                    return self.do_detail(source, adapter, capture, target, task, token)
+                return self.do_document(source, client, capture, target, task, token)
         except Exception as exc:
             # Preserve received bytes and durable attempt. Semantic errors block only
             # this task; transport host decisions are made by the HTTP checkpoint.
             reason = safe_error(exc)
+            from jobagg.verification_budget import VerificationBudgetExceeded
+            if isinstance(exc,VerificationBudgetExceeded):
+                # Verification exhausted work time after capture. Preserve the
+                # provider charge and bytes; use only the existing report reserve
+                # for a small local deferral, with the coordinator DB lock held.
+                with self._database_lock:
+                    previous=self._sql_deadline
+                    self._sql_deadline=self._report_deadline
+                    try:
+                        with self.db.connection_scope() as conn:
+                            self.finish(conn,task,token,'verification_deferred',{'capture_directory':str(target),
+                                'provider_failure':False,'verification_complete':False,'reason':reason},reason)
+                            conn.execute("UPDATE remediation_tasks SET status='pending' WHERE task_id=? AND claim=?",(task['task_id'],token))
+                    finally:
+                        self._sql_deadline=previous
+                return {'status':'pending','verification_deferred':True,'provider_failure':False,
+                        'task_id':task['task_id'],'error_type':type(exc).__name__}
             if isinstance(exc, (ResponseTooLargeError, StorageBudgetError, SemanticCapacityError)):
                 return self.finish_storage_hold(task, token, target, exc)
             if isinstance(exc, ValueError):
@@ -2333,11 +2479,9 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                 and item.get("opener_entries") == 0
             )
             captures.append(meta)
-        snapshot_complete = True
-        try:
-            self.choose(deadline=deadline)
-        except HostIneligible:
-            snapshot_complete = False
+        # The last revisioned selection is observational only. A report must
+        # never select work or repeat admission/history validation.
+        snapshot_complete = getattr(self, "_report_eligibility_complete", False)
         access = [
             meta for meta in captures
             if (meta.get("status_code") in {401, 403, 429}
@@ -2361,7 +2505,8 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             "dead_letter_tasks": sum(item.get("outcome", {}).get("status") == "dead_letter" for item in tasks),
             "accepted_progress": sum(any(key in item.get("outcome", {}) for key in
                 ("listing_observed", "detail_stored", "document_captured")) for item in tasks),
-            "eligible_backlog_remaining": self._eligible_counts[2] if snapshot_complete else 0,
+            "eligible_backlog_remaining": self._eligible_counts[2] if snapshot_complete else None,
+            "last_selection_eligible_tasks": self._eligible_counts[2],
             "eligibility_snapshot_complete": snapshot_complete,
             "new_access_blocks": len(access),
             "transport_failures": sum(meta.get("state") == "failed" and meta not in access
@@ -2374,6 +2519,13 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             "integrity_errors": sum(item.get("outcome", {}).get("error_type") in
                 {"ValueError", "KeyError", "TypeError", "DetailIdentityMismatch"} for item in failed),
             "database_errors": sum(item.get("outcome", {}).get("database_error", False) for item in failed),
+            "failure_classes": {
+                "source_identity_rejection": sum(item.get("outcome", {}).get("error_type") == "DetailIdentityMismatch" for item in failed),
+                "suspected_integrity_failure": sum(item.get("outcome", {}).get("error_type") in
+                    {"ValueError", "KeyError", "TypeError", "DetailIdentityMismatch"} for item in failed),
+                "database_pressure": sum(item.get("outcome", {}).get("database_error", False) for item in failed),
+                "controller_disposition": "retain_conservative_pressure_until_reviewed",
+            },
             "control_cycle_complete": snapshot_complete,
             "killed": False, "publication_status": "not_run",
             "task_intervals": sorted(tasks, key=lambda item: item["started_monotonic"]),
@@ -2386,20 +2538,17 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
         sources = []
         source_holds = json.loads((self.shared_policy.root / "source_holds.json").read_text())
         report_now = time.time()
-        events = self.shared_policy.event_snapshot()
+        events = getattr(self, "_report_policy_events", None)
+        if events is None:
+            events = self.shared_policy.admission_events()
         host_cache = {}
         with self.db.connect() as conn:
             for source in self.by_id.values():
                 state = conn.execute(
                     "SELECT * FROM remediation_sources WHERE source_id=?", (source.id,)
                 ).fetchone()
-                rows = [
-                    dict(row)
-                    for row in conn.execute(
-                        "SELECT kind,status,count(*) AS n FROM remediation_tasks WHERE source_id=? GROUP BY kind,status",
-                        (source.id,),
-                    )
-                ]
+                from jobagg.worker_summaries import counts
+                rows = [{key: row[key] for key in ("kind", "status", "n")} for row in counts(conn, source.id)]
                 sources.append(
                     {
                         "source_id": source.id,
@@ -2437,6 +2586,11 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                         "capability": source_capability(source),
                     }
                 )
+        eligible_sources = [row for row in sources if row["health"]["eligible_pending_tasks"] > 0]
+        self._eligible_counts = (len(eligible_sources),
+            len({host for row in eligible_sources for host in row["health"].get("pending_eligible_hosts", [])}),
+            sum(row["health"]["eligible_pending_tasks"] for row in sources))
+        self._report_eligibility_complete = True
         return {
             "schema_version": 1,
             "run_id": request["run_id"] if request else self.tick_id,
@@ -2474,8 +2628,31 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             if request and (request.get("run_id") != lease.get("cycle_id") or requested != limits):
                 raise StorageBudgetError("storage_request_lease_binding_differs")
             self.storage = WorkerStorage(self, lease, limits)
-        with admitted_file_writes(self.storage.file_write if self.storage else None):
-            return self._tick_admitted(execute=True, request=request)
+        from jobagg import runtime_clock, publication_deadline
+        self._phase_clock = getattr(self, '_entry_continuous_budget', None) or runtime_clock.budget(
+            self.max_seconds, parent=publication_deadline.current_budget())
+        with admitted_file_writes(self.storage.file_write if self.storage else None), publication_deadline.continuous_budget(self._phase_clock):
+            try:
+                return self._tick_admitted(execute=True, request=request)
+            finally:
+                # Neither a read budget nor a writer capability survives release
+                # of the shared owner. Standalone maintenance must re-admit.
+                self._report_deadline = self._sql_deadline = None
+                self._elapsed_deadline = float("inf")
+                self._runtime_run_id = None
+                self._runtime_owner_fd = None
+                self._phase_clock = self._work_clock = self._work_deadline = None
+                self._runtime_contract_value = None
+                self._runtime_request_sha256 = None
+                if getattr(self.shared_policy, '_native', None) is not None:
+                    self.shared_policy._native.owner_fd = None
+                    self.shared_policy._native.storage = None
+                    self.shared_policy._native.check_deadline = lambda: None
+                self._policy_due_cache = {}
+                if hasattr(self, "_report_policy_events"):
+                    del self._report_policy_events
+                if hasattr(self.shared_policy, "_batch_events"):
+                    del self.shared_policy._batch_events
 
     def _tick_admitted(self, *, execute=False, request=None):
         if request is not None and (
@@ -2483,24 +2660,50 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             or request.get("parallel_sources", 1) != self.parallel_sources
         ):
             raise ValueError("Dispatcher request and worker parallel source limit differ")
-        preview = self.preview()
         if not execute:
-            return preview
+            return self.preview()
+        if request and request.get('expected_implementation_sha256') is not None and request['expected_implementation_sha256']!=self.binding['implementation_sha256']:
+            raise ValueError('Worker implementation differs from admitted runtime contract')
+        self._elapsed_deadline = min(time.monotonic() + self.max_seconds,
+                                     getattr(self, "_entry_elapsed_deadline", float("inf")))
+        self._runtime_run_id = (request or {}).get("run_id")
+        self._runtime_request_sha256=getattr(self,'_dispatcher_request_sha256',None) or hashlib.sha256(dump(request or {}).encode()).hexdigest()
         self.tick_id = str(uuid4())
         tick_started_at = utc()
         self._task_intervals = []
         self._request_intervals = []
         self._eligible_counts = (0, 0, 0)
         self._eligible_peaks = (0, 0)
-        deadline = time.time() + self.max_seconds
+        self._policy_due_cache = {}
+        deadline = min(time.time() + self.max_seconds, getattr(self, "_entry_wall_deadline", float("inf")))
         if request:
             deadline = min(deadline, epoch(request["deadline_at"]))
         if deadline <= time.time():
             raise ValueError("Request deadline already passed")
-        with shared_owner(self.shared_lock):
+        self.check_deadline(deadline)
+        self._report_deadline = deadline
+        self._sql_deadline = deadline
+        with shared_owner(self.shared_lock) as owner_fd:
+            self._runtime_owner_fd = owner_fd
+            self._runtime_contract_value=(request or {}).get('runtime_contract')
+            if self._runtime_contract_value:
+                from jobagg.runtime_contract import verify
+                from jobagg.verification_budget import scope
+                with scope(self._elapsed_deadline,deadline):
+                    verify(self._runtime_contract_value,package_root=Path(__file__).parent.parent)
             if self.storage:
                 self.storage.activate((request or {}).get("semantic_history_policy"))
+            if self.db.path.exists():
+                from jobagg.runtime_authority import state as runtime_state
+                with self.db.connect() as conn:
+                    active=runtime_state(conn)
+                    if active and json.loads(active['control_json']).get('publication_scope') is not None and (not self._runtime_contract_value or not getattr(self,'_dispatcher_request_sha256',None)):
+                        raise ValueError('Native dispatcher runtime contract required before fetching')
+                    if active and (active['phase']!='worker' or active['run_id']!=self._runtime_run_id or active['revision']!=active['start_revision']):
+                        raise ValueError('Native worker batch already mutated; controller must reconcile acceptance/claims before fetching')
             self.initialize()
+            self.shared_policy.begin_batch(check_deadline=lambda: self.check_deadline(deadline),
+                owner_fd=owner_fd, audit=(request or {}).get('policy_audit'), storage=self.storage)
             register_builtin_adapters()
             self.seed_listings()
             outcomes = []
@@ -2509,6 +2712,11 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
             # request/selection work early enough to persist a truthful report.
             report_reserve = min(15.0, self.max_seconds * 0.1)
             work_deadline = deadline - report_reserve
+            from jobagg import runtime_clock, publication_deadline
+            self._work_deadline = work_deadline
+            self._work_clock = runtime_clock.budget(max(0,work_deadline-time.time()),
+                                                   parent=publication_deadline.current_budget())
+            self._sql_deadline = work_deadline
             stop_reason = "task_budget"
             if self.parallel_sources > 1:
                 outcomes, stop_reason = self.run_parallel(work_deadline)
@@ -2537,16 +2745,36 @@ CREATE TABLE IF NOT EXISTS attachment_blobs(content_sha256 TEXT PRIMARY KEY,medi
                     if task["kind"] == "detail":
                         detail_tasks += 1
                     outcomes.append(outcome)
+                    if outcome.get('verification_deferred'):
+                        stop_reason='work_deadline'
+                        break
             if (
                 self.binding["registry_sha256"] != sha(self.registry)
                 or self.binding["robots_sha256"] != sha(self.robots_path)
                 or self.binding["implementation_sha256"] != implementation_hash()
             ):
                 raise ValueError("Input code/config changed during tick; no acceptance report")
+            if self._runtime_contract_value:
+                from jobagg.runtime_contract import verify
+                from jobagg.verification_budget import scope
+                with scope(self._elapsed_deadline,deadline):
+                    verify(self._runtime_contract_value,package_root=Path(__file__).parent.parent)
+            self._sql_deadline = deadline
+            self._report_policy_events = self.shared_policy.admission_events()
+            self.shared_policy.finish_batch(check_deadline=lambda: self.check_deadline(deadline))
+            self.check_deadline(deadline)
+            report = self.report(request)
+            native_policy = self.shared_policy.native_authority()
+            if native_policy is not None:
+                report["shared_policy_json_export"] = native_policy.json_export_status()
+            from jobagg.runtime_clock import inherited
+            if inherited() is not None:
+                report["entry_clock"] = inherited()
+            if self._runtime_contract_value:
+                report['runtime_contract_sha256']=self._runtime_contract_value['sha256']
             concurrency = self.concurrency_report(tick_started_at, deadline)
             concurrency_path = self.workspace / "ticks" / f"{self.tick_id}.concurrency.json"
             write_json(concurrency_path, concurrency)
-            report = self.report(request)
             report["concurrency"] = concurrency
             report["concurrency_receipt"] = {"path": str(concurrency_path), "sha256": sha(concurrency_path)}
             report["tick_outcomes"] = outcomes
@@ -2601,6 +2829,9 @@ def validate_request(path, report, registry):
 
 
 def main(argv=None):
+    from jobagg import runtime_clock
+    entered_continuous = runtime_clock.now()
+    entered_monotonic, entered_wall = time.monotonic(), time.time()
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--registry", type=Path, required=True)
     p.add_argument("--robots", type=Path, required=True)
@@ -2620,7 +2851,18 @@ def main(argv=None):
     p.add_argument("--report", type=Path)
     p.add_argument("--execute", action="store_true")
     a = p.parse_args(argv)
+    from jobagg.publication_deadline import continuous_budget, current_budget
+    phase = runtime_clock.budget(a.max_seconds, parent=current_budget(),
+                                started=entered_continuous, started_wall=entered_wall)
+    with continuous_budget(phase):
+        return _run_worker(a, entered_monotonic, entered_wall, phase)
+
+
+def _run_worker(a, entered_monotonic, entered_wall, phase):
     try:
+        from jobagg.publication_deadline import expired
+        if expired(None):
+            raise HostIneligible("Worker entry budget expired", category="budget")
         if bool(a.request) != bool(a.report):
             raise ValueError("--request and --report must be supplied together")
         request = validate_request(a.request, a.report, a.registry) if a.request else None
@@ -2636,6 +2878,10 @@ def main(argv=None):
             parallel_sources=a.parallel_sources,
             max_requests_per_task=a.max_requests_per_task,
         )
+        worker._dispatcher_request_sha256=sha(a.request) if a.request else None
+        worker._entry_continuous_budget = phase
+        worker._entry_elapsed_deadline = entered_monotonic + a.max_seconds
+        worker._entry_wall_deadline = entered_wall + a.max_seconds
         result = worker.tick(execute=a.execute, request=request)
         if a.report and a.execute:
             with admitted_file_writes(worker.storage.file_write if worker.storage else None):
@@ -2645,7 +2891,7 @@ def main(argv=None):
     except BlockingIOError:
         print(dump({"status": "lock_busy", "network_requests": 0}), flush=True)
         return 75
-    except (ValueError, OSError, KeyError, TypeError) as exc:
+    except (ValueError, OSError, KeyError, TypeError, HostIneligible, sqlite3.Error) as exc:
         print(
             dump(
                 {"status": "process_failure", "error_type": type(exc).__name__, "reason": str(exc)}
