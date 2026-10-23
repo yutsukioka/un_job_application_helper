@@ -98,13 +98,67 @@ certification false. The selected rehearsal inventory has one deterministic
 retained detail attempt for each of **46 sources**, plus **eight listing
 controls**. This is a sample, not all retained observations or all 49 sources.
 
+## Completed scoped assessment
+
+At **19:26 EAT**, all **968** reviewed terminal-publication controls had durable
+assessment receipts. **94** closed through exact acceptance and publication
+verification. **874** stayed held: 551 with unproven older detail occurrences,
+265 with unproven listing identities, 12 with both, and 46 that reached the
+explicit assessment deadline. These are record counts, not counts of lost files
+or accepted tasks. Most held diagnostics stop at the first gap; the 46 timeouts
+are not data-loss findings and can receive a separately bounded larger review.
+
+The private scoped ledger accounts for every one of the starting **5,604**
+records, retaining scope, native disposition and next review step. Unknown/shared
+auxiliary scope stays explicit. It does not provide an admission exemption.
+The resulting native census is:
+
+| Disposition | Records |
+| --- | ---: |
+| Terminal verified (six original plus 94 newly reconciled) | 100 |
+| Preserved wrapper references | 861 |
+| Publication reconciliation required | 874 |
+| Repair required | 4,438 |
+| Uncertain original worker claim | 187 |
+| Accepted without publication intent | 8 |
+| Existing generation pending | 3 |
+| **Total** | **6,471** |
+
+Thus **5,510 remain unresolved**. The repair subset retains 1,140 implementation-
+only reviews, 42 missing-original-task-identity cases, eight old-owner/missing-
+identity cases, six legacy binding reviews and 3,242 auxiliary sets. The six
+binding cases omit modern ownership/recovery attestation fields; they are not
+approved by inventing those fields. No global admission gate was relaxed.
+
+The first surviving-artifact sample held four otherwise valid detail artifacts
+because their capture lists included deliberately bodyless redirect/error steps.
+The revalidator was corrected to preserve those immutable metadata records as
+having no recorded body. Such records contribute no bytes and cannot prove a
+successful detail. A successful identity-bound 200 capture is still mandatory;
+missing successful bodies, contradictory body metadata, corrupt bytes and wrong
+source/identity stay held. Positive 302/400 and negative bodyless-only/missing-
+success cases are regression tested. No redirects are followed or fetched.
+
+The corrected same **54-item** sample now verifies retained bytes and task
+crosswalks for **45 of 46 detail artifacts**. One actual path alias remains held
+for exact locator review; eight listing controls retain further semantic-review
+requirements. No sample outcome reconstructs the 187 missing run exits or
+certifies enumeration, whole public text, publication, freshness or retirement.
+The original diagnostic receipt is preserved. Corrected sample receipt SHA-256:
+`16d6579eb0b259e82b28ddd88e7bbaf6f461ea80c579c844d697a33162d4346d`.
+
+The scoped control review preserved 23,438 jobs, 9,500 tasks, 67,017 attempts,
+7,265 observations, 26,451 accepted-exit attempt identities and 7,314 dirty units.
+Source revision stayed **26,196**, idle. Separately recorded explicit code-contract
+revalidation adds new dirty versions; it neither acknowledges nor discards work.
+
 ## Candidate and outstanding gates
 
 All **173 package Python modules**, including the four offline modules, remain
 inside one implementation seal:
-`f6c03c159b4ad8a52835efc6aeaad8353cc4e74a1bd6c82abcc41cec6739aff5`.
+`1d2f34c6cd56212b4bb607728fb3d850a9674ee760045512cfc3afaa226091bf`.
 Reviewed scope:
-`18994554ceb326c43d8123ddcd2fd83abbcacbf1dfa3147e12da7166130e9e34`.
+`8c66a584c99f3ef9a766e8943c2d5d13205af1122d97026db78aeafcfb59aa10`.
 Deployed M0 remains its separate unchanged 152-module implementation, and both
 tracked M0 baseline files remain unchanged.
 
@@ -119,10 +173,9 @@ whole-public-text fidelity and current public availability.
 
 ## Validation
 
-The final 173-module seal passed the complete JobAgg suite: **3,986 passed,
-nine skipped**, **623.15 seconds**. Dispatcher/repository checks: **167 passed,
-17 subtests**, **26.62 seconds**. Focused subsets are included in the full suite
-and are not added to it. New cases exercise skipped malformed JSON, chunked
+The final 173-module seal passed the complete JobAgg suite: **3,989 passed,
+nine skipped**, **596.52 seconds**. Dispatcher/repository checks: **167 passed,
+17 subtests**, **24.72 seconds**. Focused subsets and the earlier 3,986-pass revision are not added to this total. New cases exercise skipped malformed JSON, chunked
 UTF-8/escapes, retained-memory/node and time/byte ceilings, changed aliases,
 forged mappings, missing exact journals despite a fresh current boundary,
 checkpoint resume, unknown-implementation/partial-generation rejection,

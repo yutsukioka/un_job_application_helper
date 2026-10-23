@@ -32,19 +32,32 @@ def _capture(reference, source, external, deadline, remaining):
     metadata, record = _control(reference["path"], deadline)
     if record["sha256"] != reference["sha256"]:
         raise ValueError("retained_capture_metadata_changed")
+    binding = metadata.get("source_binding", {})
+    if binding.get("source_id", source) != source:
+        raise ValueError("retained_capture_source_differs")
+    status = metadata.get("status_code")
+    if (metadata.get("body_captured") is False and type(status) is int and (300 <= status < 600)
+            and metadata.get("body_bytes") in (None, 0) and metadata.get("body_sha256") is None
+            and metadata.get("artifact") is None):
+        # The immutable metadata records that no response body was saved. This
+        # is expected for redirect/error steps, not a lost successful capture.
+        # It contributes no captured bytes and cannot establish detail success.
+        return {
+            "metadata": record,
+            "body_bytes": 0,
+            "body_recorded": False,
+            "status_code": status,
+            "identity_bound_detail": False,
+        }
     size = metadata.get("body_bytes")
     if (
         type(size) is not int
         or not 0 <= size <= remaining
-        or metadata.get("status_code") != 200
         or metadata.get("body_captured") is not True
         or metadata.get("body_complete") is False
         or metadata.get("storage_limited") is True
     ):
         raise ValueError("retained_capture_incomplete_or_byte_bound")
-    binding = metadata.get("source_binding", {})
-    if binding.get("source_id", source) != source:
-        raise ValueError("retained_capture_source_differs")
     path = Path(metadata["artifact"]).absolute()
     if path.resolve() != path or path.stat().st_size > remaining:
         raise ValueError("retained_body_aliased_or_oversized")
@@ -71,7 +84,8 @@ def _capture(reference, source, external, deadline, remaining):
         "compressed_body": compressed,
         "body_sha256": digest.hexdigest(),
         "body_bytes": total,
-        "identity_bound_detail": phase.get("kind") == "detail"
+        "identity_bound_detail": status == 200
+        and phase.get("kind") == "detail"
         and str(phase.get("job_id")) == external,
     }
 
