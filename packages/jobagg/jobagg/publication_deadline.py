@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 import time
+import math
 from jobagg import runtime_clock
 
 _wall_deadline = ContextVar('publication_wall_deadline', default=None)
@@ -40,7 +41,10 @@ def expired(monotonic_deadline):
 @contextmanager
 def entry_deadlines(monotonic_epoch, wall_epoch):
     parent = _continuous_budget.get() or runtime_clock.inherited()
-    continuous = runtime_clock.budget(max(0, min(monotonic_epoch-time.monotonic(), wall_epoch-wall_now())), parent=parent)
+    allowance = max(0, min(monotonic_epoch-time.monotonic(), wall_epoch-wall_now()))
+    # An unbounded legacy verifier adds no clock; it must retain any finite
+    # admitted task/entry budget rather than reject it or create a fresh one.
+    continuous = parent if math.isinf(allowance) else runtime_clock.budget(allowance, parent=parent)
     continuous_token = _continuous_budget.set(continuous)
     previous = _elapsed_deadline.get()
     token = _elapsed_deadline.set(min(previous, monotonic_epoch) if previous is not None else monotonic_epoch)

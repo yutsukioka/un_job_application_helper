@@ -232,9 +232,20 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
                                             "out_of_scope_pending": 0})["states"][row["status"]] = row["n"]
     from jobagg.task_headers import exists as headers_exist
     if headers_exist(conn):
-        rows = [{**dict(row), '_host': row['host'], 'last_error': None} for row in conn.execute(
-            "SELECT source_id,kind,host,status,eligible_at,count(*) AS weight FROM jobagg_task_headers "
-            "WHERE source_id=? AND status='pending' GROUP BY kind,host,status,eligible_at", (source.id,))]
+        rows = []
+        for group in conn.execute(
+            "SELECT source_id,kind,host,status,"
+            "sum(eligible_at<=?) AS due_n,min(CASE WHEN eligible_at<=? THEN eligible_at END) AS due_at,"
+            "sum(eligible_at>?) AS future_n,min(CASE WHEN eligible_at>? THEN eligible_at END) AS future_at "
+            "FROM jobagg_task_headers WHERE source_id=? AND status='pending' GROUP BY kind,host,status",
+            (now,now,now,now,source.id),
+        ):
+            # Two admission classes per source/kind/host preserve exact counts
+            # and the earliest future due time without one Python row per task.
+            for prefix in ('due', 'future'):
+                if group[prefix+'_n']:
+                    rows.append({**dict(group), '_host':group['host'], 'last_error':None,
+                                 'eligible_at':group[prefix+'_at'], 'weight':group[prefix+'_n']})
         listing = conn.execute("SELECT * FROM remediation_tasks WHERE source_id=? AND kind='listing' LIMIT 1",(source.id,)).fetchone()
         if listing and listing['status'] != 'pending':
             rows.append(dict(listing))

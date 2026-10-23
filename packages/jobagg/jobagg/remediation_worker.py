@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "d90eb07d5932f36045d0b383b1e0c96cee262122eb3b185e9bfe0794bf9b4d0d"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "7e81854d862822d7fee0389072e999df2917b884f4967d16c0d687c8c025ae5b"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -729,7 +729,8 @@ class SerializedWorkerDatabase(JobDatabase):
                 if deadline is not None and not nested:
                     self.worker.check_deadline(deadline)
                     conn.execute("PRAGMA busy_timeout=" + str(max(1, int(min(1, max(0, deadline-time.time()))*1000))))
-                    conn.set_progress_handler(lambda: int(time.time() >= deadline or time.monotonic() >= self.worker._elapsed_deadline), 256)
+                    from jobagg.publication_deadline import expired
+                    conn.set_progress_handler(lambda: int(time.time() >= deadline or time.monotonic() >= self.worker._elapsed_deadline or expired(None)), 256)
                 storage = getattr(self.worker, "storage", None)
                 from jobagg.runtime_authority import writer
                 with (storage.database_write(conn) if storage is not None and not nested else nullcontext()):
@@ -1104,7 +1105,11 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
 
     def check_deadline(self, deadline):
         from jobagg.publication_deadline import expired
-        if expired(None) or ((deadline is not None and time.time() >= deadline)
+        from jobagg.runtime_clock import remaining
+        work_clock = getattr(self, '_work_clock', None)
+        work_expired = (work_clock is not None and deadline == getattr(self, '_work_deadline', None)
+                        and remaining(work_clock) <= 0)
+        if work_expired or expired(None) or ((deadline is not None and time.time() >= deadline)
                 or time.monotonic() >= getattr(self, "_elapsed_deadline", float("inf"))):
             raise HostIneligible(
                 "Work budget exhausted; preserving final-report time", category="budget"
@@ -1136,6 +1141,18 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         return source_request_host(source)
 
     def choose(self, *, excluded_kinds=(), excluded_sources=(), excluded_hosts=(), deadline=None):
+        from jobagg.publication_deadline import continuous_budget
+        work_clock = getattr(self, '_work_clock', None) if deadline == getattr(self, '_work_deadline', None) else None
+        try:
+            with continuous_budget(work_clock):
+                return self._choose(excluded_kinds=excluded_kinds, excluded_sources=excluded_sources,
+                                    excluded_hosts=excluded_hosts, deadline=deadline)
+        except sqlite3.OperationalError:
+            # A cancelled read is unknown selection, not an empty frontier.
+            self.check_deadline(deadline)
+            raise
+
+    def _choose(self, *, excluded_kinds=(), excluded_sources=(), excluded_hosts=(), deadline=None):
         """Choose without multiplying policy-file reads by the pending queue size."""
         self.check_deadline(deadline)
         now = time.time()
@@ -2263,21 +2280,25 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             source, extra={**source.extra, "fetch_details": task["kind"] != "listing"}
         )
         capture = None
+        from jobagg import runtime_clock, publication_deadline
+        work_clock = getattr(self, '_work_clock', None) or runtime_clock.budget(
+            max(0,deadline-time.time()), parent=publication_deadline.current_budget())
         try:
-            self.check_deadline(deadline)
-            if self.storage:
-                self.storage.ensure_directory(
-                    target, grant=self.storage.initial.get(task["task_id"]), exist_ok=False,
-                )
-            else:
-                target.mkdir(parents=True)
-            adapter, client, capture = self.context(configured, target, task, deadline)
-            if task["kind"] == "listing":
-                adapter.listing_checkpoint_path = self.workspace / "listing_checkpoints" / (source.id + ".json")
-                return self.do_listing(source, adapter, capture, target, task, token)
-            if task["kind"] == "detail":
-                return self.do_detail(source, adapter, capture, target, task, token)
-            return self.do_document(source, client, capture, target, task, token)
+            with publication_deadline.continuous_budget(work_clock):
+                self.check_deadline(deadline)
+                if self.storage:
+                    self.storage.ensure_directory(
+                        target, grant=self.storage.initial.get(task["task_id"]), exist_ok=False,
+                    )
+                else:
+                    target.mkdir(parents=True)
+                adapter, client, capture = self.context(configured, target, task, deadline)
+                if task["kind"] == "listing":
+                    adapter.listing_checkpoint_path = self.workspace / "listing_checkpoints" / (source.id + ".json")
+                    return self.do_listing(source, adapter, capture, target, task, token)
+                if task["kind"] == "detail":
+                    return self.do_detail(source, adapter, capture, target, task, token)
+                return self.do_document(source, client, capture, target, task, token)
         except Exception as exc:
             # Preserve received bytes and durable attempt. Semantic errors block only
             # this task; transport host decisions are made by the HTTP checkpoint.
@@ -2620,7 +2641,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self._elapsed_deadline = float("inf")
                 self._runtime_run_id = None
                 self._runtime_owner_fd = None
-                self._phase_clock = None
+                self._phase_clock = self._work_clock = self._work_deadline = None
                 self._runtime_contract_value = None
                 self._runtime_request_sha256 = None
                 if getattr(self.shared_policy, '_native', None) is not None:
@@ -2691,6 +2712,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             # request/selection work early enough to persist a truthful report.
             report_reserve = min(15.0, self.max_seconds * 0.1)
             work_deadline = deadline - report_reserve
+            from jobagg import runtime_clock, publication_deadline
+            self._work_deadline = work_deadline
+            self._work_clock = runtime_clock.budget(max(0,work_deadline-time.time()),
+                                                   parent=publication_deadline.current_budget())
             self._sql_deadline = work_deadline
             stop_reason = "task_budget"
             if self.parallel_sources > 1:

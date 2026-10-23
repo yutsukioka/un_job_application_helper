@@ -155,3 +155,14 @@ def test_logged_pipe_wait_checks_continuous_deadline_before_io(tmp_path, monkeyp
     process.stdout, process.stderr = streams
     with pytest.raises(subprocess.TimeoutExpired):
         dispatcher_storage.wait_logged(process, [tmp_path / "out", tmp_path / "err"], None, 10)
+
+
+def test_unbounded_legacy_verifier_keeps_the_finite_ambient_clock(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(runtime_clock, "now", lambda: clock[0])
+    with publication_deadline.entry_deadlines(float("inf"), float("inf")):
+        assert not publication_deadline.expired(None)
+    with publication_deadline.continuous_budget(runtime_clock.budget(10)):
+        with publication_deadline.entry_deadlines(float("inf"), float("inf")):
+            clock[0] = 111
+            assert publication_deadline.expired(None)
