@@ -93,6 +93,12 @@ def renew_destination(path, expected, *, owner_fd, owner_path, old_device, new_d
         raise ValueError("reattest_destination_changed_during_commit")
 
 
+def require_inactive_source(path):
+    with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)) as conn:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobagg_runtime_state'").fetchone():
+            raise ValueError("reattest_requires_inactive_copied_source")
+
+
 def execute(root, operation, *, seconds, maximum_bytes, resume=False):
     root, operation = Path(root).absolute(), Path(operation).absolute()
     if root.resolve() != root or operation.parent != root or operation.resolve() != operation:
@@ -179,6 +185,8 @@ def execute(root, operation, *, seconds, maximum_bytes, resume=False):
         return result
 
     with fenced_owner(config, snapshot["fence_sha256"]) as fd:
+        # Resume must reject an active source before any destination/head write.
+        require_inactive_source(root / "worker/jobs.sqlite3")
         if resume:
             plan = json.loads((operation / "plan.json").read_text())
             if plan["sha256"] != digest({k: v for k, v in plan.items() if k != "sha256"}):

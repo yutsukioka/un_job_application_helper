@@ -111,3 +111,14 @@ def test_destination_renewal_is_idempotent_and_preserves_store_clock_and_rows(re
                 old_device=old_device,
                 new_device=current["device"],
             )
+
+
+def test_resumed_operation_rejects_activated_source_before_renewal(renewal, tmp_path):
+    path = tmp_path / "worker.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE retained(value TEXT)")
+    renewal.require_inactive_source(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE jobagg_runtime_state(id INTEGER)")
+    with pytest.raises(ValueError, match="inactive_copied_source"):
+        renewal.require_inactive_source(path)
