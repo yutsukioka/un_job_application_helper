@@ -17,7 +17,7 @@ import uuid
 from jobagg.atomic_files import atomic_write_text
 from jobagg.publication_fence import _owner
 
-SCHEMA = "jobagg-policy-authority-2"
+SCHEMA = "jobagg-policy-authority-3"
 
 
 def _dump(value):
@@ -207,7 +207,9 @@ class PolicyAuthority:
             summary = conn.execute(
                 "SELECT * FROM sources WHERE source_id=?", (source_id,)
             ).fetchone()
-            if summary is None or summary["n"] == 0:
+            if summary is None:
+                raise ValueError("policy_source_outside_migrated_scope")
+            if summary["n"] == 0:
                 return now
             if summary["pause"] != pause:
                 raise ValueError("policy_contract_changed_reviewed_projection_migration_required")
@@ -253,6 +255,7 @@ class PolicyAuthority:
                     raise ValueError("policy_conflicting_duplicate_finish")
                 return
             event.update(finished_at=end, status=status)
+            _queue_export(conn, event)
             conn.execute(
                 "UPDATE attempts SET effective_end=?,event_json=? WHERE attempt_id=?",
                 (end, _dump(event), attempt_id),
@@ -316,7 +319,68 @@ class PolicyAuthority:
         return len(rows)
 
 
-def _insert(conn, event):
+    def json_export_status(self):
+        with self.connect() as conn:
+            row = conn.execute("SELECT attempt_id,version,changed_at FROM json_exports WHERE version>exported_version ORDER BY changed_at,attempt_id LIMIT 1").fetchone()
+        return {"pending": row is not None, "oldest": dict(row) if row else None,
+                "scope": "delivery_checkpoint_only_not_legacy_admission_handoff"}
+
+    def export_json_page(self, *, limit, max_bytes, fault=lambda _: None):
+        """Explicit bounded compatibility delivery; old writers stay fenced.
+
+        Files precede the SQL acknowledgement. A crash replays the same version;
+        a late finish cannot be acknowledged by an older export. Original legacy
+        evidence and the fenced index are never overwritten or admitted.
+        """
+        from jobagg.runtime_source_head import owner
+        from jobagg.publication_storage import ensure_directory
+        if type(limit) is not int or limit <= 0 or type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError('finite_policy_json_export_bounds_required')
+        owner(self.owner_fd, self.policy.owner)
+        with self.connect() as conn:
+            candidates = conn.execute("SELECT attempt_id,version,length(CAST(event_json AS BLOB))+1 AS bytes FROM json_exports WHERE version>exported_version ORDER BY changed_at,attempt_id LIMIT ?", (limit,)).fetchall()
+            selected, size = [], 0
+            for row in candidates:
+                self.check_deadline()
+                if size + row['bytes'] > max_bytes:
+                    break
+                selected.append(dict(conn.execute('SELECT * FROM json_exports WHERE attempt_id=? AND version=?', (row['attempt_id'],row['version'])).fetchone()))
+                size += row['bytes']
+        exported = []
+        for row in selected:
+            self.check_deadline()
+            owner(self.owner_fd, self.policy.owner)
+            root = self.policy.root / 'authority_exports'
+            if root.resolve() != root:
+                raise ValueError('policy_json_export_alias')
+            ensure_directory(root)
+            path = root / (hashlib.sha256(row['attempt_id'].encode()).hexdigest()+'.json')
+            if path.resolve() != path:
+                raise ValueError('policy_json_export_alias')
+            atomic_write_text(path, row['event_json']+'\n')
+            path.chmod(path.stat().st_mode & ~0o222)
+            proof = {'path':str(path),'sha256':_sha(path,self.check_deadline),'version':row['version']}
+            if proof['sha256'] != row['event_sha256']:
+                raise ValueError('policy_json_export_readback_changed')
+            fault('after_json_write')
+            with self.connect(write=True) as conn:
+                changed = conn.execute('UPDATE json_exports SET exported_version=?,receipt_json=? WHERE attempt_id=? AND version=?',
+                    (row['version'],_dump(proof),row['attempt_id'],row['version'])).rowcount
+            exported.append({**proof,'acknowledged':changed==1})
+        return {'exported':exported,'bytes':size,'status':self.json_export_status(),
+                'oversized':dict(candidates[0]) if candidates and not selected else None}
+
+
+def _queue_export(conn, event):
+    content = _dump(event)
+    sha = hashlib.sha256((content+'\n').encode()).hexdigest()
+    conn.execute("""INSERT INTO json_exports VALUES(?,1,0,?,?,?,NULL)
+        ON CONFLICT(attempt_id) DO UPDATE SET version=version+1,event_sha256=excluded.event_sha256,event_json=excluded.event_json,
+        changed_at=CASE WHEN version=exported_version THEN excluded.changed_at ELSE changed_at END""",
+        (event['attempt_id'],sha,content,time.time()))
+
+
+def _insert(conn, event, *, queue_export=True):
     prior = conn.execute(
         "SELECT event_json FROM attempts WHERE attempt_id=?", (event["attempt_id"],)
     ).fetchone()
@@ -342,6 +406,8 @@ def _insert(conn, event):
         conn.execute("UPDATE sources SET n=n+1 WHERE source_id=?", (source,))
     else:
         sequence, batch_break = None, 0
+    if queue_export:
+        _queue_export(conn, event)
     end = event.get("finished_at") or event.get("eligibility_accounting_until") or start
     conn.execute(
         "INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?)",

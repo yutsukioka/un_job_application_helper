@@ -300,3 +300,53 @@ def test_native_source_hold_file_cannot_silently_release_reviewed_gates(native):
     path.write_text("{}")  # same content still changes the trusted boundary
     with pytest.raises(ValueError, match="bootstrap_control_changed"):
         authority.revision()
+
+
+def test_native_json_delivery_is_durable_bounded_and_cannot_enable_old_writers(native):
+    policy, owner = native
+    authority = activate(policy, owner)
+    authority.owner_fd = owner.fileno()
+    event = dict(
+        attempt_id="lagged",
+        source_id="example",
+        kind="detail",
+        started_at=time.time(),
+        finished_at=None,
+        status="reserved",
+        task_id="task",
+        workspace=str(policy.root),
+    )
+    authority.reserve(event)
+    assert authority.json_export_status()["pending"]
+    # A missing JSON mirror cannot refund the canonical SQL reservation.
+    assert (
+        authority.due("example", time.time(), minimum=30, jitter=0, batch=0, pause=120)
+        > time.time()
+    )
+    assert authority.export_json_page(limit=1, max_bytes=1)["oversized"]["attempt_id"] == "lagged"
+
+    def interrupted(point):
+        assert point == "after_json_write"
+        raise RuntimeError("power-loss seam before SQL export acknowledgement")
+
+    with pytest.raises(RuntimeError, match="power-loss"):
+        authority.export_json_page(limit=1, max_bytes=4096, fault=interrupted)
+    cold = PolicyAuthority(policy)
+    cold.owner_fd = owner.fileno()
+    assert cold.json_export_status()["pending"]
+
+    def finish_before_old_ack(_):
+        authority.finish("lagged", "failed")
+
+    first = cold.export_json_page(limit=1, max_bytes=4096, fault=finish_before_old_ack)
+    assert not first["exported"][0]["acknowledged"]
+    assert cold.json_export_status()["pending"]
+    latest = cold.export_json_page(limit=1, max_bytes=4096)
+    assert not latest["status"]["pending"]
+    mirror = latest["exported"][0]
+    assert json.loads(__import__("pathlib").Path(mirror["path"]).read_text())["status"] == "failed"
+    assert (policy.root / "attempt_index.json").is_dir()
+    with sqlite3.connect(authority.path) as conn:
+        assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
+    with pytest.raises(ValueError, match="outside_migrated_scope"):
+        cold.due("unreviewed-source", time.time(), minimum=0, jitter=0, batch=0, pause=0)

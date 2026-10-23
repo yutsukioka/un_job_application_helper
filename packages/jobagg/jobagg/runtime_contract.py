@@ -69,6 +69,8 @@ def build(*, package_root, dispatcher_files, config_sha256, registry_sha256, man
             child = re.split(r"[<>=!~;\[ (]", dependency, 1)[0]
             if child:
                 pending.add(child)
+    import ctypes
+    import _ctypes
     import _ssl
     import _sqlite3
     import zlib
@@ -78,7 +80,7 @@ def build(*, package_root, dispatcher_files, config_sha256, registry_sha256, man
     import http.client
 
     runtime = {}
-    for module in (_ssl, _sqlite3, zlib, gzip, ssl, urllib.request, http.client, json):
+    for module in (_ssl, _sqlite3, _ctypes, ctypes, zlib, gzip, ssl, urllib.request, http.client, json):
         filename = getattr(module, "__file__", None)
         if filename:
             path = Path(filename).resolve()

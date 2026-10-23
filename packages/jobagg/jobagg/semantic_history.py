@@ -262,7 +262,11 @@ def admitted_semantic_write(conn, *, policy_epoch, run_id, lease, authorizer=Non
     validate()
     failures = []
     transaction = {"dirty": False}
+    from jobagg import publication_fence
+    publication_authorize = publication_fence.transaction_authorizer(conn)
     def authorize(action, first, second, database, trigger):
+        if publication_authorize is not None and publication_authorize(action, first, second, database, trigger) != sqlite3.SQLITE_OK:
+            return sqlite3.SQLITE_DENY
         if action in {sqlite3.SQLITE_CREATE_INDEX, sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_CREATE_TRIGGER,
                       sqlite3.SQLITE_CREATE_VIEW, sqlite3.SQLITE_CREATE_TEMP_INDEX, sqlite3.SQLITE_CREATE_TEMP_TABLE,
                       sqlite3.SQLITE_CREATE_TEMP_TRIGGER, sqlite3.SQLITE_CREATE_TEMP_VIEW,
@@ -287,6 +291,7 @@ def admitted_semantic_write(conn, *, policy_epoch, run_id, lease, authorizer=Non
                 return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
     conn.set_authorizer(authorize)
+    publication_fence.configure(conn, path, authorizer=authorize)
     def write_allowed():
         validate()
         if not transaction["dirty"]:

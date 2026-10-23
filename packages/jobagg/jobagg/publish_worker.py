@@ -83,6 +83,8 @@ def _request(args, *, owner_held=False, deadline_at=None, validation=None):
 
 
 def main(argv=None):
+    from jobagg import runtime_clock
+    entered_continuous, entered_wall, entered_monotonic = runtime_clock.now(), time.time(), time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("worker-database", "registry", "output-dir", "state-dir", "shared-lock"):
         parser.add_argument("--" + name, required=True)
@@ -95,7 +97,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.max_jobs < 1 or args.max_seconds <= 0:
         parser.error("max-jobs and max-seconds must be positive")
-    started = time.monotonic()
+    from jobagg.publication_deadline import continuous_budget, current_budget
+    phase = runtime_clock.budget(args.max_seconds, parent=current_budget(),
+                                started=entered_continuous, started_wall=entered_wall)
+    with continuous_budget(phase):
+        if runtime_clock.remaining(phase) <= 0:
+            raise TimeoutError('publisher entry budget expired')
+        return _run(args, entered_monotonic)
+
+
+def _run(args, started):
     inherited = args.owner_fd
     if inherited is None and os.environ.get("JOBAGG_SHARED_LOCK_FD"):
         inherited = int(os.environ["JOBAGG_SHARED_LOCK_FD"])

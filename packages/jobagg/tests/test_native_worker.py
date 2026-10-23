@@ -91,6 +91,7 @@ def _first_useful(
     assert len(calls) == 2
     assert report["concurrency"]["accepted_progress"] >= 1
     with worker.db.connect() as conn:
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2
         references = conn.execute("SELECT * FROM jobagg_accepted_evidence").fetchall()
         assert len(references) == 1
         pointer = references[0]

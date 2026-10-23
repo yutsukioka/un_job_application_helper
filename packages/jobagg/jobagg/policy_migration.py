@@ -25,7 +25,7 @@ from jobagg.policy_authority import (
 )
 from jobagg.publication_fence import _owner, _file_identity
 
-MIGRATION = "jobagg-policy-import-3"
+MIGRATION = "jobagg-policy-import-4"
 DDL = """
 CREATE TABLE IF NOT EXISTS authority(id INTEGER PRIMARY KEY,epoch TEXT,revision INTEGER,transaction_id TEXT,audit_cursor TEXT,audit_completed_at REAL);
 CREATE TABLE IF NOT EXISTS sources(source_id TEXT PRIMARY KEY,pause REAL,n INTEGER);
@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS attempts(attempt_id TEXT PRIMARY KEY,source_id TEXT,k
 CREATE INDEX IF NOT EXISTS policy_sequence ON attempts(source_id,kind,sequence DESC);
 CREATE INDEX IF NOT EXISTS policy_batch_break ON attempts(source_id,kind,batch_break,sequence DESC);
 CREATE INDEX IF NOT EXISTS policy_window ON attempts(source_id,kind,effective_end DESC);
+CREATE TABLE IF NOT EXISTS json_exports(attempt_id TEXT PRIMARY KEY,version INTEGER,exported_version INTEGER,event_sha256 TEXT,event_json TEXT,changed_at REAL,receipt_json TEXT);
+CREATE INDEX IF NOT EXISTS policy_json_pending ON json_exports(changed_at,attempt_id) WHERE version>exported_version;
 CREATE TABLE IF NOT EXISTS evidence(path TEXT PRIMARY KEY,sha256 TEXT);
 CREATE TABLE IF NOT EXISTS migration_receipt(id INTEGER PRIMARY KEY,receipt_json TEXT);
 CREATE TABLE IF NOT EXISTS import_state(id INTEGER PRIMARY KEY,phase TEXT,verified_ordinal INTEGER);
@@ -274,7 +276,7 @@ def step(
             for row in rows:
                 check_deadline()
                 with conn:
-                    _insert(conn, json.loads(row["event_json"]))
+                    _insert(conn, json.loads(row["event_json"]), queue_export=False)
                     conn.execute(
                         "UPDATE import_files SET imported=1 WHERE ordinal=?", (row["ordinal"],)
                     )
@@ -338,6 +340,7 @@ def step(
                     "import_files",
                     "import_expected",
                     "import_audit",
+                    "json_exports",
                 ):
                     for op in ("INSERT", "UPDATE", "DELETE"):
                         conn.execute(

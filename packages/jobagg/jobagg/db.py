@@ -92,7 +92,11 @@ class JobDatabase:
         # journal_mode=WAL improves concurrent read/write throughput; the other
         # pragmas are safe defaults for an embedded single-writer workload.
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        native = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name IN "
+            "('jobagg_runtime_state','jobagg_publication_revision') LIMIT 1"
+        ).fetchone()
+        conn.execute("PRAGMA synchronous=" + ("FULL" if native else "NORMAL"))
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA temp_store=MEMORY")
 

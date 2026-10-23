@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "66a4a5330d9695297b955f35a1f53d2d4769e69b6af415d6118827efe26f47bb"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "5a4bb72bf35a0b69dd4a271c8c6f754e3dab9332613c261208ea1c7e87c11aeb"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -1103,7 +1103,8 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         return max(now, due)
 
     def check_deadline(self, deadline):
-        if ((deadline is not None and time.time() >= deadline)
+        from jobagg.publication_deadline import expired
+        if expired(None) or ((deadline is not None and time.time() >= deadline)
                 or time.monotonic() >= getattr(self, "_elapsed_deadline", float("inf"))):
             raise HostIneligible(
                 "Work budget exhausted; preserving final-report time", category="budget"
@@ -2237,7 +2238,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
         try:
             with admitted_file_writes(self.storage.file_write if self.storage else None):
                 with (self.storage.task_scope(task["task_id"]) if self.storage else nullcontext()):
-                    result = self._perform_claimed(task, deadline, token)
+                    from jobagg.publication_deadline import continuous_budget
+                    with continuous_budget(getattr(self, '_phase_clock', None)):
+                        result = self._perform_claimed(task, deadline, token)
             interval["outcome"] = result
             return result
         except BaseException as exc:
@@ -2604,7 +2607,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             if request and (request.get("run_id") != lease.get("cycle_id") or requested != limits):
                 raise StorageBudgetError("storage_request_lease_binding_differs")
             self.storage = WorkerStorage(self, lease, limits)
-        with admitted_file_writes(self.storage.file_write if self.storage else None):
+        from jobagg import runtime_clock, publication_deadline
+        self._phase_clock = getattr(self, '_entry_continuous_budget', None) or runtime_clock.budget(
+            self.max_seconds, parent=publication_deadline.current_budget())
+        with admitted_file_writes(self.storage.file_write if self.storage else None), publication_deadline.continuous_budget(self._phase_clock):
             try:
                 return self._tick_admitted(execute=True, request=request)
             finally:
@@ -2614,6 +2620,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 self._elapsed_deadline = float("inf")
                 self._runtime_run_id = None
                 self._runtime_owner_fd = None
+                self._phase_clock = None
                 self._runtime_contract_value = None
                 self._runtime_request_sha256 = None
                 if getattr(self.shared_policy, '_native', None) is not None:
@@ -2652,6 +2659,7 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             deadline = min(deadline, epoch(request["deadline_at"]))
         if deadline <= time.time():
             raise ValueError("Request deadline already passed")
+        self.check_deadline(deadline)
         self._report_deadline = deadline
         self._sql_deadline = deadline
         with shared_owner(self.shared_lock) as owner_fd:
@@ -2731,6 +2739,12 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
             self.shared_policy.finish_batch(check_deadline=lambda: self.check_deadline(deadline))
             self.check_deadline(deadline)
             report = self.report(request)
+            native_policy = self.shared_policy.native_authority()
+            if native_policy is not None:
+                report["shared_policy_json_export"] = native_policy.json_export_status()
+            from jobagg.runtime_clock import inherited
+            if inherited() is not None:
+                report["entry_clock"] = inherited()
             if self._runtime_contract_value:
                 report['runtime_contract_sha256']=self._runtime_contract_value['sha256']
             concurrency = self.concurrency_report(tick_started_at, deadline)
@@ -2790,6 +2804,8 @@ def validate_request(path, report, registry):
 
 
 def main(argv=None):
+    from jobagg import runtime_clock
+    entered_continuous = runtime_clock.now()
     entered_monotonic, entered_wall = time.monotonic(), time.time()
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--registry", type=Path, required=True)
@@ -2810,7 +2826,18 @@ def main(argv=None):
     p.add_argument("--report", type=Path)
     p.add_argument("--execute", action="store_true")
     a = p.parse_args(argv)
+    from jobagg.publication_deadline import continuous_budget, current_budget
+    phase = runtime_clock.budget(a.max_seconds, parent=current_budget(),
+                                started=entered_continuous, started_wall=entered_wall)
+    with continuous_budget(phase):
+        return _run_worker(a, entered_monotonic, entered_wall, phase)
+
+
+def _run_worker(a, entered_monotonic, entered_wall, phase):
     try:
+        from jobagg.publication_deadline import expired
+        if expired(None):
+            raise HostIneligible("Worker entry budget expired", category="budget")
         if bool(a.request) != bool(a.report):
             raise ValueError("--request and --report must be supplied together")
         request = validate_request(a.request, a.report, a.registry) if a.request else None
@@ -2827,6 +2854,7 @@ def main(argv=None):
             max_requests_per_task=a.max_requests_per_task,
         )
         worker._dispatcher_request_sha256=sha(a.request) if a.request else None
+        worker._entry_continuous_budget = phase
         worker._entry_elapsed_deadline = entered_monotonic + a.max_seconds
         worker._entry_wall_deadline = entered_wall + a.max_seconds
         result = worker.tick(execute=a.execute, request=request)

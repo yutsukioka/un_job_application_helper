@@ -17,7 +17,7 @@ import uuid
 from jobagg.publication_deadline import expired
 
 TABLE = 'jobagg_publication_revision'
-SCHEMA = 'publication-revision-1'
+SCHEMA = 'publication-revision-2'
 _SCOPE = ContextVar('publication_writer_scope', default=None)
 
 
@@ -84,7 +84,16 @@ def activate(conn, *, owner_path, owner_fd, epoch):
             conn.execute(f'CREATE TRIGGER {_quote(name)} BEFORE {operation} ON {_quote(table)} BEGIN '
                          "SELECT CASE WHEN jobagg_publication_write_allowed()!=1 THEN RAISE(ABORT,'publication_writer_not_admitted') END; "
                          f'UPDATE {TABLE} SET revision=revision+1 WHERE id=1; END')
+    conn.create_function('jobagg_publication_control_allowed', 0, lambda: 1)
+    for operation in ('INSERT', 'DELETE'):
+        conn.execute(f"CREATE TRIGGER publication_control_{operation.lower()} BEFORE {operation} ON {TABLE} BEGIN "
+                     "SELECT CASE WHEN jobagg_publication_control_allowed()!=1 THEN RAISE(ABORT,'publication_control_not_admitted') END; END")
+    conn.execute(f"CREATE TRIGGER publication_control_identity BEFORE UPDATE OF schema,epoch,store_id,owner_path,owner_device,owner_inode,schema_sha256 ON {TABLE} BEGIN "
+                 "SELECT CASE WHEN jobagg_publication_control_allowed()!=1 THEN RAISE(ABORT,'publication_control_not_admitted') END; END")
+    conn.execute(f"CREATE TRIGGER publication_control_revision BEFORE UPDATE OF revision ON {TABLE} BEGIN "
+                 "SELECT CASE WHEN jobagg_publication_write_allowed()!=1 THEN RAISE(ABORT,'publication_writer_not_admitted') END; END")
     conn.execute(f'UPDATE {TABLE} SET schema_sha256=? WHERE id=1', (_schema_hash(conn),))
+    conn.create_function('jobagg_publication_control_allowed', 0, lambda: 0)
     conn.create_function('jobagg_publication_write_allowed', 0, lambda: 0)
 
 
@@ -103,8 +112,49 @@ def writer_scope(owner_fd, owner_path, output_root):
         _SCOPE.reset(token)
 
 
-def configure(conn, path, *, read_only=False):
+def transaction_authorizer(conn):
+    """Compose this guard with the semantic/storage authorizer, never replace it."""
+    value = _validate(conn)
+    if value is None:
+        return None
+    scope = _SCOPE.get()
+    triggers = {
+        'publication_fence_' + hashlib.sha256((table + operation).encode()).hexdigest()
+        for table in _tables(conn) for operation in ('INSERT', 'UPDATE', 'DELETE')
+    }
+
+    def authorize(action, first, second, database, trigger):
+        # Only the domain triggers may advance the clock. Ordinary owner-held
+        # maintenance still cannot reset it and conceal a comparator change.
+        if first == TABLE and action in {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_DELETE}:
+            return sqlite3.SQLITE_DENY
+        if first == TABLE and action == sqlite3.SQLITE_UPDATE and (
+            second != 'revision' or trigger not in triggers
+        ):
+            return sqlite3.SQLITE_DENY
+        if ((action == sqlite3.SQLITE_TRANSACTION and first == 'COMMIT') or
+                (action == sqlite3.SQLITE_SAVEPOINT and first == 'RELEASE')):
+            try:
+                _verify_live_scope(scope, value)
+            except (ValueError, OSError, TypeError):
+                return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    return authorize
+
+
+def _verify_live_scope(scope, value):
+    from jobagg.runtime_source_head import owner
+    if scope is None or _SCOPE.get() is not scope:
+        raise ValueError('publication_writer_scope_expired')
+    owner(scope['fd'], scope['owner_path'])
+    if (value['owner_path'] != scope['owner_path'] or
+            (value['owner_device'], value['owner_inode']) != (scope['device'], scope['inode'])):
+        raise ValueError('publication_writer_scope_differs')
+
+
+def configure(conn, path, *, read_only=False, authorizer=None):
     conn.create_function('jobagg_publication_write_allowed', 0, lambda: 0)
+    conn.create_function('jobagg_publication_control_allowed', 0, lambda: 0)
     if read_only or _state(conn) is None:
         return
     value = _validate(conn)
@@ -112,16 +162,22 @@ def configure(conn, path, *, read_only=False):
     if scope is None:
         return  # Reads remain available; guarded DML is denied.
     path = Path(path).absolute()
-    if (path.resolve() != path or path.parent != scope['root'] or
-            value['owner_path'] != scope['owner_path'] or
-            (value['owner_device'], value['owner_inode']) != (scope['device'],scope['inode'])):
+    if path.resolve() != path or path.parent != scope['root']:
         raise ValueError('publication_writer_scope_differs')
+    _verify_live_scope(scope, value)
+    authorize = authorizer or transaction_authorizer(conn)
+
     def allowed():
-        if _SCOPE.get() is not scope:
+        try:
+            _verify_live_scope(scope, value)
+        except (ValueError, OSError, TypeError):
             return 0
-        info = os.fstat(scope['fd'])
-        return int((info.st_dev,info.st_ino) == (scope['device'],scope['inode']))
+        # Invalidate a cached COMMIT on each mutation. If a semantic grant is
+        # active, its composed callback retains both lease and owner checks.
+        conn.set_authorizer(authorize)
+        return 1
     conn.create_function('jobagg_publication_write_allowed', 0, allowed)
+    conn.set_authorizer(authorize)
 
 
 def binding(path):

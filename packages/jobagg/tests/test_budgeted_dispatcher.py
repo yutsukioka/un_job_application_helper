@@ -48,7 +48,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "validate_report", lambda *_: ("incomplete", ["synthetic bounded batch"]))
     monkeypatch.setattr(pending_publication, "database_binding", lambda _p: {
         "files": [], "semantic": {"writer_fenced": True, "revision": 1}})
-    monkeypatch.setattr(dispatcher_storage, "wait_logged", lambda process, *_: process.wait())
+    monkeypatch.setattr(dispatcher_storage, "wait_logged", lambda process, *_, **__: process.wait())
     calls = []
 
     class Child:

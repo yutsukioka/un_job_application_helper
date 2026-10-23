@@ -28,9 +28,15 @@ import uuid
 
 _CONTROL_WRITER = None
 _ENTRY_DEADLINES = None
+_CLOCK_SPEC = importlib.util.spec_from_file_location('_jobagg_entry_clock', Path(__file__).with_name('runtime_clock.py'))
+RUNTIME_CLOCK = importlib.util.module_from_spec(_CLOCK_SPEC)
+_CLOCK_SPEC.loader.exec_module(RUNTIME_CLOCK)
+_ENTRY_CLOCK = None
 
 
 def check_entry_budget():
+    if _ENTRY_CLOCK is not None and RUNTIME_CLOCK.remaining(_ENTRY_CLOCK) <= 0:
+        raise TimeoutError("Suspend-aware entry budget exhausted")
     if _ENTRY_DEADLINES is not None:
         mono, wall = _ENTRY_DEADLINES
         if time.monotonic() >= mono or time.time() >= wall:
@@ -1551,7 +1557,7 @@ def runtime_publication_contract(config):
         base=Path(__file__).parent
         bound_package=Path(package_helper(config,'runtime_authority').__file__).parent.parent
         value=package_helper(config,'runtime_contract').build(package_root=bound_package,
-            dispatcher_files=[base/'runner.py',base/'runner_observability.py',base/'supervisor.py'],
+            dispatcher_files=[base/'runner.py',base/'runner_observability.py',base/'supervisor.py',base/'runtime_clock.py'],
             config_sha256=config['_config_sha256'],registry_sha256=config['_registry_sha256'],
             manifest_sha256=config['_manifest_sha256'])
         config['_runtime_publication_contract']=value
@@ -2003,7 +2009,9 @@ def phase_remaining(config, hard_end, wall_end, phase):
     for key in ("projection_max_seconds", "projection_min_seconds", "publisher_min_seconds", "cleanup_report_seconds"):
         require(type(policy[key]) in (int, float) and 0 < policy[key] < config["total_timeout_seconds"], "invalid phase budget")
     require(isinstance(policy["measurement_sha256"], str) and re.fullmatch(r"[a-f0-9]{64}", policy["measurement_sha256"]), "phase budget lacks measurement seal")
-    remaining = min(hard_end-time.monotonic(), wall_end-time.time()) - policy["cleanup_report_seconds"]
+    continuous = config.get('_publication_clock')
+    continuous_remaining = RUNTIME_CLOCK.remaining(continuous) if continuous else float('inf')
+    remaining = min(hard_end-time.monotonic(), wall_end-time.time(), continuous_remaining) - policy["cleanup_report_seconds"]
     if phase == "projection":
         available = min(policy["projection_max_seconds"], remaining-policy["publisher_min_seconds"])
         require(available >= policy["projection_min_seconds"], "insufficient viable projection/publisher budget; accepted work retained")
@@ -2015,6 +2023,7 @@ def phase_remaining(config, hard_end, wall_end, phase):
 
 def tick(config, expected, recover_publication=False):
     config.pop('_runtime_publication_contract',None)
+    config.pop('_publication_clock',None)
     config['_runtime_expected_source_ids'] = expected
     deadline_at = min(time.monotonic() + config['total_timeout_seconds'], config.get('_entry_monotonic_deadline', float('inf')))
     wall_at = min(time.time() + config['total_timeout_seconds'], config.get('_entry_wall_deadline', float('inf')))
@@ -2162,12 +2171,13 @@ def _tick(config, expected, recover_publication=False):
         os.close(descriptor)
 
 
-def wait_with_deadlines(process, timeout, absolute_deadline=None):
+def wait_with_deadlines(process, timeout, absolute_deadline=None, *, continuous_budget=None):
     """Bound child wait across suspend and wall-clock adjustments."""
+    continuous = RUNTIME_CLOCK.budget(timeout, parent=continuous_budget or _ENTRY_CLOCK or RUNTIME_CLOCK.inherited())
     elapsed_end = time.monotonic() + timeout
     wall_end = min(time.time() + timeout, absolute_deadline) if absolute_deadline is not None else time.time() + timeout
     while process.poll() is None:
-        remaining = min(elapsed_end - time.monotonic(), wall_end - time.time())
+        remaining = min(elapsed_end - time.monotonic(), wall_end - time.time(), RUNTIME_CLOCK.remaining(continuous))
         if remaining <= 0:
             raise subprocess.TimeoutExpired(process.args, timeout)
         try:
@@ -2214,9 +2224,16 @@ PUBLICATION_BINDINGS = (
 )
 
 
-def publication_request(
-    config, request, report_path, worker_status, deadline, owner_fd
-):
+def publication_request(config, request, report_path, worker_status, deadline, owner_fd):
+    if not runtime_enabled(config):
+        return _publication_request(config, request, report_path, worker_status, deadline, owner_fd)
+    clocks = package_helper(config, 'publication_deadline')
+    with clocks.continuous_budget(config.get('_publication_clock')):
+        with clocks.entry_deadlines(time.monotonic()+max(0,deadline.timestamp()-time.time()),deadline.timestamp()):
+            return _publication_request(config, request, report_path, worker_status, deadline, owner_fd)
+
+
+def _publication_request(config, request, report_path, worker_status, deadline, owner_fd):
     report = read_json(report_path)
     require(
         Path(report.get("database", "")).resolve()
@@ -2305,6 +2322,7 @@ def publication_request(
             prior_boundary["previous_publication_boundary"] = boundary
     return {
         **prior_boundary,
+        **({"entry_clock": config.get("_publication_clock") or _ENTRY_CLOCK} if _ENTRY_CLOCK is not None else {}),
         **({'runtime_contract':runtime_publication_contract(config)} if runtime_enabled(config) else {}),
         "schema_version": 1,
         "run_id": request["run_id"],
@@ -2574,6 +2592,19 @@ def recovery_generation_fields(
 
 
 def resume_publication(config, expected, descriptor, *, deadline_at=None):
+    if not runtime_enabled(config):
+        return _resume_publication(config, expected, descriptor, deadline_at=deadline_at)
+    continuous = RUNTIME_CLOCK.budget(config['publication_timeout_seconds'],
+                                     parent=_ENTRY_CLOCK or RUNTIME_CLOCK.inherited())
+    config['_recovery_clock'] = continuous
+    try:
+        with package_helper(config,'publication_deadline').continuous_budget(continuous):
+            return _resume_publication(config, expected, descriptor, deadline_at=deadline_at)
+    finally:
+        config.pop('_recovery_clock',None)
+
+
+def _resume_publication(config, expected, descriptor, *, deadline_at=None):
     """Explicitly resume the publisher's same journal; never rerun the worker."""
     validation_deadline = time.monotonic() + min(
         config["publication_timeout_seconds"],
@@ -2721,6 +2752,9 @@ def resume_publication(config, expected, descriptor, *, deadline_at=None):
             PYTHONHASHSEED="0",
             PYTHONPATH=str(config["publication_cwd"]),
         )
+        recovery_clock = config.get("_recovery_clock")
+        if recovery_clock:
+            environment[RUNTIME_CLOCK.ENVIRONMENT] = json.dumps(recovery_clock)
         if storage_context:
             bridge = package_helper(config, "storage_cycle")
             package_helper(config, "dispatcher_storage").require_admission(
@@ -2748,9 +2782,10 @@ def resume_publication(config, expected, descriptor, *, deadline_at=None):
             if storage_context:
                 package_helper(config, "dispatcher_storage").wait_logged(
                     process, (attempt / "stdout.log", attempt / "stderr.log"),
-                    storage_context["ledger"], timeout, deadline.timestamp())
+                    storage_context["ledger"], timeout, deadline.timestamp(),
+                    **({"continuous_budget":recovery_clock} if recovery_clock else {}))
             else:
-                wait_with_deadlines(process, timeout, deadline.timestamp())
+                wait_with_deadlines(process, timeout, deadline.timestamp(), continuous_budget=recovery_clock)
         require(
             process.returncode == 0 and not group_alive(process.pid),
             "recovery process failed or leaked descendants",
@@ -2897,6 +2932,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
     if runtime_enabled(config) and 'jobagg.remediation_worker' in config.get('worker_argv',[]):
         request['expected_implementation_sha256']=runtime_publication_contract(config)['jobagg_implementation_sha256']
         request['runtime_contract']=runtime_publication_contract(config)
+        if _ENTRY_CLOCK is not None:
+            request['entry_clock']=_ENTRY_CLOCK
     if resume is not None:
         request = read_json(request_path)
     elif storage_context:
@@ -2904,6 +2941,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
         request["semantic_history_policy"] = {
             key: config["publication_policy"][key] for key in ("policy_epoch", "max_history_bytes")}
     record = {
+        **({"entry_clock": _ENTRY_CLOCK} if _ENTRY_CLOCK is not None else {}),
         "schema_version": 1,
         "run_id": run_id,
         "origin": config.get("_invocation_origin", "manual"),
@@ -2963,6 +3001,12 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             timeout, max(0, remaining - config["terminate_grace_seconds"])
         )
         require(phase_timeout > 0, "no command budget remains after cleanup reserve")
+        command_clock = RUNTIME_CLOCK.budget(phase_timeout,
+            parent=(config.get('_publication_clock') if phase != 'worker' else None) or _ENTRY_CLOCK or RUNTIME_CLOCK.inherited())
+        if phase == 'worker':
+            child_clock = RUNTIME_CLOCK.budget(config['timeout_seconds'], parent=command_clock)
+        else:
+            child_clock = command_clock
         record["phase"] = phase + "_starting"
         save()
         stdout_path = run_dir / (
@@ -2981,7 +3025,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             process = subprocess.Popen(
                 argv,
                 cwd=cwd,
-                env={**environment, "PYTHONPATH": str(cwd),
+                env={**environment, RUNTIME_CLOCK.ENVIRONMENT: json.dumps(child_clock), "PYTHONPATH": str(cwd),
                      **(package_helper(config, "storage_cycle").child_environment(
                          storage_context, "worker" if phase == "worker" else "publisher")
                         if storage_context else {})},
@@ -3000,9 +3044,10 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                 if storage_context:
                     package_helper(config, "dispatcher_storage").wait_logged(
                         process, (stdout_path, stderr_path), storage_context["ledger"],
-                        phase_timeout, absolute_deadline)
+                        phase_timeout, absolute_deadline,
+                        **({"continuous_budget":command_clock} if runtime_enabled(config) else {}))
                 else:
-                    wait_with_deadlines(process, phase_timeout, absolute_deadline)
+                    wait_with_deadlines(process, phase_timeout, absolute_deadline, continuous_budget=command_clock)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 record[phase + "_timeout"] = {
@@ -3140,6 +3185,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
             record["phase"] = "projection"
             publication_end = min(hard_end, time.monotonic()+config['publication_timeout_seconds'])
             publication_wall_end = min(wall_end.timestamp(), time.time()+config['publication_timeout_seconds'])
+            config['_publication_clock'] = RUNTIME_CLOCK.budget(config['publication_timeout_seconds'],
+                parent=_ENTRY_CLOCK or RUNTIME_CLOCK.inherited())
             remaining = min(
                 config["publication_timeout_seconds"],
                 hard_end - time.monotonic() - config["terminate_grace_seconds"],
@@ -3328,7 +3375,7 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
 
 
 def _main(argv=None):
-    global _ENTRY_DEADLINES
+    global _ENTRY_DEADLINES, _ENTRY_CLOCK
     entry_monotonic, entry_wall = time.monotonic(), time.time()
     _ENTRY_DEADLINES = (entry_monotonic + 840, entry_wall + 840)
     OBSERVABILITY.DEADLINE_CHECK = check_entry_budget
@@ -3383,6 +3430,8 @@ def _main(argv=None):
         _ENTRY_DEADLINES = (
             min(entry_monotonic + entry_limit, float(os.environ.get("JOBAGG_ENTRY_MONOTONIC_DEADLINE", "inf"))),
             min(entry_wall + entry_limit, float(os.environ.get("JOBAGG_ENTRY_WALL_DEADLINE", "inf"))))
+        _ENTRY_CLOCK = RUNTIME_CLOCK.clamp(_ENTRY_CLOCK, entry_limit)
+        os.environ[RUNTIME_CLOCK.ENVIRONMENT] = json.dumps(_ENTRY_CLOCK)
         OBSERVABILITY.DEADLINE_CHECK = check_entry_budget
         check_entry_budget()
         config, expected = load_config(
@@ -3454,11 +3503,23 @@ def _main(argv=None):
 
 
 def main(argv=None):
-    global _ENTRY_DEADLINES
+    global _ENTRY_DEADLINES, _ENTRY_CLOCK
+    original_clock = os.environ.get(RUNTIME_CLOCK.ENVIRONMENT)
     try:
+        _ENTRY_CLOCK = RUNTIME_CLOCK.budget(840, parent=RUNTIME_CLOCK.inherited())
+        os.environ[RUNTIME_CLOCK.ENVIRONMENT] = json.dumps(_ENTRY_CLOCK)
+        check_entry_budget()
         return _main(argv)
+    except (ValueError, TimeoutError) as exc:
+        print(json.dumps({'status':'process_failure','reasons':[str(exc)],'review_required':True}))
+        return EXIT['process_failure']
     finally:
         _ENTRY_DEADLINES = None
+        _ENTRY_CLOCK = None
+        if original_clock is None:
+            os.environ.pop(RUNTIME_CLOCK.ENVIRONMENT, None)
+        else:
+            os.environ[RUNTIME_CLOCK.ENVIRONMENT] = original_clock
         OBSERVABILITY.DEADLINE_CHECK = lambda: None
 
 
