@@ -17,6 +17,7 @@ import uuid
 
 from jobagg.atomic_files import atomic_write_text
 from jobagg.publication_fence import _owner
+from jobagg.policy_evidence import EvidenceLocations, NAME as LOCATIONS_NAME
 
 SCHEMA = "jobagg-policy-authority-3"
 
@@ -188,6 +189,9 @@ class PolicyAuthority:
     def _verify_boundary(self, head):
         from jobagg.publication_fence import _file_identity
 
+        locations = self.policy.root / LOCATIONS_NAME
+        if locations.exists() and str(locations) not in head.get('immutable_controls', {}):
+            raise ValueError('policy_evidence_locations_not_admitted')
         for path, identity in head.get("immutable_controls", {}).items():
             try:
                 actual = _file_identity(path)
@@ -314,9 +318,10 @@ class PolicyAuthority:
                 "SELECT path,sha256 FROM evidence WHERE path>? ORDER BY path LIMIT ?",
                 (control["audit_cursor"], limit),
             ).fetchall()
+            locations = EvidenceLocations(self.policy)
             for row in rows:
                 self._check_budget()
-                if _sha(row["path"], self._check_budget) != row["sha256"]:
+                if locations.sha(row["path"], row["sha256"], _sha, self._check_budget) != row["sha256"]:
                     raise ValueError("policy_evidence_missing_or_changed_charges_retained")
             more = (
                 rows

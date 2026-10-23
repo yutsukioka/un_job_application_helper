@@ -24,6 +24,7 @@ from jobagg.policy_authority import (
     _signature,
 )
 from jobagg.publication_fence import _owner, _file_identity
+from jobagg.policy_evidence import EvidenceLocations, NAME as LOCATIONS_NAME
 
 MIGRATION = "jobagg-policy-import-4"
 DDL = """
@@ -106,6 +107,9 @@ def step(
         "source_ids": sorted(pauses),
         "requested_source_ids": sorted(policy.source_ids),
     }
+    locations_path = policy.root / LOCATIONS_NAME
+    if locations_path.exists():
+        contract['evidence_locations_sha256'] = _sha(locations_path, check_deadline)
     if authority.head.exists():
         authority.revision()
         return {"complete": True, "phase": "complete"}
@@ -302,13 +306,14 @@ def step(
                 conn.execute("UPDATE import_state SET phase='evidence' WHERE id=1")
             return {"complete": False, "phase": "evidence"}
         if phase == "evidence":
+            locations = EvidenceLocations(policy)
             after = conn.execute("SELECT after_path FROM import_audit WHERE id=1").fetchone()[0]
             rows = conn.execute(
                 "SELECT path,sha256 FROM evidence WHERE path>? ORDER BY path LIMIT ?",
                 (after, limit),
             ).fetchall()
             for row in rows:
-                if _sha(Path(row["path"]), check_deadline) != row["sha256"]:
+                if locations.sha(Path(row["path"]), row["sha256"], _sha, check_deadline) != row["sha256"]:
                     raise ValueError("policy_import_original_evidence_changed")
                 with conn:
                     conn.execute("UPDATE import_audit SET after_path=? WHERE id=1", (row["path"],))
@@ -358,6 +363,7 @@ def step(
             raise ValueError("policy_import_unknown_checkpoint")
     immutable = {}
     for path in (
+        *([locations_path] if locations_path.exists() else []),
         policy.root / "bootstrap.json",
         policy.marker,
         archive,
