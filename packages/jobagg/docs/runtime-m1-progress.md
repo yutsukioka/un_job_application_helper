@@ -4,8 +4,9 @@ The complete immediate M1 correction is prepared on `codex/jobagg-m1-runtime`.
 This is an isolated implementation candidate, **not production activation or
 service-restoration acceptance**. The immutable [M0 baseline](runtime-m0-baseline.md),
 its [manifest](runtime-m0-baseline.json) and commit `30ea183c` are preserved.
-Final runtime code is commit `11bdab2340286cc724b5817f9c8d5996c6a63394`;
-subsequent handoff changes contain only tests and documentation.
+Current reviewed runtime code is commit `43b5a61f0eb5ed33c0ae10de697becbc6ec5bc28`.
+The [scoped corrective review](runtime-m1-review.md) records concrete defects,
+fixes and R1–R8 coverage. Subsequent delivery changes contain only documentation.
 
 The 22 October production cron algorithm handover is the runtime contract;
 [the change policy](change-and-review-policy.md) and its
@@ -71,13 +72,13 @@ identity, epoch, revision and contract. External transaction heads reject stale
 in-place restores and uncertain transactions. Commit checks reject owner loss;
 raw control writers cannot rewrite phase, revision or acknowledgements.
 
-The full runtime contract covers all **166 package Python modules**, resources,
+The full runtime contract covers all **167 package Python modules**, resources,
 dispatcher/helpers, relevant Python/runtime/dependency bytes and configuration/
 registry identities. It is checked per invocation and by worker/publisher
 children. Timestamps never approve changed bytes. Dirty-epoch changes require
 explicit reviewed revalidation; startup never reseals or rebuilds authority.
 Reviewed successor-scope seal:
-`66a4a5330d9695297b955f35a1f53d2d4769e69b6af415d6118827efe26f47bb`.
+`7e81854d862822d7fee0389072e999df2917b884f4967d16c0d687c8c025ae5b`.
 The validation manifest records the full implementation fingerprint separately.
 
 Preparation order: retain M0; review every control root and writer; page quota/
@@ -87,7 +88,7 @@ unresolved generations; establish the native source epoch. Every bounded step
 needs the actual owner and applicable reviewed storage/maintenance budgets.
 Missing or conflicting proof remains repair.
 
-Policy authority version 2 / import version 3 uses checkpointed evidence
+Policy authority version 3 / import version 4 uses checkpointed evidence
 verification and owner-fenced cutover. A nonempty `attempt_index.json` directory
 stops actual old reserve ordering before provider dispatch; original JSON remains
 archived evidence. Original bootstrap proofs join bounded audits. Source-hold
@@ -103,12 +104,24 @@ Earlier pre-release native schema/staging versions require explicit compatible
 migration. No native M1 schema was activated here. Never restore an old database
 as a code rollback or refund uncertain charges.
 
+The corrective review additionally closes destination owner loss/cached-commit
+bypasses and raw clock edits (publication fence version 2), uses FULL sync for
+native acceptance, binds continuous clocks to host/boot and every child/phase,
+and adds a bounded SQL-journaled JSON compatibility exporter. Legacy writers
+remain fenced; missing native source scope is explicit repair.
+
 ## Regression evidence
+
+Post-review immutable validation of `43b5a61f`: **3,818 passed, 9 skipped** in
+533.18 seconds; dispatcher **166 passed, 17 subtests**;
+HTTP/SSRF security **14 passed**. Full provenance, skip reasons and separate
+check denominators are in the validation manifest.
 
 Exact results, timestamps, code provenance and synthetic growth measurements are
 in [the validation manifest](runtime-m1-validation.json). Package, dispatcher and
 security results are separate scopes; focused overlapping runs are not summed.
-Validated at **00:37 EAT on 23 October 2026** against the immutable runtime commit:
+Historical pre-review validation at **00:37 EAT on 23 October 2026** against `11bdab23`
+(the current post-review results are in the validation manifest):
 
 - Package: **3,798 passed, 9 skipped**, 504.09 seconds.
 - Dispatcher: **166 passed, 17 subtests passed**, 21.09 seconds.

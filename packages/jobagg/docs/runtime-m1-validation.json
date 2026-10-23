@@ -1,22 +1,29 @@
 {
-  "schema": "jobagg-m1-local-validation-1",
-  "observed_at_utc": "2026-10-22T21:37:01.014162+00:00",
-  "observed_at_eat": "2026-10-23T00:37:01.014162+03:00",
-  "status": "complete immediate M1 implementation candidate; not activated or accepted as restored production service",
+  "schema": "jobagg-m1-local-validation-2",
+  "observed_at_utc": "2026-10-23T05:22:47.359131+00:00",
+  "observed_at_eat": "2026-10-23T08:22:47.359131+03:00",
+  "status": "scoped corrective review complete; isolated draft candidate; no production activation",
   "provenance": {
     "branch": "codex/jobagg-m1-runtime",
-    "runtime_code_commit": "11bdab2340286cc724b5817f9c8d5996c6a63394",
+    "runtime_code_commit": "43b5a61f0eb5ed33c0ae10de697becbc6ec5bc28",
     "m0_commit": "30ea183c",
     "m0_baseline_unchanged": true,
     "m0_baseline_sha256": {
       "runtime-m0-baseline.json": "19e40338f0ab1400f69c262636f0ddd6a87430ce6ffc56d513453b963f06d952",
       "runtime-m0-baseline.md": "a99306f6738792a03b8a253b1644136d70dc7e96a6a4e5a6bc22923126f2a7b5"
     },
-    "module_count": 166,
-    "implementation_sha256": "a7c2a699bddfeb17ba17a01962ea5e16dbf8fdb05f4d42be1383fa7aa2d28e63",
-    "reviewed_successor_scope_sha256": "66a4a5330d9695297b955f35a1f53d2d4769e69b6af415d6118827efe26f47bb",
+    "module_count": 167,
+    "implementation_sha256": "4e4de5524c308a382d4a078a11c66311c2a180edcf7cadf0f945a897012ebfc7",
+    "reviewed_successor_scope_sha256": "7e81854d862822d7fee0389072e999df2917b884f4967d16c0d687c8c025ae5b",
     "scope_recipe": "sorted package Python path -> SHA256; successor scope substitutes only the declared successor seal literal; no package Python exclusions",
-    "post_code_commit_delta": "tests/documentation only; history fixture measurement labels clarified; runtime tree unchanged"
+    "post_code_commit_delta": "documentation only; runtime and tests identical to the immutable validated commit",
+    "base_commit": "25f278b5c274fd9cd342b5ad447fa84fbb7b0da9",
+    "reviewed_candidate_commit": "34052ea8",
+    "review_fix_commits": [
+      "efd709d9",
+      "b8895fb9",
+      "43b5a61f"
+    ]
   },
   "environment": {
     "python": "3.11.12 (main, May 22 2025, 01:39:08) [Clang 20.1.4 ]",
@@ -26,13 +33,13 @@
   "checks": {
     "package": {
       "cwd": "packages/jobagg",
-      "command": "python -m pytest tests -q --tb=short",
+      "command": "python -m pytest tests -q -rs --tb=short",
       "source": "immutable git archive of runtime_code_commit",
-      "passed": 3798,
+      "passed": 3818,
       "skipped": 9,
       "subtests_passed": 0,
-      "seconds": 504.09,
-      "log_sha256": "c23d6b8fa20712d6537cbc699d22ee6bb0d5bd9da39285be7d3050b417d0badf"
+      "seconds": 533.18,
+      "log_sha256": "0573e2014d748884a68949747b64b08b5275e7972a4073c6be36cc89516bd86f"
     },
     "dispatcher": {
       "cwd": ".",
@@ -41,8 +48,8 @@
       "passed": 166,
       "skipped": 0,
       "subtests_passed": 17,
-      "seconds": 21.09,
-      "log_sha256": "bde6af07238452d851f5f12768731616724a5d8173ea848689f49e58b4904ef4"
+      "seconds": 22.06,
+      "log_sha256": "18eac99d189cb2321aaf285eca74469624fa67d1b47cdc13ea7661fbba22c6df"
     },
     "http_ssrf_security": {
       "cwd": ".",
@@ -51,8 +58,8 @@
       "passed": 14,
       "skipped": 0,
       "subtests_passed": 0,
-      "seconds": 0.03,
-      "log_sha256": "33c930eade6286ef5ddd39f98dab7b7067892f96d99a96cffb302925675837f3"
+      "seconds": 0.02,
+      "log_sha256": "f7a3bec363ef6cea193d4cc7fa9ad2b56c5a7474291c49994461aa80347dc518"
     },
     "artifact_hygiene": {
       "command": "python -m pytest tests/test_repo_hygiene.py -q --tb=short",
@@ -62,11 +69,6 @@
       "new_python_modules_and_fixtures": "ruff check --no-cache: passed",
       "configured_jobagg_security_scope": "ruff check --select=S --ignore=S104: passed",
       "git_diff_check": "passed"
-    },
-    "focused_history_measurement": {
-      "passed": 1,
-      "seconds": 2.47,
-      "note": "post-code-commit correction of descriptive labels only; unchanged projection assertions; overlaps package scope"
     },
     "skip_reasons": [
       {
@@ -85,7 +87,28 @@
         "reason": "Private browser review and staged capture are not installed"
       }
     ],
-    "counting": "Separate scopes are not summed; focused groups overlap the package suite."
+    "counting": "Separate scopes are not summed; focused groups overlap the package suite.",
+    "focused_regression_scopes": [
+      "116 passed: native worker/publication/pre-intent/fences/clock/quota/budget scope before final reader/grouping adjustments",
+      "24 passed: explicit policy/report deadline and clock faults",
+      "79 passed: source health, retained listing, legacy verifier and worker budgets",
+      "162 passed: guarded transport, TLS/host recovery, report and retained content; groups overlap the full suite and are not added"
+    ],
+    "earlier_review_full_runs": [
+      {
+        "code_commit": "efd709d9",
+        "passed": 3811,
+        "failed": 2,
+        "skipped": 9
+      },
+      {
+        "code_commit": "b8895fb9",
+        "passed": 3812,
+        "failed": 2,
+        "skipped": 9
+      }
+    ],
+    "earlier_review_failures_resolution": "Both earlier full runs exposed direct legacy verifier calls with infinite local deadlines, affecting retained-metadata cases. 43b5a61f treats infinity as no added bound while retaining the finite ambient task/phase clock; final full run passes."
   },
   "history_growth": {
     "scope": "synthetic local storage; separate fresh SQLite connections on first/repeat projection passes; OS cache not flushed; no external-volume or production gate claim",
@@ -96,16 +119,16 @@
         "connection": "first_projection_pass",
         "sql_vm_instructions": 23447,
         "sql_statements": 56,
-        "seconds": 0.013127875001373468,
+        "seconds": 0.013673791996552609,
         "lineage_components": {
-          "sql_seconds": 0.0003326250007376075,
-          "artifact_metadata_seconds": 1.5166999219218269e-05,
-          "artifact_open_seconds": 5.866599894943647e-05,
-          "artifact_hash_read_seconds": 1.4125002053333446e-05,
-          "artifact_hash_cpu_seconds": 1.8330028979107738e-06,
-          "artifact_text_read_seconds": 3.691599704325199e-05,
-          "artifact_parse_seconds": 8.457998774247244e-06,
-          "proof_check_seconds": 2.4170003598555923e-06
+          "sql_seconds": 0.000341874998412095,
+          "artifact_metadata_seconds": 3.079199814237654e-05,
+          "artifact_open_seconds": 7.937500049592927e-05,
+          "artifact_hash_read_seconds": 9.375005902256817e-06,
+          "artifact_hash_cpu_seconds": 1.8749997252598405e-06,
+          "artifact_text_read_seconds": 4.141699901083484e-05,
+          "artifact_parse_seconds": 9.04199987417087e-06,
+          "proof_check_seconds": 2.6670022634789348e-06
         },
         "projection_bytes": 143360
       },
@@ -115,16 +138,16 @@
         "connection": "repeat_projection_pass",
         "sql_vm_instructions": 23447,
         "sql_statements": 56,
-        "seconds": 0.012783833000867162,
+        "seconds": 0.013242665998404846,
         "lineage_components": {
-          "sql_seconds": 0.0003087920013058465,
-          "artifact_metadata_seconds": 2.5082998035941273e-05,
-          "artifact_open_seconds": 6.204099918249995e-05,
-          "artifact_hash_read_seconds": 1.2958997103851289e-05,
-          "artifact_hash_cpu_seconds": 1.7909987946040928e-06,
-          "artifact_text_read_seconds": 4.141599856666289e-05,
-          "artifact_parse_seconds": 8.292001439258456e-06,
-          "proof_check_seconds": 2.5419976736884564e-06
+          "sql_seconds": 0.00033937500120373443,
+          "artifact_metadata_seconds": 2.295799640705809e-05,
+          "artifact_open_seconds": 5.874999624211341e-05,
+          "artifact_hash_read_seconds": 8.33300146041438e-06,
+          "artifact_hash_cpu_seconds": 5.7919969549402595e-06,
+          "artifact_text_read_seconds": 3.745799767784774e-05,
+          "artifact_parse_seconds": 8.83299799170345e-06,
+          "proof_check_seconds": 2.416003553662449e-06
         },
         "projection_bytes": 143360
       },
@@ -134,54 +157,54 @@
         "connection": "first_projection_pass",
         "sql_vm_instructions": 23449,
         "sql_statements": 56,
-        "seconds": 0.012862208001024555,
+        "seconds": 0.014724041997396853,
         "lineage_components": {
-          "sql_seconds": 0.00034270800097147003,
-          "artifact_metadata_seconds": 1.2916996638523415e-05,
-          "artifact_open_seconds": 3.795899829128757e-05,
-          "artifact_hash_read_seconds": 8.125003660097718e-06,
-          "artifact_hash_cpu_seconds": 1.8330028979107738e-06,
-          "artifact_text_read_seconds": 4.166699727647938e-05,
-          "artifact_parse_seconds": 8.333998266607523e-06,
+          "sql_seconds": 0.00037083300412632525,
+          "artifact_metadata_seconds": 3.287500294391066e-05,
+          "artifact_open_seconds": 7.070800347719342e-05,
+          "artifact_hash_read_seconds": 1.012500433716923e-05,
+          "artifact_hash_cpu_seconds": 1.8749997252598405e-06,
+          "artifact_text_read_seconds": 4.5833003241568804e-05,
+          "artifact_parse_seconds": 8.584000170230865e-06,
+          "proof_check_seconds": 2.749999111983925e-06
+        },
+        "projection_bytes": 143360
+      },
+      {
+        "history_versions": 1024,
+        "active_jobs": 1,
+        "connection": "repeat_projection_pass",
+        "sql_vm_instructions": 23449,
+        "sql_statements": 56,
+        "seconds": 0.013678083996637724,
+        "lineage_components": {
+          "sql_seconds": 0.0003348339960211888,
+          "artifact_metadata_seconds": 2.3083004634827375e-05,
+          "artifact_open_seconds": 5.662500188918784e-05,
+          "artifact_hash_read_seconds": 7.707996701356024e-06,
+          "artifact_hash_cpu_seconds": 1.624997821636498e-06,
+          "artifact_text_read_seconds": 3.9582999306730926e-05,
+          "artifact_parse_seconds": 8.04100272944197e-06,
           "proof_check_seconds": 2.291999408043921e-06
         },
         "projection_bytes": 143360
       },
       {
-        "history_versions": 1024,
-        "active_jobs": 1,
-        "connection": "repeat_projection_pass",
-        "sql_vm_instructions": 23449,
-        "sql_statements": 56,
-        "seconds": 0.012920500001200708,
-        "lineage_components": {
-          "sql_seconds": 0.0003190420029568486,
-          "artifact_metadata_seconds": 1.5041001461213455e-05,
-          "artifact_open_seconds": 3.929200101993047e-05,
-          "artifact_hash_read_seconds": 7.790997187839821e-06,
-          "artifact_hash_cpu_seconds": 1.7090023902710527e-06,
-          "artifact_text_read_seconds": 3.9375001506414264e-05,
-          "artifact_parse_seconds": 7.99999907030724e-06,
-          "proof_check_seconds": 2.292003046022728e-06
-        },
-        "projection_bytes": 143360
-      },
-      {
         "history_versions": 8192,
         "active_jobs": 1,
         "connection": "first_projection_pass",
         "sql_vm_instructions": 23449,
         "sql_statements": 56,
-        "seconds": 0.01279883299866924,
+        "seconds": 0.013596333999885246,
         "lineage_components": {
-          "sql_seconds": 0.00033995899866567925,
-          "artifact_metadata_seconds": 2.2000000171829015e-05,
-          "artifact_open_seconds": 5.887500083190389e-05,
-          "artifact_hash_read_seconds": 8.708000677870587e-06,
-          "artifact_hash_cpu_seconds": 1.8339997041039169e-06,
-          "artifact_text_read_seconds": 4.1541999962646514e-05,
-          "artifact_parse_seconds": 8.167000487446785e-06,
-          "proof_check_seconds": 2.3749998945277184e-06
+          "sql_seconds": 0.0003632910011219792,
+          "artifact_metadata_seconds": 2.729100378928706e-05,
+          "artifact_open_seconds": 6.612500146729872e-05,
+          "artifact_hash_read_seconds": 1.0291005310136825e-05,
+          "artifact_hash_cpu_seconds": 1.958003849722445e-06,
+          "artifact_text_read_seconds": 4.295800317777321e-05,
+          "artifact_parse_seconds": 8.333998266607523e-06,
+          "proof_check_seconds": 2.5000044843181968e-06
         },
         "projection_bytes": 143360
       },
@@ -191,23 +214,23 @@
         "connection": "repeat_projection_pass",
         "sql_vm_instructions": 23449,
         "sql_statements": 56,
-        "seconds": 0.012697624999418622,
+        "seconds": 0.012984250002773479,
         "lineage_components": {
-          "sql_seconds": 0.0003265409977757372,
-          "artifact_metadata_seconds": 2.308300099684857e-05,
-          "artifact_open_seconds": 4.979099685442634e-05,
-          "artifact_hash_read_seconds": 7.70800033933483e-06,
-          "artifact_hash_cpu_seconds": 1.7079983081202954e-06,
-          "artifact_text_read_seconds": 3.574999936972745e-05,
-          "artifact_parse_seconds": 8.125000022118911e-06,
-          "proof_check_seconds": 2.125001628883183e-06
+          "sql_seconds": 0.00034425000194460154,
+          "artifact_metadata_seconds": 2.4125001800712198e-05,
+          "artifact_open_seconds": 6.17500045336783e-05,
+          "artifact_hash_read_seconds": 1.13749920274131e-05,
+          "artifact_hash_cpu_seconds": 2.334003511350602e-06,
+          "artifact_text_read_seconds": 6.879199645482004e-05,
+          "artifact_parse_seconds": 1.1500000255182385e-05,
+          "proof_check_seconds": 1.091699959943071e-05
         },
         "projection_bytes": 143360
       }
     ]
   },
   "local_review": {
-    "mode": "implementation self-review and regression checks",
+    "mode": "complete-handover and R1–R8 scoped corrective pass by implementing agent",
     "independent_review_completed": false,
     "scope": [
       "atomic acceptance and original control retention",
@@ -216,7 +239,9 @@
       "dirty/CAS/no-op and exact selected evidence",
       "phase clocks, bounded continuation and export settlement",
       "recurrence/controller/observer reporting"
-    ]
+    ],
+    "review_document": "runtime-m1-review.md",
+    "actionable_findings_corrected": 7
   },
   "production": {
     "final_candidate_activated": false,
@@ -228,9 +253,10 @@
     "natural_a8_or_24h_observation_started": false,
     "initial_live_path_incident": "Five scheduled invocations held before dispatch on 2026-10-22 19:30-20:30 EAT; original files restored in c636e280 at 20:31:52 EAT. See runtime-m1-progress.md.",
     "restored_primary_files_readonly_reverified_sha256": {
-      "reports/jobagg-remediation-plan-2026-09-10/proposed_runner/runner.py": "c27dcd9856c53905d21722ce94db376e55b0af540f840ccf7ed6a521336ed306",
-      "reports/jobagg-remediation-plan-2026-09-10/proposed_runner/runner_observability.py": "bc0e2b718e24ea1bdfd217b080c3b07685a1b33ee31593fa2181e04a4c8a2f58"
-    }
+      "runner.py": "c27dcd9856c53905d21722ce94db376e55b0af540f840ccf7ed6a521336ed306",
+      "runner_observability.py": "bc0e2b718e24ea1bdfd217b080c3b07685a1b33ee31593fa2181e04a4c8a2f58"
+    },
+    "review_changed_primary_checkout": false
   },
   "remaining_release_gates": [
     "external-volume cold/warm history growth and nonempty/empty performance",
@@ -246,6 +272,52 @@
     "Local A8 fixture selected [1,1,2] through qualified history; this is not natural-cycle acceptance.",
     "Full repository/service security checks are not claimed. B2 atomic JSON checks require unavailable pydantic; bandit is unavailable in this local environment.",
     "No all-source completeness, external-volume capacity, production throughput or service-restoration claim.",
-    "Blocked kernel I/O and large indivisible parser calls rely on the supervisor; cooperative deadlines alone do not guarantee their interruption."
-  ]
+    "Blocked kernel I/O and large indivisible parser calls rely on the supervisor; cooperative deadlines alone do not guarantee their interruption.",
+    "Health reporting aggregates active pending headers under its deadline, emitting at most due/future classes per kind/host; no constant-CPU claim over arbitrary active backlog."
+  ],
+  "previous_pre_review_validation": {
+    "code_commit": "11bdab2340286cc724b5817f9c8d5996c6a63394",
+    "observed_at_eat": "2026-10-23T00:37:01.014162+03:00",
+    "package": {
+      "cwd": "packages/jobagg",
+      "command": "python -m pytest tests -q -rs --tb=short",
+      "source": "immutable git archive of runtime_code_commit",
+      "passed": 3818,
+      "skipped": 9,
+      "subtests_passed": 0,
+      "seconds": 533.18,
+      "log_sha256": "0573e2014d748884a68949747b64b08b5275e7972a4073c6be36cc89516bd86f"
+    },
+    "dispatcher": {
+      "cwd": ".",
+      "command": "python -m pytest reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests -q --tb=short",
+      "source": "same immutable git archive; separate process",
+      "passed": 166,
+      "skipped": 0,
+      "subtests_passed": 17,
+      "seconds": 22.06,
+      "log_sha256": "18eac99d189cb2321aaf285eca74469624fa67d1b47cdc13ea7661fbba22c6df"
+    },
+    "http_ssrf_security": {
+      "cwd": ".",
+      "command": "python -m pytest tests/security/test_B3_http_safe_ssrf.py -q --tb=short",
+      "source": "same immutable git archive",
+      "passed": 14,
+      "skipped": 0,
+      "subtests_passed": 0,
+      "seconds": 0.02,
+      "log_sha256": "f7a3bec363ef6cea193d4cc7fa9ad2b56c5a7474291c49994461aa80347dc518"
+    }
+  },
+  "native_preparation_versions": {
+    "publication_fence": "publication-revision-2",
+    "policy_authority": "jobagg-policy-authority-3",
+    "policy_import": "jobagg-policy-import-4",
+    "runtime_authority": "jobagg-runtime-authority-3",
+    "publication_work": "publication-work-3",
+    "projection": "publication-projection-5",
+    "activation": "none; older pre-release native versions require explicit compatible preparation"
+  },
+  "compatibility_delivery": "SQL charge/finish plus versioned JSON delivery queue in one transaction. Explicit finite row/byte/time export to authority_exports; original legacy files/index fence retained. Delivery acknowledgement is not legacy admission/rollback authorization.",
+  "clock_contract": "Darwin CLOCK_MONOTONIC_RAW / Linux CLOCK_BOOTTIME; host/boot/provider validated; original UTC/monotonic guards retained; entry/worker/work/projection/publisher/recovery and waits inherit the earlier absolute bound. Identical sealed bootstrap clock copy is required beside runner/supervisor."
 }
