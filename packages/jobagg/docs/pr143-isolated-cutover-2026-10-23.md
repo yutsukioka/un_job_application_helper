@@ -5,6 +5,11 @@ its original revert was reversed without rewriting branch history, and the
 previous bootstrap follow-up was merged. The candidate remains a draft.
 **Production is fenced and inactive; deployment readiness remains false.**
 
+The later [historical resolution increment](pr143-historical-resolution-2026-10-23.md)
+updates the historical counts, package seal and backup-device bindings below.
+The following sections preserve the earlier observation rather than certify the
+later candidate.
+
 ## Committed candidate and preservation
 
 Runtime/preparation changes are commit `b3171bc9935e7b6a99ba9e66581bb3e8ba4ce0b7`.

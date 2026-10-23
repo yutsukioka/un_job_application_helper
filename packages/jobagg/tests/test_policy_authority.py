@@ -374,3 +374,22 @@ def test_policy_report_reader_and_explicit_json_delivery_obey_ambient_budget(nat
         with pytest.raises(TimeoutError, match="policy_runtime_budget"):
             authority.revision()
     assert authority.revision() == revision
+
+
+@pytest.mark.parametrize('parameter,value', [
+    ('maximum_lag_seconds', float('nan')), ('maximum_lag_seconds', float('inf')),
+    ('maximum_lag_seconds', True), ('maximum_lag_seconds', -1),
+    ('maximum_lag_seconds', None), ('now', float('nan')), ('now', float('inf')),
+    ('now', True), ('now', -1), ('now', None),
+])
+def test_audit_requires_finite_reviewable_clock_and_lag_without_mutation(native, parameter, value):
+    policy, owner = native
+    authority = activate(policy, owner)
+    authority.owner_fd = owner.fileno()
+    before = authority.head.read_bytes()
+    kwargs = dict(limit=1, now=time.time(), maximum_lag_seconds=100)
+    kwargs[parameter] = value
+    with pytest.raises(ValueError, match='finite_policy_audit_contract_required'):
+        authority.audit(**kwargs)
+    assert authority.head.read_bytes() == before
+    assert authority.revision() == 0

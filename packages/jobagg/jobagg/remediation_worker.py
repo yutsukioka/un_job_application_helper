@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "140d2affb11c76e5b9318330f45750aa702bc45d0044c788bdf571fc944fdf1b"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "e729cac668067722f748bad956b8fb51e94782686d2cf22fb5fa44c3917b08a4"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})

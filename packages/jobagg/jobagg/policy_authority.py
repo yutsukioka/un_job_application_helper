@@ -299,7 +299,10 @@ class PolicyAuthority:
         Quota rows are retained even when evidence is damaged. Failed or overdue
         audit prevents admission; it never empties the source's charge history.
         """
-        if type(limit) is not int or limit <= 0 or maximum_lag_seconds <= 0:
+        if (type(limit) is not int or limit <= 0
+                or type(maximum_lag_seconds) not in (int, float)
+                or not math.isfinite(maximum_lag_seconds) or maximum_lag_seconds <= 0
+                or type(now) not in (int, float) or not math.isfinite(now) or now < 0):
             raise ValueError("finite_policy_audit_contract_required")
         # Overdue admission is a read-only hold, not an uncertain write. An
         # explicitly invoked catch-up still checks finite pages and retains all

@@ -2,7 +2,9 @@
 
 Normal ticks consult one indexed unresolved reference, never enumerate run or
 completed-generation history. Uncertain claims/generations remain durable repair
-work. Only exact accepted/publication/export reconciliation can close a record.
+work. Only exact accepted/publication/export reconciliation can certify worker completion.
+An exact wrapper duplicate may separately become a preserved reference; its
+indexed worker remains independently gated.
 This preparation API neither deploys code nor performs publication or requests.
 """
 
@@ -676,3 +678,179 @@ def close_reconciled(
         (json.dumps(proof, sort_keys=True), run_id),
     )
     return reconciliation
+
+
+def reconcile_wrapper_reference(
+    conn, run_id, *, expected_inventory_sha256, owner_fd, owner_path, deadline_at
+):
+    """Resolve only an exact diagnostic duplicate of an indexed worker outcome.
+
+    This is explicit owner-held reconciliation, never a tick-time history scan.
+    It neither approves that worker nor certifies acceptance/publication. Its
+    independently indexed worker keeps its original disposition and proof.
+    Wrappers with extra actions (including retention) cannot use this path.
+    """
+    owner(owner_fd, owner_path)
+    imported = receipt(conn)
+    if imported["inventory_sha256"] != expected_inventory_sha256:
+        raise ValueError("wrapper_reference_inventory_changed")
+    row = conn.execute(
+        "SELECT control_root,disposition,proof_json FROM jobagg_legacy_controls WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
+    if row is None or row[1] not in {"repair_required", "reference_preserved"}:
+        raise ValueError("wrapper_reference_requires_held_auxiliary")
+    root, proof = Path(row[0]), json.loads(row[2])
+    paths = {**proof.get("unverified_controls", {}), **proof.get("controls", {})}
+    if proof.get("kind") != "held_control_set" or set(paths) != {
+        str(root / "intent.json"), str(root / "outcome.json")
+    }:
+        raise ValueError("wrapper_reference_exact_two_controls_required")
+    values, verified = {}, {}
+    for name in ("intent.json", "outcome.json"):
+        path = root / name
+        dependency = conn.execute(
+            "SELECT run_id,sha256,identity_json FROM jobagg_legacy_dependencies WHERE path=?",
+            (str(path),),
+        ).fetchone()
+        value, record = _json_document(path, deadline_at=deadline_at)
+        info = path.stat()
+        identity = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        if (
+            dependency is None
+            or dependency[0] != run_id
+            or json.loads(dependency[2]) != identity
+            or (dependency[1] is not None and dependency[1] != record["sha256"])
+            or (str(path) in proof.get("controls", {})
+                and proof["controls"][str(path)] != record["sha256"])
+        ):
+            raise ValueError("wrapper_reference_original_control_changed")
+        values[name], verified[str(path)] = value, record["sha256"]
+    intent, outcome = values["intent.json"], values["outcome.json"]
+    result = outcome.get("result")
+    if (
+        set(intent) != {"schema_version", "attempt_id", "status", "started_at", "pid", "config"}
+        or set(outcome) != set(intent) | {"finished_at", "result"}
+        or intent.get("schema_version") != 1
+        or outcome.get("schema_version") != 1
+        or intent.get("status") != "started"
+        or not isinstance(result, dict)
+        or not result.get("run_id")
+        or intent.get("attempt_id") != root.name
+        or any(outcome.get(k) != intent.get(k) for k in
+               ("attempt_id", "started_at", "pid", "config"))
+        or type(intent.get("pid")) is not int
+        or result.get("wrapper_pid") != intent["pid"]
+        or outcome.get("status") != result.get("status")
+    ):
+        raise ValueError("wrapper_reference_binding_invalid")
+    child = conn.execute(
+        "SELECT control_root,proof_json FROM jobagg_legacy_controls WHERE run_id=?",
+        (result["run_id"],),
+    ).fetchone()
+    if child is None:
+        raise ValueError("wrapper_reference_worker_not_indexed")
+    child_root, child_proof = Path(child[0]), json.loads(child[1])
+    if (
+        child_proof.get("kind") != "worker_run"
+        or result.get("run_dir") != str(child_root)
+        or result.get("request_path") != str(child_root / "request.json")
+        or result.get("report_path") != str(child_root / "acceptance.json")
+    ):
+        raise ValueError("wrapper_reference_worker_scope_differs")
+    child_path = child_root / "outcome.json"
+    child_value, child_record = _json_document(child_path, deadline_at=deadline_at)
+    if (
+        child_proof.get("controls", {}).get(str(child_path)) != child_record["sha256"]
+        or child_value != result
+    ):
+        raise ValueError("wrapper_reference_worker_outcome_differs")
+    try:
+        times = [datetime.fromisoformat(v) for v in (
+            intent["started_at"], result["started_at"], result["finished_at"], outcome["finished_at"]
+        )]
+        if any(t.tzinfo is None for t in times) or times != sorted(times):
+            raise ValueError("invalid wrapper chronology")
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("wrapper_reference_chronology_invalid") from error
+    process = _processes_absent(
+        {**result, "wrapper_pid": intent["pid"], "finished_at": outcome["finished_at"]},
+        deadline_at=deadline_at,
+    )
+    verified[str(child_path)] = child_record["sha256"]
+    for path, sha in verified.items():
+        if stable_file(Path(path), deadline_at=deadline_at)["sha256"] != sha:
+            raise ValueError("wrapper_reference_changed_before_checkpoint")
+    reference = {
+        "schema": "legacy-wrapper-reference-1",
+        "inventory_sha256": expected_inventory_sha256,
+        "worker_run_id": result["run_id"],
+        "worker_outcome_sha256": child_record["sha256"],
+        "wrapper_controls": {k: v for k, v in verified.items() if k != str(child_path)},
+        "certifies_acceptance_or_publication": False,
+    }
+    if row[1] == "reference_preserved":
+        if proof.get("wrapper_reference") != reference:
+            raise ValueError("wrapper_reference_prior_resolution_changed")
+        return reference
+    proof["wrapper_reference"] = reference
+    proof["wrapper_process_reconciliation"] = process
+    for path, sha in reference["wrapper_controls"].items():
+        conn.execute("UPDATE jobagg_legacy_dependencies SET sha256=? WHERE path=?", (sha, path))
+    conn.execute(
+        "UPDATE jobagg_legacy_controls SET disposition='reference_preserved',proof_json=?,repair_reason=NULL WHERE run_id=?",
+        (json.dumps(proof, sort_keys=True), run_id),
+    )
+    return reference
+
+
+def review_accepted_exit(
+    conn, run_id, *, reviewed_implementations, review_sha256,
+    expected_inventory_sha256, owner_fd, owner_path, deadline_at
+):
+    """Resolve only an implementation hold using an explicit historical review.
+
+    Source provenance is reviewed off-line by the operator. Original controls
+    and successful exact task identities are reverified here. This API does not
+    close publication, an old-owner hold, a missing interval or a contradiction.
+    """
+    owner(owner_fd, owner_path)
+    if receipt(conn)['inventory_sha256'] != expected_inventory_sha256:
+        raise ValueError('accepted_review_inventory_changed')
+    if (not isinstance(review_sha256, str) or len(review_sha256) != 64
+            or any(c not in '0123456789abcdef' for c in review_sha256)):
+        raise ValueError('accepted_review_receipt_required')
+    row = conn.execute(
+        'SELECT control_root,disposition,proof_json FROM jobagg_legacy_controls WHERE run_id=?',
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError('accepted_review_run_unknown')
+    proof = json.loads(row[2])
+    if (row[1] != 'repair_required' or proof.get('kind') != 'worker_run'
+            or proof.get('acceptance_hold') != ['accepted_exit_implementation_review_required']
+            or proof.get('publication_review_hold') or proof.get('publication_contradiction_review_hold')):
+        raise ValueError('accepted_review_requires_only_implementation_hold')
+    for name, expected in proof['controls'].items():
+        if stable_file(Path(name), deadline_at=deadline_at)['sha256'] != expected:
+            raise ValueError('accepted_review_original_controls_changed')
+    publication = proof.get('publication', {}).get('disposition')
+    if publication == 'terminal':
+        disposition, reason = 'publication_reconciliation_required', 'exact_accepted_identity_and_current_exports_required'
+    elif publication == 'unresolved':
+        disposition, reason = 'generation_pending', 'exact_existing_generation_recovery_required'
+    elif publication is None:
+        disposition, reason = 'accepted_pending', 'accepted_work_has_no_publication_intent'
+    else:
+        raise ValueError('accepted_review_publication_class_unknown')
+    from jobagg.acceptance_catalog import import_run
+
+    accepted = import_run(conn, Path(row[0]), owner_fd=owner_fd, owner_path=owner_path,
+                          reviewed_implementations=reviewed_implementations, deadline_at=deadline_at)
+    proof['accepted_exit_sha256'] = accepted['sha256']
+    proof['acceptance_review'] = {'review_sha256': review_sha256,
+                                'original_hold': proof.pop('acceptance_hold'),
+                                'implementation_sha256': accepted['implementation_sha256']}
+    conn.execute('UPDATE jobagg_legacy_controls SET disposition=?,proof_json=?,repair_reason=? WHERE run_id=?',
+                 (disposition, json.dumps(proof, sort_keys=True), reason, run_id))
+    return {'run_id': run_id, 'disposition': disposition, 'accepted_exit_sha256': accepted['sha256']}
