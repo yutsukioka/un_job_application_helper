@@ -173,7 +173,9 @@ def retention_helper(config):
 def package_helper(config, name):
     """Import new shared contracts from the selected, reviewed worker package."""
     package = bind_package(config["worker_cwd"])
-    path = package / (name + ".py")
+    require(isinstance(name, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", name),
+            "Invalid reviewed package helper name")
+    path = package.joinpath(*name.split(".")).with_suffix(".py")
     require(path.is_file() and path.resolve().is_relative_to(package),
             "Reviewed package helper is missing: " + name)
     module = importlib.import_module("jobagg." + name)
