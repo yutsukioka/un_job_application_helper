@@ -1,11 +1,11 @@
 {
-  "schema": "jobagg-m1-local-validation-2",
-  "observed_at_utc": "2026-10-23T05:22:47.359131+00:00",
-  "observed_at_eat": "2026-10-23T08:22:47.359131+03:00",
-  "status": "scoped corrective review complete; isolated draft candidate; no production activation",
+  "schema": "jobagg-m1-local-validation-3",
+  "observed_at_utc": "2026-10-23T06:43:27.490234+00:00",
+  "observed_at_eat": "2026-10-23T09:43:27.490234+03:00",
+  "status": "PR #142 CI/review corrections validated locally; isolated candidate; no production activation",
   "provenance": {
     "branch": "codex/jobagg-m1-runtime",
-    "runtime_code_commit": "43b5a61f0eb5ed33c0ae10de697becbc6ec5bc28",
+    "runtime_code_commit": "efc7dce93388e1cf8f39a9521c2114bda7beff41",
     "m0_commit": "30ea183c",
     "m0_baseline_unchanged": true,
     "m0_baseline_sha256": {
@@ -13,8 +13,8 @@
       "runtime-m0-baseline.md": "a99306f6738792a03b8a253b1644136d70dc7e96a6a4e5a6bc22923126f2a7b5"
     },
     "module_count": 167,
-    "implementation_sha256": "4e4de5524c308a382d4a078a11c66311c2a180edcf7cadf0f945a897012ebfc7",
-    "reviewed_successor_scope_sha256": "7e81854d862822d7fee0389072e999df2917b884f4967d16c0d687c8c025ae5b",
+    "implementation_sha256": "3616569f42bcbb957f3bb802946fe5b3733fd19443b170981f75396faa0286c7",
+    "reviewed_successor_scope_sha256": "f7ddc51178e8d4ca8b825e8091117b122a668fe649ac86f883962d318c8f1824",
     "scope_recipe": "sorted package Python path -> SHA256; successor scope substitutes only the declared successor seal literal; no package Python exclusions",
     "post_code_commit_delta": "documentation only; runtime and tests identical to the immutable validated commit",
     "base_commit": "25f278b5c274fd9cd342b5ad447fa84fbb7b0da9",
@@ -22,52 +22,76 @@
     "review_fix_commits": [
       "efd709d9",
       "b8895fb9",
-      "43b5a61f"
-    ]
+      "43b5a61f",
+      "efc7dce9"
+    ],
+    "pyproject_sha256": "9ccfb1f8bc9e1d1cc619dbacbfe80825d9fdae8faade4895f1044fd5989861c5"
   },
   "environment": {
     "python": "3.11.12 (main, May 22 2025, 01:39:08) [Clang 20.1.4 ]",
     "sqlite": "3.47.1",
-    "storage": "local synthetic temporary roots; no production/external-volume writes"
+    "storage": "local synthetic temporary roots; no production/external-volume writes",
+    "package": "read-only test interpreter with candidate package pythonpath and dedicated temporary root",
+    "repository_api_security": "disposable /private/tmp virtual environment with candidate editable packages and workflow test dependencies",
+    "ci": "Linux/Python 3.12 rerun pending push; no CI success claim"
   },
   "checks": {
     "package": {
+      "passed": 3825,
+      "seconds": 538.88,
+      "source": "isolated candidate code/test tree committed as efc7dce9; no code changes during final validation",
+      "log_sha256": "e93cb34e56147abcd209e8acbd58e6fa69f135536a9dcd4aa41cd75ce613074f",
       "cwd": "packages/jobagg",
       "command": "python -m pytest tests -q -rs --tb=short",
-      "source": "immutable git archive of runtime_code_commit",
-      "passed": 3818,
       "skipped": 9,
-      "subtests_passed": 0,
-      "seconds": 533.18,
-      "log_sha256": "0573e2014d748884a68949747b64b08b5275e7972a4073c6be36cc89516bd86f"
+      "subtests_passed": 0
     },
-    "dispatcher": {
+    "repository": {
+      "passed": 570,
+      "seconds": 49.79,
+      "source": "isolated candidate code/test tree committed as efc7dce9; no code changes during final validation",
+      "log_sha256": "214685f13e1c717a2e8059eed432671fa1a65863aa8de196497ed5b9c69f1f58",
       "cwd": ".",
-      "command": "python -m pytest reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests -q --tb=short",
-      "source": "same immutable git archive; separate process",
-      "passed": 166,
-      "skipped": 0,
-      "subtests_passed": 17,
-      "seconds": 22.06,
-      "log_sha256": "18eac99d189cb2321aaf285eca74469624fa67d1b47cdc13ea7661fbba22c6df"
+      "command": "python -m pytest tests -q --tb=short",
+      "skipped": 3,
+      "subtests_passed": 12
     },
-    "http_ssrf_security": {
+    "api_dispatcher": {
+      "passed": 200,
+      "seconds": 24.98,
+      "source": "isolated candidate code/test tree committed as efc7dce9; no code changes during final validation",
+      "log_sha256": "e59bf6b83e0e05c195e9712a5562effcce4e1e3267510c120b6ef7857271a023",
       "cwd": ".",
-      "command": "python -m pytest tests/security/test_B3_http_safe_ssrf.py -q --tb=short",
-      "source": "same immutable git archive",
-      "passed": 14,
+      "command": "python -m pytest services/job-api/tests reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests -q --tb=short",
       "skipped": 0,
-      "subtests_passed": 0,
-      "seconds": 0.02,
-      "log_sha256": "f7a3bec363ef6cea193d4cc7fa9ad2b56c5a7474291c49994461aa80347dc518"
+      "subtests_passed": 17
     },
-    "artifact_hygiene": {
-      "command": "python -m pytest tests/test_repo_hygiene.py -q --tb=short",
-      "passed": 1
+    "security": {
+      "passed": 123,
+      "seconds": 3.11,
+      "source": "isolated candidate code/test tree committed as efc7dce9; no code changes during final validation",
+      "log_sha256": "300eac3c07c09652378fb14d2abf0c6df971ef28b7876df119a16a6bf1075056",
+      "cwd": ".",
+      "command": "python -m pytest -m security -q --tb=short",
+      "skipped": 2,
+      "deselected": 448
+    },
+    "retention_smoke": {
+      "scenarios": 7,
+      "subprocess_sessions": 35,
+      "result": "passed; includes 14 deliberate failing sessions for evidence retention; 5 actual CI config selections and 2 default configs",
+      "log_sha256": "f8337b8ca4c94f4ccb30c0fbe6b3cfad6cba3b40e99fab1f37ea003633eb0f4b"
+    },
+    "vaultsync_before_runtime_review_fixes": {
+      "passed": 730,
+      "skipped": 2,
+      "seconds": 45.44,
+      "scope": "retention-only change before runtime corrections; not a final-tree VaultSync rerun",
+      "log_sha256": "8e756afa8464229a2d150b59745b1abd151278e0664a6177e851d6b9072421fa"
     },
     "lint": {
-      "new_python_modules_and_fixtures": "ruff check --no-cache: passed",
-      "configured_jobagg_security_scope": "ruff check --select=S --ignore=S104: passed",
+      "changed_python_files": "ruff check --no-cache: passed",
+      "configuration": "CI YAML, package TOML and root pytest config parse and agree",
       "git_diff_check": "passed"
     },
     "skip_reasons": [
@@ -87,31 +111,10 @@
         "reason": "Private browser review and staged capture are not installed"
       }
     ],
-    "counting": "Separate scopes are not summed; focused groups overlap the package suite.",
-    "focused_regression_scopes": [
-      "116 passed: native worker/publication/pre-intent/fences/clock/quota/budget scope before final reader/grouping adjustments",
-      "24 passed: explicit policy/report deadline and clock faults",
-      "79 passed: source health, retained listing, legacy verifier and worker budgets",
-      "162 passed: guarded transport, TLS/host recovery, report and retained content; groups overlap the full suite and are not added"
-    ],
-    "earlier_review_full_runs": [
-      {
-        "code_commit": "efd709d9",
-        "passed": 3811,
-        "failed": 2,
-        "skipped": 9
-      },
-      {
-        "code_commit": "b8895fb9",
-        "passed": 3812,
-        "failed": 2,
-        "skipped": 9
-      }
-    ],
-    "earlier_review_failures_resolution": "Both earlier full runs exposed direct legacy verifier calls with infinite local deadlines, affecting retained-metadata cases. 43b5a61f treats infinity as no added bound while retaining the finite ambient task/phase clock; final full run passes."
+    "counting": "Do not sum scopes: security overlaps repository; focused review regressions overlap full package; API/dispatcher includes the dispatcher group."
   },
   "history_growth": {
-    "scope": "synthetic local storage; separate fresh SQLite connections on first/repeat projection passes; OS cache not flushed; no external-volume or production gate claim",
+    "scope": "Historical samples from the preceding reviewed runtime; not a new performance measurement of efc7dce9. synthetic local storage; separate fresh SQLite connections on first/repeat projection passes; OS cache not flushed; no external-volume or production gate claim",
     "samples": [
       {
         "history_versions": 0,
@@ -227,7 +230,8 @@
         },
         "projection_bytes": 143360
       }
-    ]
+    ],
+    "runtime_code_commit": "43b5a61f0eb5ed33c0ae10de697becbc6ec5bc28"
   },
   "local_review": {
     "mode": "complete-handover and R1–R8 scoped corrective pass by implementing agent",
@@ -241,7 +245,13 @@
       "recurrence/controller/observer reporting"
     ],
     "review_document": "runtime-m1-review.md",
-    "actionable_findings_corrected": 7
+    "actionable_findings_corrected": 10,
+    "pr142_followup_document": "runtime-m1-ci-repair.md",
+    "additional_findings_corrected": [
+      "P1 capped/unvisited units acknowledged without publication",
+      "P2 listing rejection matched null job keys across sources/health",
+      "P1 repeated count-only enumeration summary collided across accepted frame occurrences"
+    ]
   },
   "production": {
     "final_candidate_activated": false,
@@ -270,10 +280,10 @@
   "limitations": [
     "Synthetic first/repeat projection passes each use a fresh SQLite connection; OS cache was not flushed.",
     "Local A8 fixture selected [1,1,2] through qualified history; this is not natural-cycle acceptance.",
-    "Full repository/service security checks are not claimed. B2 atomic JSON checks require unavailable pydantic; bandit is unavailable in this local environment.",
     "No all-source completeness, external-volume capacity, production throughput or service-restoration claim.",
     "Blocked kernel I/O and large indivisible parser calls rely on the supervisor; cooperative deadlines alone do not guarantee their interruption.",
-    "Health reporting aggregates active pending headers under its deadline, emitting at most due/future classes per kind/host; no constant-CPU claim over arbitrary active backlog."
+    "Health reporting aggregates active pending headers under its deadline, emitting at most due/future classes per kind/host; no constant-CPU claim over arbitrary active backlog.",
+    "Repository/API/security test suites passed locally in a disposable environment. Linux CI, dependency vulnerability auditing and Bandit have not been revalidated by this local record."
   ],
   "previous_pre_review_validation": {
     "code_commit": "11bdab2340286cc724b5817f9c8d5996c6a63394",
@@ -316,8 +326,138 @@
     "runtime_authority": "jobagg-runtime-authority-3",
     "publication_work": "publication-work-3",
     "projection": "publication-projection-5",
-    "activation": "none; older pre-release native versions require explicit compatible preparation"
+    "activation": "none; earlier pre-release native schemas/events require explicit compatible head/dirty/contract preparation",
+    "accepted_listing_head": "explicitly prepared remediation_sources.listing_event_version; exact immutable event/frame identity; older native events require reviewed reconciliation",
+    "publication_acknowledgement": "explicit processed unit/version evidence; old results without it retain pending work"
   },
   "compatibility_delivery": "SQL charge/finish plus versioned JSON delivery queue in one transaction. Explicit finite row/byte/time export to authority_exports; original legacy files/index fence retained. Delivery acknowledgement is not legacy admission/rollback authorization.",
-  "clock_contract": "Darwin CLOCK_MONOTONIC_RAW / Linux CLOCK_BOOTTIME; host/boot/provider validated; original UTC/monotonic guards retained; entry/worker/work/projection/publisher/recovery and waits inherit the earlier absolute bound. Identical sealed bootstrap clock copy is required beside runner/supervisor."
+  "clock_contract": "Darwin CLOCK_MONOTONIC_RAW / Linux CLOCK_BOOTTIME; host/boot/provider validated; original UTC/monotonic guards retained; entry/worker/work/projection/publisher/recovery and waits inherit the earlier absolute bound. Identical sealed bootstrap clock copy is required beside runner/supervisor.",
+  "previous_pr142_validation": {
+    "observed_at_utc": "2026-10-23T05:22:47.359131+00:00",
+    "observed_at_eat": "2026-10-23T08:22:47.359131+03:00",
+    "status": "scoped corrective review complete; isolated draft candidate; no production activation",
+    "provenance": {
+      "branch": "codex/jobagg-m1-runtime",
+      "runtime_code_commit": "43b5a61f0eb5ed33c0ae10de697becbc6ec5bc28",
+      "m0_commit": "30ea183c",
+      "m0_baseline_unchanged": true,
+      "m0_baseline_sha256": {
+        "runtime-m0-baseline.json": "19e40338f0ab1400f69c262636f0ddd6a87430ce6ffc56d513453b963f06d952",
+        "runtime-m0-baseline.md": "a99306f6738792a03b8a253b1644136d70dc7e96a6a4e5a6bc22923126f2a7b5"
+      },
+      "module_count": 167,
+      "implementation_sha256": "4e4de5524c308a382d4a078a11c66311c2a180edcf7cadf0f945a897012ebfc7",
+      "reviewed_successor_scope_sha256": "7e81854d862822d7fee0389072e999df2917b884f4967d16c0d687c8c025ae5b",
+      "scope_recipe": "sorted package Python path -> SHA256; successor scope substitutes only the declared successor seal literal; no package Python exclusions",
+      "post_code_commit_delta": "documentation only; runtime and tests identical to the immutable validated commit",
+      "base_commit": "25f278b5c274fd9cd342b5ad447fa84fbb7b0da9",
+      "reviewed_candidate_commit": "34052ea8",
+      "review_fix_commits": [
+        "efd709d9",
+        "b8895fb9",
+        "43b5a61f"
+      ]
+    },
+    "checks": {
+      "package": {
+        "cwd": "packages/jobagg",
+        "command": "python -m pytest tests -q -rs --tb=short",
+        "source": "immutable git archive of runtime_code_commit",
+        "passed": 3818,
+        "skipped": 9,
+        "subtests_passed": 0,
+        "seconds": 533.18,
+        "log_sha256": "0573e2014d748884a68949747b64b08b5275e7972a4073c6be36cc89516bd86f"
+      },
+      "dispatcher": {
+        "cwd": ".",
+        "command": "python -m pytest reports/jobagg-remediation-plan-2026-09-10/proposed_runner/tests -q --tb=short",
+        "source": "same immutable git archive; separate process",
+        "passed": 166,
+        "skipped": 0,
+        "subtests_passed": 17,
+        "seconds": 22.06,
+        "log_sha256": "18eac99d189cb2321aaf285eca74469624fa67d1b47cdc13ea7661fbba22c6df"
+      },
+      "http_ssrf_security": {
+        "cwd": ".",
+        "command": "python -m pytest tests/security/test_B3_http_safe_ssrf.py -q --tb=short",
+        "source": "same immutable git archive",
+        "passed": 14,
+        "skipped": 0,
+        "subtests_passed": 0,
+        "seconds": 0.02,
+        "log_sha256": "f7a3bec363ef6cea193d4cc7fa9ad2b56c5a7474291c49994461aa80347dc518"
+      },
+      "artifact_hygiene": {
+        "command": "python -m pytest tests/test_repo_hygiene.py -q --tb=short",
+        "passed": 1
+      },
+      "lint": {
+        "new_python_modules_and_fixtures": "ruff check --no-cache: passed",
+        "configured_jobagg_security_scope": "ruff check --select=S --ignore=S104: passed",
+        "git_diff_check": "passed"
+      },
+      "skip_reasons": [
+        {
+          "count": 1,
+          "fixture": "tests/test_classification.py:2124",
+          "reason": "full CCOG markdown resource is local/ignored"
+        },
+        {
+          "count": 1,
+          "fixture": "tests/test_inline_description_repair.py:80",
+          "reason": "Private original audit capture is not installed"
+        },
+        {
+          "count": 7,
+          "fixture": "tests/test_inline_description_repair.py:97",
+          "reason": "Private browser review and staged capture are not installed"
+        }
+      ],
+      "counting": "Separate scopes are not summed; focused groups overlap the package suite.",
+      "focused_regression_scopes": [
+        "116 passed: native worker/publication/pre-intent/fences/clock/quota/budget scope before final reader/grouping adjustments",
+        "24 passed: explicit policy/report deadline and clock faults",
+        "79 passed: source health, retained listing, legacy verifier and worker budgets",
+        "162 passed: guarded transport, TLS/host recovery, report and retained content; groups overlap the full suite and are not added"
+      ],
+      "earlier_review_full_runs": [
+        {
+          "code_commit": "efd709d9",
+          "passed": 3811,
+          "failed": 2,
+          "skipped": 9
+        },
+        {
+          "code_commit": "b8895fb9",
+          "passed": 3812,
+          "failed": 2,
+          "skipped": 9
+        }
+      ],
+      "earlier_review_failures_resolution": "Both earlier full runs exposed direct legacy verifier calls with infinite local deadlines, affecting retained-metadata cases. 43b5a61f treats infinity as no added bound while retaining the finite ambient task/phase clock; final full run passes."
+    },
+    "local_review": {
+      "mode": "complete-handover and R1–R8 scoped corrective pass by implementing agent",
+      "independent_review_completed": false,
+      "scope": [
+        "atomic acceptance and original control retention",
+        "single quota authority, all-writer migration and old-writer exclusion",
+        "source/destination owner and restore fencing",
+        "dirty/CAS/no-op and exact selected evidence",
+        "phase clocks, bounded continuation and export settlement",
+        "recurrence/controller/observer reporting"
+      ],
+      "review_document": "runtime-m1-review.md",
+      "actionable_findings_corrected": 7
+    }
+  },
+  "ci_followup": {
+    "failed_head": "0542ec8f7765c63f96d9fd13d64ac54b19318451",
+    "failed_job_url": "https://github.com/yutsukioka/un_job_application_helper/actions/runs/39905511998/job/120256434989",
+    "observed_failure": "disk quota exceeded in root tests, dependency audit and separate security rerun; returned CI log is truncated",
+    "repair": "failed-only temporary-fixture retention, count 1, in root/JobAgg defaults and CI job-wide PYTEST_ADDOPTS",
+    "new_head_ci": "pending push/rerun; do not infer success from local tests"
+  }
 }

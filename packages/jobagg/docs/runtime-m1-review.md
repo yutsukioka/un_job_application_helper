@@ -202,3 +202,13 @@ M4 requires separately approved final reconciliation, owner/fence handoff,
 coherent rollback/roll-forward evidence, three successful natural cycles with
 actual qualified overlap/downshift and the authorized 24-hour observation.
 No observation window, cutover, compression/retirement or relocation was started.
+
+
+## PR #142 CI and automated-review follow-up
+
+The later [CI and review correction record](runtime-m1-ci-repair.md) documents
+the runner quota failure, failed-only test retention, three actionable automated
+review findings and their regressions, exact complete-tree reseal and validation.
+It supersedes the implementation fingerprint and validation scope only where
+explicitly stated; the earlier seven-finding review remains historical evidence.
+No production activation or data change is included.
