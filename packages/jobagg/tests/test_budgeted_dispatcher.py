@@ -22,7 +22,7 @@ SPEC.loader.exec_module(runner)
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
     config = config_fixture(tmp_path)
-    config.update(timeout_seconds=5, total_timeout_seconds=15, publication_timeout_seconds=5,
+    config.update(runtime_control=False, timeout_seconds=5, total_timeout_seconds=15, publication_timeout_seconds=5,
                   terminate_grace_seconds=0.1, listing_max_age_seconds=3600,
                   detail_max_age_seconds=86400, sealed_publication_snapshots=True,
                   publication_snapshot_mode="projection", concurrency=None,
@@ -48,7 +48,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "validate_report", lambda *_: ("incomplete", ["synthetic bounded batch"]))
     monkeypatch.setattr(pending_publication, "database_binding", lambda _p: {
         "files": [], "semantic": {"writer_fenced": True, "revision": 1}})
-    monkeypatch.setattr(dispatcher_storage, "wait_logged", lambda process, *_: process.wait())
+    monkeypatch.setattr(dispatcher_storage, "wait_logged", lambda process, *_, **__: process.wait())
     calls = []
 
     class Child:
@@ -63,9 +63,12 @@ def configured(tmp_path, monkeypatch):
             calls.append(request)
             if "worker_acceptance_sha256" in request:
                 receipt = {**request, "status": "published", "generated_at": runner.now().isoformat(),
-                           "observation_set_sha256": "2" * 64, "whole_job_completeness_certified": False}
+                           "observation_set_sha256": "2" * 64, "pending_backlog_empty": True,
+                           "whole_job_completeness_certified": False}
             else:
                 receipt = {"run_id": request["run_id"], "database": str(config["publication_worker_database"])}
+                if request.get('runtime_contract'):
+                    receipt['runtime_contract_sha256']=request['runtime_contract']['sha256']
             report.write_text(json.dumps(receipt))
 
         def wait(self, **_kwargs):

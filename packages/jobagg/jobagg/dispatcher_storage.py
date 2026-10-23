@@ -40,10 +40,13 @@ def controller_scope(ledger):
         yield
 
 
-def wait_logged(process, paths, ledger, timeout, absolute_deadline=None):
+def wait_logged(process, paths, ledger, timeout, absolute_deadline=None, *, continuous_budget=None):
     """Drain both pipes without unbounded memory or unchecked child file writes."""
     end = time.monotonic() + timeout
     wall_end = min(time.time() + timeout, absolute_deadline or float("inf"))
+    from jobagg import runtime_clock
+    from jobagg.publication_deadline import current_budget
+    continuous = runtime_clock.budget(timeout, parent=continuous_budget or current_budget())
     selector = selectors.DefaultSelector()
     streams = []
     try:
@@ -55,7 +58,7 @@ def wait_logged(process, paths, ledger, timeout, absolute_deadline=None):
             os.set_blocking(pipe.fileno(), False)
             selector.register(pipe, selectors.EVENT_READ, (stream, path))
         while selector.get_map():
-            remaining = min(end - time.monotonic(), wall_end - time.time())
+            remaining = min(end - time.monotonic(), wall_end - time.time(), runtime_clock.remaining(continuous))
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(process.args, timeout)
             for key, _ in selector.select(min(0.25, remaining)):
@@ -67,7 +70,7 @@ def wait_logged(process, paths, ledger, timeout, absolute_deadline=None):
                 with charged_write(ledger, path, len(chunk)):
                     stream.write(chunk)
                     stream.flush()
-        process.wait(timeout=max(0.001, min(end-time.monotonic(), wall_end-time.time())))
+        process.wait(timeout=max(0.001, min(end-time.monotonic(), wall_end-time.time(), runtime_clock.remaining(continuous))))
     finally:
         selector.close()
         for stream in streams:

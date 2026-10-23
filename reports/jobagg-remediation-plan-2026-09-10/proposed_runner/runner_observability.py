@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import time
 import uuid
 
 
@@ -42,10 +43,15 @@ def write(path, value):
             os.unlink(temporary)
 
 
+def DEADLINE_CHECK():
+    return None
+
+
 def sha(path):
     value = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            DEADLINE_CHECK()
             value.update(chunk)
     return value.hexdigest()
 
@@ -222,6 +228,36 @@ def update_health(directory, value):
         health = (
             json.loads(path.read_text()) if path.exists() else {"schema_version": 1}
         )
+        # Compact producer-owned observation index. Raw historical receipts
+        # remain available to separate bounded audit/rebuild tools.
+        active = health.get("active_attempts", {})
+        recent = health.get("recent_attempts", [])
+        identifier = value["attempt_id"]
+        prior = active.get(identifier) or next((item for item in recent if item["attempt_id"] == identifier), None)
+        sequence = prior.get("sequence") if prior else health.get("attempt_sequence", 0) + 1
+        health["attempt_sequence"] = max(sequence, health.get("attempt_sequence", 0))
+        root = directory / "attempts" / identifier
+        entry = {"attempt_id": identifier, "sequence": sequence}
+        if (root / "intent.json").is_file():
+            entry["intent_sha256"] = sha(root / "intent.json")
+        else:
+            health["attempt_index_overflow"] = True
+        if value.get("finished_at"):
+            if (root / "outcome.json").is_file():
+                entry["outcome_sha256"] = sha(root / "outcome.json")
+            else:
+                entry["outcome_sha256"] = None
+                health["attempt_index_overflow"] = True
+            if prior and prior.get("outcome_sha256") not in (None, entry["outcome_sha256"]):
+                raise ValueError("A finalized attempt receipt changed")
+            active.pop(identifier, None)
+            recent = [*filter(lambda item: item["attempt_id"] != identifier, recent), entry][-128:]
+        elif prior is not None or len(active) < 128:
+            active[identifier] = entry
+        else:
+            health["attempt_index_overflow"] = True
+        health.update(attempt_index_schema=1, active_attempts=active, recent_attempts=recent)
+        health.setdefault("attempt_index_started_at", value["started_at"])
         latest = value["started_at"] >= health.get("last_invocation_at", "")
         result = value.get("result") or {}
         completed_at = result.get("finished_at") or value.get("finished_at")
@@ -235,6 +271,12 @@ def update_health(directory, value):
             if value.get("finished_at"):
                 health["last_attempt_finished_at"] = value["finished_at"]
             health["last_reasons"] = result.get("reasons", [])[:5]
+            health["accepted_work_pending"] = result.get("status") == "accepted_work_pending"
+            health["pending_accepted_run_id"] = result.get("run_id") if health["accepted_work_pending"] else None
+            if (result.get("publication_status") == "proven_empty" and
+                    result.get("backlog_authoritatively_empty") is True and result.get("worker_exit_code") == 0):
+                health["last_proven_empty_at"] = completed_at
+                health["last_proven_empty_attempt_id"] = value["attempt_id"]
             if isinstance(result.get("storage_budget"), dict):
                 health["storage_budget"] = result["storage_budget"]
             retention = result.get("storage_retention")
@@ -271,6 +313,7 @@ def update_health(directory, value):
         health["publication_currently_confirmed"] = (
             bool(health.get("last_publication_complete_at"))
             and not health.get("unresolved_publication", False)
+            and not health.get("accepted_work_pending", False)
             and health.get("last_attempt_status")
             not in {"process_failure", "unchanged_failure_hold", "storage_deferred", "accepted_work_pending", "publication_held"}
         )
@@ -310,8 +353,20 @@ def condition_fingerprint(config, runner_path):
     for arg in config["worker_argv"] + config["publication_argv"]:
         if arg.endswith(".py") and Path(arg).is_file():
             paths.add(Path(arg))
-    refs = [file_condition(p, contents=True) for p in sorted(paths)]
-    for p in sorted((config["state_dir"] / "runs").glob("*/publication_intent.json")):
+    refs = []
+    for path in sorted(paths):
+        DEADLINE_CHECK()
+        refs.append(file_condition(path, contents=True))
+    config["_stable_release_sha256"] = hashlib.sha256(json.dumps(
+        [{"path": row["path"], "sha256": row.get("sha256")} for row in refs], sort_keys=True).encode()).hexdigest()
+    intents = ([config["state_dir"] / "runs" / config["_runtime_active_run"] / "publication_intent.json"]
+               if config.get("_runtime_active_run") else
+               ([] if config.get("runtime_control") or "jobagg.remediation_worker" in config.get("worker_argv", [])
+                else sorted((config["state_dir"] / "runs").glob("*/publication_intent.json"))))
+    for p in intents:
+        DEADLINE_CHECK()
+        if not p.exists():
+            continue
         outcome = p.with_name("outcome.json")
         if not outcome.exists():
             continue
@@ -369,63 +424,170 @@ def condition_fingerprint(config, runner_path):
     return hashlib.sha256(payload).hexdigest()
 
 
-def failure_hold(config, fingerprint):
+def stable_failure_scope(config, stage):
+    # Configuration/release provenance stays distinct from mutable evidence.
+    return {"config_sha256": config.get("_config_sha256"),
+            "release_sha256": config.get("_stable_release_sha256"),
+            "worker_cwd": str(config.get("worker_cwd")),
+            "publication_cwd": str(config.get("publication_cwd")), "stage": stage}
+
+
+def failure_hold(config, fingerprint, *, stage=None):
     path = config["attempt_state_dir"] / "failure_condition.json"
     if not path.exists():
         return None
     prior = json.loads(path.read_text())
-    if (
-        prior.get("condition_sha256") == fingerprint
-        and prior.get("unchanged_failures", 0) >= 3
-    ):
-        return {
-            "status": "unchanged_failure_hold",
-            "condition_sha256": fingerprint,
-            "unchanged_failures": prior["unchanged_failures"],
-            "reasons": prior["reasons"],
-            "unresolved_publication": prior.get("unresolved_publication", False),
-            "reason": "Three unchanged failures; awaiting changed config/code/evidence/storage condition before retry.",
-        }
+    selected = stage or prior.get("stage", "worker")
+    end_to_end = prior.get('circuits', {}).get('end_to_end', {})
+    selected_episode = prior.get('circuits', {}).get(selected, {})
+    stage_failures = max([selected_episode.get('unchanged_failures', 0), *[value.get('unchanged_failures', 0) for value in selected_episode.get('class_episodes', {}).values()]])
+    if end_to_end.get('unchanged_failures', 0) >= 3 and stage_failures < 3:
+        selected = 'end_to_end'
+    circuit = prior.get("circuits", {}).get(selected)
+    # Preserve pre-M1 holds until explicitly reviewed; a release change isn't recovery.
+    if circuit is None and prior.get("unchanged_failures", 0) >= 3:
+        circuit = prior
+    held_episode = max([circuit, *circuit.get("class_episodes", {}).values()],
+                       key=lambda item: item.get("unchanged_failures", 0)) if circuit else None
+    if held_episode and held_episode.get("unchanged_failures", 0) >= 3:
+        probe = circuit.get("reviewed_probe") or {}
+        if (probe.get("state") == "available" and probe.get("expires_at", 0) >= time.time()
+                and probe.get("scope") == stable_failure_scope(config, selected)):
+            probe.update(state="reserved", reserved_at=utc())
+            circuit["reviewed_probe"] = probe
+            prior.setdefault("circuits", {})[selected] = circuit
+            write(path, prior)  # Consume before dispatch, including crash/admission gaps.
+            return None
+        return {"status": "unchanged_failure_hold", "stage": selected,
+                "condition_sha256": fingerprint, "unchanged_failures": held_episode["unchanged_failures"],
+                "failure_class": held_episode.get("failure_class"),
+                "reasons": held_episode.get("reasons", []), "next_eligible_at": None,
+                "review_required": True, "retry_ceiling": 3,
+                "first_occurrence_at": circuit.get("first_occurrence_at"),
+                "last_occurrence_at": circuit.get("updated_at"),
+                "unresolved_publication": circuit.get("unresolved_publication", False),
+                "reason": "Repeated stage failure; explicit reviewed recovery required, no automatic probe."}
     return None
 
 
 def record_failure(config, fingerprint, result):
-    if result.get("status") in {"storage_deferred", "accepted_work_pending", "publication_held"}:
-        return
     path = config["attempt_state_dir"] / "failure_condition.json"
     previous = json.loads(path.read_text()) if path.exists() else {}
-    if result["status"] != "process_failure":
-        if result["status"] not in {
-            "unchanged_failure_hold",
-            "lock_busy",
-            "maintenance_paused",
-        }:
-            write(
-                path,
-                {
-                    "condition_sha256": fingerprint,
-                    "unchanged_failures": 0,
-                    "updated_at": utc(),
-                },
-            )
-        return
-    reasons = result.get("reasons", [])
-    same = (
-        previous.get("condition_sha256") == fingerprint
-        and previous.get("reasons") == reasons
-    )
-    write(
-        path,
-        {
-            "condition_sha256": fingerprint,
-            "unchanged_failures": previous.get("unchanged_failures", 0) + 1
-            if same
-            else 1,
-            "reasons": reasons,
-            "unresolved_publication": result.get("unresolved_publication", False),
-            "updated_at": utc(),
-        },
-    )
+    circuits = previous.get("circuits", {})
+    stamp = utc()
+    # Reset only stages that actually reached their validated success boundary.
+    successful = []
+    starved_worker = (result.get('worker_stop_reason') == 'work_deadline'
+                      and result.get('worker_progress') == 0)
+    if not starved_worker and result.get("worker_exit_code") == 0 and result.get("worker_status") in {"complete", "incomplete"}:
+        successful.append("worker")
+    if result.get("publication_status") in {"published", "noop"} and result.get("publication_exit_code") == 0:
+        successful.extend(["projection", "publication"])
+    history_refs = previous.get("history_refs", [])
+    for stage in successful:
+        if stage == "worker" and result.get("accepted_work_resumed"):
+            continue  # Re-reading an older worker proof is not fresh recovery.
+        resolved = circuits.get(stage)
+        if resolved is not None:
+            history = {"stage": stage, "episode": resolved, "resolved_at": stamp,
+                       "resolution": "validated_stage_success", "run_id": result.get("run_id"),
+                       "publication_result_sha256": result.get("publication_result_sha256")}
+            key = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+            target = config["attempt_state_dir"] / "circuit-history" / (key + ".json")
+            if target.exists():
+                if json.loads(target.read_text()) != history:
+                    raise ValueError("Circuit history changed")
+            else:
+                write(target, history)
+            history_refs = [*history_refs, {"path": str(target), "episode_sha256": key}][-64:]
+        circuits.pop(stage, None)
+    failed = (starved_worker or result.get('status') == 'process_failure' or
+              (result.get('status') == 'accepted_work_pending' and
+               any(str(reason).startswith('TimeoutError:') for reason in result.get('reasons', []))))
+    durable_progress = ((result.get('publication_status') in {'published', 'noop'}
+                         and result.get('publication_exit_code') == 0
+                         and (result.get('readback_verified') is True or not config.get('runtime_control',
+                              'jobagg.remediation_worker' in config.get('worker_argv', []))))
+                        or (result.get('publication_status') == 'proven_empty'
+                            and result.get('backlog_authoritatively_empty') is True and not starved_worker))
+    if durable_progress:
+        successful.append('end_to_end')
+    # Stage successes above never erase a whole-service failure episode.
+    if failed and not durable_progress:
+        prior_service = circuits.get('end_to_end', {})
+        circuits['end_to_end'] = {**prior_service, 'stage':'end_to_end', 'failure_class':'no_end_to_end_progress',
+            'scope':stable_failure_scope(config, 'end_to_end'),
+            'unchanged_failures':prior_service.get('unchanged_failures',0)+1,
+            'first_occurrence_at':prior_service.get('first_occurrence_at',stamp), 'updated_at':stamp,
+            'retry_ceiling':3, 'reasons':result.get('reasons',[]),
+            'recovery_path':'reviewed single probe with preserved stage episodes'}
+    if durable_progress and 'end_to_end' in circuits:
+        resolved_service = circuits.pop('end_to_end')
+        history = {'stage':'end_to_end','episode':resolved_service,'resolution':'verified_publication_or_authoritative_empty','resolved_at':stamp}
+        key = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+        target = config['attempt_state_dir'] / 'circuit-history' / (key+'.json')
+        if not target.exists():
+            write(target, history)
+        history_refs = [*history_refs, {'path':str(target),'episode_sha256':key}][-64:]
+    if (starved_worker or result.get("status") == "process_failure" or
+            (result.get("status") == "accepted_work_pending" and
+             any(str(reason).startswith("TimeoutError:") for reason in result.get("reasons", [])))):
+        raw_stage = 'worker' if starved_worker else result.get("failure_stage", "worker")
+        stage = ("publication" if raw_stage.startswith("publication") else
+                 "projection" if raw_stage in {"projection", "worker_validated"} else "worker")
+        envelope = circuits.get(stage, {})
+        failure_class = ('zero_task_work_deadline' if starved_worker else "timeout" if result.get(stage + "_timeout") else
+                         "process_exit" if result.get(stage + "_exit_code") not in (None, 0)
+                         else result.get("failure_type", "unknown_process_failure"))
+        episodes = dict(envelope.get("class_episodes", {}))
+        if envelope.get("failure_class", failure_class) != failure_class:
+            episodes[envelope["failure_class"]] = {key: value for key, value in envelope.items() if key != "class_episodes"}
+            prior = episodes.pop(failure_class, {})
+        else:
+            prior = envelope
+        count = prior.get("unchanged_failures", 0) + 1
+        circuit = {"stage": stage, "failure_class": failure_class, "class_episodes": episodes,
+                   "scope": stable_failure_scope(config, stage),
+                   "condition_sha256": fingerprint, "unchanged_failures": count,
+                   "first_occurrence_at": prior.get("first_occurrence_at", stamp),
+                   "updated_at": stamp, "reasons": result.get("reasons", []),
+                   "retry_ceiling": 3, "next_eligible_at": None if count >= 3 else stamp,
+                   "recovery_path": "explicit reviewed single stage probe, then validated stage success",
+                   "probe_review_history": envelope.get("probe_review_history", []),
+                   "reviewed_probe": envelope.get("reviewed_probe"),
+                   "unresolved_publication": result.get("unresolved_publication", False)}
+        circuits[stage] = circuit
+    else:
+        stage = previous.get("stage", "worker")
+        circuit = circuits.get(stage, {"condition_sha256": fingerprint, "unchanged_failures": 0, "updated_at": stamp})
+    write(path, {**circuit, "schema_version": 2, "stage": stage,
+                 "circuits": circuits, "history_refs": history_refs})
+
+
+def authorize_stage_probe(config, stage, *, evidence_path, evidence_sha256, expires_at):
+    """Explicit operator review API; no counter reset, one attempt per review.
+
+    Call under the actual shared owner after reviewing the corrected release and
+    configuration. This API is never invoked by a natural dispatcher tick.
+    """
+    if stage not in {"worker", "projection", "publication", "end_to_end"}:
+        raise ValueError("Unknown reviewed probe stage")
+    evidence = Path(evidence_path)
+    if sha(evidence) != evidence_sha256 or type(expires_at) not in (int, float) or not time.time() < expires_at:
+        raise ValueError("Probe review evidence or expiration differs")
+    path = config["attempt_state_dir"] / "failure_condition.json"
+    value = json.loads(path.read_text())
+    circuit = value.get("circuits", {}).get(stage)
+    if circuit is None:
+        raise ValueError("No stage episode to review")
+    used = circuit.get("probe_review_history", [])
+    if evidence_sha256 in used:
+        raise ValueError("This review already authorized its single probe")
+    circuit["probe_review_history"] = [*used, evidence_sha256]
+    circuit["reviewed_probe"] = {"state": "available", "review_sha256": evidence_sha256,
+                                  "expires_at": expires_at, "scope": stable_failure_scope(config, stage)}
+    value["circuits"][stage] = circuit
+    write(path, value)
 
 
 def health_view(directory, *, max_age_seconds=1800):

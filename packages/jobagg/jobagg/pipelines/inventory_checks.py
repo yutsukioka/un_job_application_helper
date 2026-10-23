@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import gzip
 import hashlib
 import json
 from pathlib import Path
+from jobagg.verification_budget import read as verification_read, check as verification_check, VerificationBudgetExceeded
 
 from jobagg.models import OrganizationSource
 
@@ -71,13 +71,13 @@ def source_capability(source: OrganizationSource) -> dict:
 
 
 def captured_json(metadata: dict):
-    body = gzip.decompress(Path(metadata["artifact"]).read_bytes())
+    body = verification_read(Path(metadata["artifact"]), compressed=True)
     if hashlib.sha256(body).hexdigest() != metadata.get("body_sha256"):
         raise ValueError("Captured enumeration response hash differs")
     return json.loads(body)
 
 
-def verify_listing(source, jobs, capture_paths) -> dict:
+def _verify_listing(source, jobs, capture_paths) -> dict:
     """Reconcile supported provider censuses independently of adapter diagnostics.
 
     This proves only the configured JSON endpoint/filter scope at the capture
@@ -128,6 +128,7 @@ def verify_listing(source, jobs, capture_paths) -> dict:
     intervals = []
     try:
         for path in capture_paths:
+            verification_check()
             meta = json.loads(Path(path).read_text())
             if meta.get("phase", {}).get("kind") != "listing" or meta.get("url") != expected_url:
                 continue
@@ -166,6 +167,7 @@ def verify_listing(source, jobs, capture_paths) -> dict:
             if count == 0 or total > 0 or not rows:
                 totals.add(total)
             for row in rows:
+                verification_check()
                 value = row.get("externalPath")
                 if not isinstance(value, str) or not value.startswith("/"):
                     raise ValueError("Public posting lacks an exact external path")
@@ -198,7 +200,15 @@ def verify_listing(source, jobs, capture_paths) -> dict:
             started_at=min(start for start, end in intervals).isoformat(),
             finished_at=max(end for start, end in intervals).isoformat(),
         )
+    except VerificationBudgetExceeded:
+        raise
     except (ValueError, TypeError, KeyError, OSError) as exc:
         result["method"] = "workday_cxs_v1"
         result["reasons"].append(str(exc))
     return result
+
+
+def verify_listing(source,jobs,capture_paths,*,deadline_at=None,deadline_epoch=None):
+    from jobagg.verification_budget import scope
+    with scope(deadline_at,deadline_epoch):
+        return _verify_listing(source,jobs,capture_paths)

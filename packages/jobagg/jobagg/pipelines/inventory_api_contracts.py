@@ -4,10 +4,10 @@ Only the configured public endpoint/site/filter population is assessed. Counts
 do not certify public descriptions, metadata interpretation or documents.
 """
 from collections import defaultdict
-import gzip
 import hashlib
 import json
 from pathlib import Path
+from jobagg.verification_budget import read as verification_read, check as verification_check, VerificationBudgetExceeded
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 ORACLE_EXPAND = (
@@ -22,6 +22,7 @@ ORACLE_FACETS = (
 
 
 def require(condition, message):
+    verification_check()
     if not condition:
         raise ValueError(message)
 
@@ -41,7 +42,7 @@ def captured_page(path, meta, expected_url):
     require(url_signature(meta.get("url")) == url_signature(expected_url)
             == url_signature(meta.get("response_url")), "Census URL/site/filter/offset differs")
     require(meta.get("body_captured") is True, "Census response body was not captured")
-    body = gzip.decompress(Path(meta["artifact"]).read_bytes())
+    body = verification_read(Path(meta["artifact"]), compressed=True)
     require(hashlib.sha256(body).hexdigest() == meta.get("body_sha256"),
             "Captured census response hash differs")
     if "body_bytes" in meta:
@@ -87,6 +88,8 @@ def verify_api_listing(source, jobs, capture_paths, family):
             verify_oracle(source, jobs, capture_paths, result)
         else:
             verify_smartrecruiters(source, jobs, capture_paths, result)
+    except VerificationBudgetExceeded:
+        raise
     except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         result["reasons"].append(str(exc))
     return result

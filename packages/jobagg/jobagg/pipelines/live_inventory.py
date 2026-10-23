@@ -12,10 +12,11 @@ import json
 from pathlib import Path
 
 from jobagg.models import JobRecord
+from jobagg.verification_budget import VerificationBudgetExceeded
 from jobagg.pipelines.inventory_checks import verify_listing
 
 
-def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None):
+def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=None, diagnostics=None, selection=None):
     import time
     from contextlib import closing
 
@@ -30,6 +31,10 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
     )
 
     frames, rejected = [], []
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics["complete"] = True
+    diagnostics["processed_source_ids"] = []
     if not worker.execute(
         "SELECT 1 FROM sqlite_master WHERE name='remediation_sources'"
     ).fetchone():
@@ -39,18 +44,25 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
     ).fetchall()
     for source_row in source_rows:
         if len(frames) >= limit or (deadline_at and time.monotonic() >= deadline_at):
+            diagnostics["complete"] = False
             break
         source_id = source_row["source_id"]
+        diagnostics["processed_source_ids"].append(source_id)
         try:
             if source_id not in targets or not targets[source_id].is_file():
                 raise ValueError("listing_source_database_unavailable")
-            task = worker.execute(
-                "SELECT receipt FROM remediation_tasks WHERE source_id=? AND kind='listing' AND status='done'",
-                (source_id,),
-            ).fetchone()
-            if not task:
-                continue
-            receipt = json.loads(task["receipt"])
+            from jobagg.accepted_evidence import resolve_listing_event
+            accepted = resolve_listing_event(worker, source_id=source_id)
+            if accepted is not None:
+                receipt=accepted['receipt']
+            else:
+                task = worker.execute(
+                    "SELECT receipt FROM remediation_tasks WHERE source_id=? AND kind='listing' AND status='done'",
+                    (source_id,),
+                ).fetchone()
+                if not task:
+                    continue
+                receipt = json.loads(task["receipt"])
             frame_path = Path(receipt["frame_path"])
             if _sha(frame_path) != receipt["frame_sha256"]:
                 raise ValueError("listing_frame_hash_mismatch")
@@ -104,11 +116,15 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
                 )
                 for _, item in jobs
             ]
-            verified = verify_listing(sources[source_id], records, capture_paths)
+            verified = verify_listing(sources[source_id], records, capture_paths, deadline_at=deadline_at)
             complete = proof.get("complete") is True and verified.get("complete") is True
             key = "listing:" + _digest(
                 {"source": source_id, "frame_sha256": receipt["frame_sha256"], "proof": proof}
             )
+            selected = next((item for item in (selection or {}).get('units',[]) if item['unit']=='listing:'+source_id),{})
+            if selected.get('operation') in {'time_transition_revalidation','contract_revalidation'}:
+                key = 'listing:' + _digest({'accepted_publication_key':key,'revalidation_version':selected['version'],
+                                           'contract':selection['contract_sha256']})
             target = targets[source_id]
             with closing(_ro(target)) as source_conn:
                 if _receipt_exists(source_conn, key) and _receipt_exists(consolidated, key):
@@ -166,6 +182,8 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
                         "destinations": destinations,
                     }
                 )
+        except VerificationBudgetExceeded:
+            raise
         except (ValueError, KeyError, OSError) as exc:
             rejected.append({"source_id": source_id, "reason": str(exc)})
     return frames, rejected
