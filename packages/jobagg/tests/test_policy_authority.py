@@ -323,14 +323,21 @@ def test_native_json_delivery_is_durable_bounded_and_cannot_enable_old_writers(n
         authority.due("example", time.time(), minimum=30, jitter=0, batch=0, pause=120)
         > time.time()
     )
-    assert authority.export_json_page(limit=1, max_bytes=1)["oversized"]["attempt_id"] == "lagged"
+    assert (
+        authority.export_json_page(deadline_at=time.monotonic() + 5, limit=1, max_bytes=1)[
+            "oversized"
+        ]["attempt_id"]
+        == "lagged"
+    )
 
     def interrupted(point):
         assert point == "after_json_write"
         raise RuntimeError("power-loss seam before SQL export acknowledgement")
 
     with pytest.raises(RuntimeError, match="power-loss"):
-        authority.export_json_page(limit=1, max_bytes=4096, fault=interrupted)
+        authority.export_json_page(
+            deadline_at=time.monotonic() + 5, limit=1, max_bytes=4096, fault=interrupted
+        )
     cold = PolicyAuthority(policy)
     cold.owner_fd = owner.fileno()
     assert cold.json_export_status()["pending"]
@@ -338,10 +345,12 @@ def test_native_json_delivery_is_durable_bounded_and_cannot_enable_old_writers(n
     def finish_before_old_ack(_):
         authority.finish("lagged", "failed")
 
-    first = cold.export_json_page(limit=1, max_bytes=4096, fault=finish_before_old_ack)
+    first = cold.export_json_page(
+        deadline_at=time.monotonic() + 5, limit=1, max_bytes=4096, fault=finish_before_old_ack
+    )
     assert not first["exported"][0]["acknowledged"]
     assert cold.json_export_status()["pending"]
-    latest = cold.export_json_page(limit=1, max_bytes=4096)
+    latest = cold.export_json_page(deadline_at=time.monotonic() + 5, limit=1, max_bytes=4096)
     assert not latest["status"]["pending"]
     mirror = latest["exported"][0]
     assert json.loads(__import__("pathlib").Path(mirror["path"]).read_text())["status"] == "failed"
@@ -350,3 +359,18 @@ def test_native_json_delivery_is_durable_bounded_and_cannot_enable_old_writers(n
         assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
     with pytest.raises(ValueError, match="outside_migrated_scope"):
         cold.due("unreviewed-source", time.time(), minimum=0, jitter=0, batch=0, pause=0)
+
+
+def test_policy_report_reader_and_explicit_json_delivery_obey_ambient_budget(native):
+    from jobagg import publication_deadline, runtime_clock
+
+    policy, owner = native
+    authority = activate(policy, owner)
+    authority.owner_fd = owner.fileno()
+    revision = authority.revision()
+    with pytest.raises(TimeoutError):
+        authority.export_json_page(limit=1, max_bytes=4096, deadline_at=time.monotonic() - 1)
+    with publication_deadline.continuous_budget(runtime_clock.budget(0)):
+        with pytest.raises(TimeoutError, match="policy_runtime_budget"):
+            authority.revision()
+    assert authority.revision() == revision

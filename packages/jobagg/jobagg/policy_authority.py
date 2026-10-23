@@ -9,6 +9,7 @@ may reconcile a pending head; ordinary startup never rebuilds it from history.
 from contextlib import closing, contextmanager, nullcontext
 import hashlib
 import json
+import math
 from pathlib import Path
 import sqlite3
 import time
@@ -74,9 +75,15 @@ class PolicyAuthority:
         self.storage = None
         self.check_deadline = lambda: None
 
+    def _check_budget(self):
+        self.check_deadline()
+        from jobagg.publication_deadline import expired
+        if expired(None):
+            raise TimeoutError('policy_runtime_budget_exhausted')
+
     @contextmanager
     def connect(self, *, write=False):
-        self.check_deadline()
+        self._check_budget()
         if not self.head.exists():
             raise ValueError("policy_authority_missing_explicit_migration_required")
         if (
@@ -95,6 +102,11 @@ class PolicyAuthority:
             raise ValueError("policy_authority_restore_or_pending_repair_required")
         with closing(sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=1)) as conn:
             conn.row_factory = sqlite3.Row
+            from jobagg import runtime_clock
+            from jobagg.publication_deadline import current_budget
+            active_budget = current_budget()
+            if active_budget is not None:
+                conn.execute('PRAGMA busy_timeout='+str(max(1,int(min(1,max(0,runtime_clock.remaining(active_budget)))*1000))))
             conn.create_function("jobagg_policy_write_allowed", 0, lambda: 0)
             if _schema_hash(conn) != head.get("schema_sha256"):
                 raise ValueError("policy_authority_schema_or_fence_changed")
@@ -164,12 +176,12 @@ class PolicyAuthority:
                         raise
             else:
                 yield conn
-        self.check_deadline()
+        self._check_budget()
 
     def _expired(self):
         try:
-            self.check_deadline()
-        except (TimeoutError, ValueError):
+            self._check_budget()
+        except Exception:
             return 1
         return 0
 
@@ -303,8 +315,8 @@ class PolicyAuthority:
                 (control["audit_cursor"], limit),
             ).fetchall()
             for row in rows:
-                self.check_deadline()
-                if _sha(row["path"], self.check_deadline) != row["sha256"]:
+                self._check_budget()
+                if _sha(row["path"], self._check_budget) != row["sha256"]:
                     raise ValueError("policy_evidence_missing_or_changed_charges_retained")
             more = (
                 rows
@@ -325,7 +337,17 @@ class PolicyAuthority:
         return {"pending": row is not None, "oldest": dict(row) if row else None,
                 "scope": "delivery_checkpoint_only_not_legacy_admission_handoff"}
 
-    def export_json_page(self, *, limit, max_bytes, fault=lambda _: None):
+    def export_json_page(self, *, limit, max_bytes, deadline_at, fault=lambda _: None):
+        from jobagg import runtime_clock
+        from jobagg.publication_deadline import continuous_budget, current_budget
+        if type(deadline_at) not in (int,float) or not math.isfinite(deadline_at):
+            raise ValueError('finite_policy_json_export_deadline_required')
+        phase = runtime_clock.budget(max(0,deadline_at-time.monotonic()), parent=current_budget())
+        with continuous_budget(phase):
+            self._check_budget()
+            return self._export_json_page(limit=limit,max_bytes=max_bytes,fault=fault)
+
+    def _export_json_page(self, *, limit, max_bytes, fault):
         """Explicit bounded compatibility delivery; old writers stay fenced.
 
         Files precede the SQL acknowledgement. A crash replays the same version;
@@ -341,14 +363,14 @@ class PolicyAuthority:
             candidates = conn.execute("SELECT attempt_id,version,length(CAST(event_json AS BLOB))+1 AS bytes FROM json_exports WHERE version>exported_version ORDER BY changed_at,attempt_id LIMIT ?", (limit,)).fetchall()
             selected, size = [], 0
             for row in candidates:
-                self.check_deadline()
+                self._check_budget()
                 if size + row['bytes'] > max_bytes:
                     break
                 selected.append(dict(conn.execute('SELECT * FROM json_exports WHERE attempt_id=? AND version=?', (row['attempt_id'],row['version'])).fetchone()))
                 size += row['bytes']
         exported = []
         for row in selected:
-            self.check_deadline()
+            self._check_budget()
             owner(self.owner_fd, self.policy.owner)
             root = self.policy.root / 'authority_exports'
             if root.resolve() != root:
@@ -359,7 +381,7 @@ class PolicyAuthority:
                 raise ValueError('policy_json_export_alias')
             atomic_write_text(path, row['event_json']+'\n')
             path.chmod(path.stat().st_mode & ~0o222)
-            proof = {'path':str(path),'sha256':_sha(path,self.check_deadline),'version':row['version']}
+            proof = {'path':str(path),'sha256':_sha(path,self._check_budget),'version':row['version']}
             if proof['sha256'] != row['event_sha256']:
                 raise ValueError('policy_json_export_readback_changed')
             fault('after_json_write')
