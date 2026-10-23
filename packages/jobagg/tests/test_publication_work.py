@@ -13,10 +13,11 @@ from test_live_publication import setup, add_detail, run  # noqa: F401
 # ruff: noqa: F811
 
 
-def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
+def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True, expected_source_ids=None):
     from jobagg import acceptance_catalog
     from jobagg.remediation_worker import shared_owner
 
+    expected_source_ids = expected_source_ids or ["test_custom_html"]
     owner_path = owner_path or fixture["root"] / "migration-owner.lock"
     with (
         shared_owner(owner_path) if owner_fd is None else nullcontext(owner_fd) as fd,
@@ -30,7 +31,7 @@ def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
             run_dir = fixture["root"] / "verified-old-worker"
             run_dir.mkdir(exist_ok=True)
             (run_dir / "source_manifest.json").write_text(
-                json.dumps({"expected_source_ids": ["test_custom_html"]})
+                json.dumps({"expected_source_ids": expected_source_ids})
             )
             manifest_sha = hashlib.sha256(
                 (run_dir / "source_manifest.json").read_bytes()
@@ -38,7 +39,7 @@ def prepare(fixture, *, owner_path=None, owner_fd=None, import_exits=True):
             request = {
                 "run_id": run_dir.name,
                 "source_manifest_sha256": manifest_sha,
-                "expected_source_ids": ["test_custom_html"],
+                "expected_source_ids": expected_source_ids,
             }
             attempts = [
                 dict(row)
@@ -165,10 +166,10 @@ def test_atomic_dirty_versions_cas_contract_and_held_work_never_false_noop(setup
         selection = select(setup, conn)
         key = selection["units"][0]["job_key"]
         conn.execute("UPDATE jobs SET location=? WHERE job_key=?", ("newer", key))
-        work.acknowledge(conn, selection, result_sha256="b" * 64)
+        work.acknowledge(conn, selection, processed_units=selection["units"], result_sha256="b" * 64)
         assert work.vector(conn, contract_sha256="contract", now=time.time())["empty"] is False
         fresh = select(setup, conn)
-        work.acknowledge(conn, fresh, result_sha256="c" * 64)
+        work.acknowledge(conn, fresh, processed_units=fresh["units"], result_sha256="c" * 64)
         assert work.vector(conn, contract_sha256="contract", now=time.time())["empty"] is True
         assert (
             work.vector(conn, contract_sha256="changed-parser", now=time.time())["empty"] is False
@@ -186,7 +187,7 @@ def test_oversized_unit_remains_explicit_hold_and_cannot_clear_backlog(setup):
         selection = select(setup, conn, max_bytes=1)
         assert not selection["units"]
         assert selection["held"][0]["reason"] == "oversized_unit_requires_reviewed_measured_path"
-        work.acknowledge(conn, selection, result_sha256="b" * 64)
+        work.acknowledge(conn, selection, processed_units=selection["units"], result_sha256="b" * 64)
         assert work.vector(conn, contract_sha256="contract", now=time.time())["held"]
 
 
@@ -196,17 +197,17 @@ def test_time_and_delete_invalidation_never_disappear_behind_old_acknowledgement
     with setup["worker"].connect() as conn:
         selection = select(setup, conn)
         key = selection["units"][0]["job_key"]
-        work.acknowledge(conn, selection, result_sha256="a" * 64)
+        work.acknowledge(conn, selection, processed_units=selection["units"], result_sha256="a" * 64)
         conn.execute(
             "UPDATE jobs SET closes_at='2000-01-01T00:00:00+00:00' WHERE job_key=?", (key,)
         )
         metadata = select(setup, conn)
-        work.acknowledge(conn, metadata, result_sha256="b" * 64)
+        work.acknowledge(conn, metadata, processed_units=metadata["units"], result_sha256="b" * 64)
         assert work.vector(conn, contract_sha256="contract", now=time.time())["empty"] is False
         assert work.advance_time(conn, now=time.time(), limit=1) == 1
         timed = select(setup, conn)
         assert timed["units"][0]["operation"] == "time_transition_revalidation"
-        work.acknowledge(conn, metadata, result_sha256="c" * 64)
+        work.acknowledge(conn, metadata, processed_units=metadata["units"], result_sha256="c" * 64)
         assert work.vector(conn, contract_sha256="contract", now=time.time())["pending"]
         conn.execute("DELETE FROM remediation_observations WHERE job_key=?", (key,))
         missing = select(setup, conn)
@@ -329,7 +330,8 @@ def test_aged_cohort_target_union_and_existing_export_cost_are_bounded(setup):
         "measurement_sha256": "a" * 64,
     }
     with setup["worker"].connect() as conn:
-        work.acknowledge(conn, select(setup, conn), result_sha256="a" * 64)
+        selection = select(setup, conn)
+        work.acknowledge(conn, selection, processed_units=selection["units"], result_sha256="a" * 64)
         conn.execute(
             "INSERT OR REPLACE INTO jobagg_dirty_cohorts VALUES('test_custom_html',1000000)"
         )

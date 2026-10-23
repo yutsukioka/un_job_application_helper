@@ -323,6 +323,7 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
         "publication_target_paths": sorted(str(path) for path in {*targets.values(), output / "all_jobs.sqlite3"}),
         "registry_sha256": _sha(registry_path),
         "changes": [],
+        "processed_units": [],
         "listing_frames": [],
         "rejected": [],
         "unchanged": 0,
@@ -348,6 +349,12 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
             selection = projected.get('selection')
             if selection is not None:
                 plan['publication_selection'] = selection
+                # Health units carry no public row/frame mutation. Their no-op
+                # is accepted only with the same verified destination boundary.
+                plan['processed_units'] = [
+                    {'unit': item['unit'], 'version': item['version']}
+                    for item in selection['units'] if item['kind'] == 'health'
+                ]
         observations = worker.execute(
             "SELECT * FROM remediation_observations ORDER BY checked_at,job_key"
         ).fetchall()
@@ -363,6 +370,14 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
             observations = [row for row in observations if row["job_key"] in selected]
             plan["selected_job_keys"] = sorted(selected)
             listing_rejected = []
+        processed_sources = set(listing_diagnostics.get("processed_source_ids", []))
+        plan["processed_units"].extend(
+            {"unit": item["unit"], "version": item["version"]}
+            for item in plan.get("publication_selection", {}).get("units", [])
+            if item["kind"] == "listing" and item["source_id"] in processed_sources
+        )
+        if listing_diagnostics.get("complete") is False:
+            plan["budget_exhausted"] = True
         plan["rejected"].extend(listing_rejected)
         plan["observation_set_sha256"] = _digest(
             {
@@ -388,6 +403,9 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
             row = _row(worker, observation["job_key"])
             selected_unit = next((item for item in plan.get('publication_selection', {}).get('units', [])
                                   if item['job_key'] == observation['job_key']), {})
+            if selected_unit:
+                plan['processed_units'].append(
+                    {'unit': selected_unit['unit'], 'version': selected_unit['version']})
             force_revalidation = selected_unit.get('operation') in {'time_transition_revalidation', 'contract_revalidation'}
             try:
                 if not row or row["source_id"] not in targets:
@@ -1260,6 +1278,7 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=
         state="complete",
         publication_boundary=publication_boundary,
         publication_selection=plan.get('publication_selection'),
+        processed_units=plan.get('processed_units', []),
         rejected=plan.get('rejected', []),
         status="published",
         readback_verified=True,
@@ -1335,6 +1354,7 @@ def _publish_incremental(
             "status": "deferred" if plan["budget_exhausted"] else "no_changes",
             "generation_not_started": True,
             "publication_selection": plan.get('publication_selection'),
+            "processed_units": plan["processed_units"],
             "pending_backlog_empty": plan.get("pending_backlog_empty_after_generation") is True,
             "unchanged": plan["unchanged"],
             "rejected": plan["rejected"],

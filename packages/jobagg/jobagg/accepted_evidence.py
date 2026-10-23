@@ -28,6 +28,10 @@ def prepare(conn):
     from jobagg.acceptance_catalog import prepare as prepare_exits
 
     prepare_exits(conn)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='remediation_sources'").fetchone():
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(remediation_sources)")}
+        if "listing_event_version" not in columns:
+            conn.execute("ALTER TABLE remediation_sources ADD COLUMN listing_event_version TEXT")
     conn.execute("""CREATE TABLE IF NOT EXISTS jobagg_accepted_events(version TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,attempt_id TEXT NOT NULL UNIQUE,task_id TEXT NOT NULL,
         source_id TEXT NOT NULL,kind TEXT NOT NULL,reference_json TEXT NOT NULL)""")
@@ -326,8 +330,6 @@ def record_event(
         "document": ("manifest", "sha256"),
     }[attempt["kind"]]
     evidence_key = receipt[hash_key]
-    if task["kind"] == "listing":
-        evidence_key = digest(receipt["enumeration"])
     if task["kind"] == "document":
         document = cursor.execute(
             "SELECT manifest FROM remediation_documents WHERE task_id=?", (task["task_id"],)
@@ -370,6 +372,31 @@ def record_event(
             json.dumps(proof, sort_keys=True),
         ),
     )
+    if task["kind"] == "listing":
+        from pathlib import Path
+        from jobagg.publication_snapshot import _json_document
+        from jobagg.remediation_worker import epoch
+
+        frame, artifact = _json_document(Path(receipt["frame_path"]))
+        if artifact["sha256"] != receipt["frame_sha256"] or frame.get("source_id") != task["source_id"]:
+            raise ValueError("accepted_listing_frame_identity_changed")
+        current = cursor.execute(
+            "SELECT last_list_at,listing_proof,listing_event_version FROM remediation_sources WHERE source_id=?",
+            (task["source_id"],),
+        ).fetchone()
+        # Native finish binds the new source head in this same transaction.
+        # Legacy import may attach only the current task's exact retained frame,
+        # never an older occurrence with a repeated count or timestamp.
+        current_receipt = json.loads(task["receipt"] or "{}")
+        matches = current is not None and current["last_list_at"] == epoch(frame["observed_at"]) and (
+            json.loads(current["listing_proof"]) == receipt["enumeration"])
+        if active is not None and not matches:
+            raise ValueError("atomic_accepted_listing_head_state_differs")
+        if matches and (active is not None or current_receipt.get("frame_sha256") == receipt["frame_sha256"]):
+            if active is None and current["listing_event_version"] not in (None, version):
+                raise ValueError("accepted_listing_legacy_head_conflicting_occurrence")
+            conn.execute("UPDATE remediation_sources SET listing_event_version=? WHERE source_id=?",
+                         (version, task["source_id"]))
     return version
 
 
@@ -437,7 +464,7 @@ def atomic_run(conn, run_id, *, limit, deadline_at):
     }
 
 
-def resolve_event(conn, *, kind, source_id, evidence_key, task_id=None):
+def resolve_event(conn, *, kind, source_id, evidence_key=None, task_id=None, version=None):
     """Indexed exact occurrence, independent of the next refresh task status."""
     if not conn.execute(
         "SELECT 1 FROM sqlite_master WHERE name='jobagg_accepted_events'"
@@ -445,8 +472,16 @@ def resolve_event(conn, *, kind, source_id, evidence_key, task_id=None):
         return None  # Original legacy contract, before explicit migration.
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
-    query = "SELECT * FROM jobagg_accepted_events WHERE kind=? AND source_id=? AND json_extract(reference_json,'$.evidence_key')=?"
-    args = (kind, source_id, evidence_key)
+    if evidence_key is None and version is None:
+        raise ValueError("accepted_event_exact_identity_required")
+    query = "SELECT * FROM jobagg_accepted_events WHERE kind=? AND source_id=?"
+    args = (kind, source_id)
+    if evidence_key is not None:
+        query += " AND json_extract(reference_json,'$.evidence_key')=?"
+        args += (evidence_key,)
+    if version is not None:
+        query += " AND version=?"
+        args += (version,)
     if task_id is not None:
         query += " AND task_id=?"
         args += (task_id,)
@@ -478,6 +513,22 @@ def resolve_event(conn, *, kind, source_id, evidence_key, task_id=None):
     }
 
 
+def resolve_listing_event(conn, *, source_id):
+    """Resolve the source's transactionally bound exact frame occurrence."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobagg_accepted_events'").fetchone():
+        return None  # Original unmigrated legacy publisher contract.
+    if "listing_event_version" not in {row[1] for row in conn.execute("PRAGMA table_info(remediation_sources)")}:
+        raise ValueError("accepted_listing_head_requires_preparation")
+    row = conn.execute("SELECT listing_event_version,listing_proof FROM remediation_sources WHERE source_id=?",
+                       (source_id,)).fetchone()
+    if row is None or row[0] is None:
+        raise ValueError("accepted_listing_head_missing_exact_occurrence")
+    accepted = resolve_event(conn, kind="listing", source_id=source_id, version=row[0])
+    if accepted["receipt"].get("enumeration") != json.loads(row[1]):
+        raise ValueError("accepted_listing_head_proof_changed")
+    return accepted
+
+
 def selected_events(conn, *, job_keys, listing_sources, deadline_at):
     """Exact event dependencies only; no history discovery in publication."""
     cursor = conn.cursor()
@@ -492,12 +543,7 @@ def selected_events(conn, *, job_keys, listing_sources, deadline_at):
         if row and row[0]:
             try:
                 result.append(
-                    resolve_event(
-                        conn,
-                        kind="listing",
-                        source_id=source,
-                        evidence_key=digest(json.loads(row[0])),
-                    )
+                    resolve_listing_event(conn, source_id=source)
                 )
             except ValueError:
                 pass  # Preserve publisher's exact rejection, never accept a substitute.

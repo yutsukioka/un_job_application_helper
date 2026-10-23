@@ -1723,6 +1723,7 @@ def runtime_acknowledge(config, run_id, result, request, descriptor):
         authority.remember_publication_boundary(conn, run_id, result['publication_boundary'])
         with authority.controller(conn, run_id=run_id, owner_fd=descriptor):
             work.acknowledge(conn, selection, result_sha256=hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest(),
+                             processed_units=result.get('publication', {}).get('processed_units', []),
                              rejected=result.get('publication', {}).get('rejected', []))
         vector = work.vector(conn, contract_sha256=runtime_publication_contract(config)['sha256'], now=time.time())
         # Scoped rejections stay in the durable queue; no pending version can be

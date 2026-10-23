@@ -237,6 +237,8 @@ def prepare(conn, *, contract_sha256, epoch, freshness=None):
                     if op != "UPDATE"
                     else "(new.last_list_at IS NOT old.last_list_at OR new.listing_ids IS NOT old.listing_ids OR new.listing_proof IS NOT old.listing_proof)"
                 )
+                if op == "UPDATE" and "listing_event_version" in cols:
+                    changed = "(" + changed + " OR new.listing_event_version IS NOT old.listing_event_version)"
                 fields += ",'listing_changed'," + changed
             fields += ("," if fields else "") + "'_operation','" + op + "'"
             payload = "json_object(" + fields + ")"
@@ -448,19 +450,14 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
             ):
                 unit_bytes += blob[0] * 3
         elif row["kind"] == "listing":
-            from jobagg.accepted_evidence import resolve_event, digest
+            from jobagg.accepted_evidence import resolve_listing_event
 
             frame = cursor.execute(
                 "SELECT listing_proof FROM remediation_sources WHERE source_id=?", (source,)
             ).fetchone()
             try:
                 accepted = (
-                    resolve_event(
-                        conn,
-                        kind="listing",
-                        source_id=source,
-                        evidence_key=digest(json.loads(frame[0])),
-                    )
+                    resolve_listing_event(conn, source_id=source)
                     if frame and frame[0]
                     else None
                 )
@@ -549,27 +546,33 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
     return result
 
 
-def acknowledge(conn, selection, *, result_sha256, rejected=()):
-    """Call only after exact per-target transactions, exports and readback."""
-    rejected_jobs = {item.get("job_key") for item in rejected}
+def acknowledge(conn, selection, *, result_sha256, processed_units=(), rejected=()):
+    """Acknowledge only processed versions after destination/export readback.
+
+    Omitted processing evidence retains pending work, including old generation
+    results. A planned cap/deadline cannot silently clear the unvisited suffix.
+    """
+    selected = {(row["unit"], row["version"]) for row in selection["units"]}
+    processed = {(row["unit"], row["version"]) for row in processed_units}
+    if not processed <= selected:
+        raise ValueError("publication_processed_versions_not_selected")
+    rejected_jobs = {item["job_key"] for item in rejected if item.get("job_key") is not None}
+    rejected_listings = {item["source_id"] for item in rejected
+                         if item.get("source_id") is not None and item.get("job_key") is None}
+    served = {}
     for row in selection["units"]:
-        disposition = (
-            "held"
-            if row["job_key"] in rejected_jobs or row["kind"] == "unknown"
-            else "acknowledged"
-        )
+        if (row["unit"], row["version"]) not in processed:
+            continue
+        rejected_unit = (row["kind"] == "job" and row["job_key"] in rejected_jobs) or (
+            row["kind"] == "listing" and row["source_id"] in rejected_listings)
+        disposition = "held" if rejected_unit or row["kind"] == "unknown" else "acknowledged"
         conn.execute(
             "UPDATE jobagg_dirty_current SET disposition=?,reason=?,acknowledgement_sha256=? WHERE unit=? AND version=?",
-            (
-                disposition,
-                "publication_rejected" if disposition == "held" else None,
-                result_sha256,
-                row["unit"],
-                row["version"],
-            ),
+            (disposition, "publication_rejected" if disposition == "held" else None,
+             result_sha256, row["unit"], row["version"]),
         )
-    for source in {row["source_id"] for row in selection["units"]}:
-        last = max(row["version"] for row in selection["units"] if row["source_id"] == source)
+        served[row["source_id"]] = max(served.get(row["source_id"], 0), row["version"])
+    for source, last in served.items():
         conn.execute(
             "INSERT INTO jobagg_dirty_cohorts VALUES(?,?) ON CONFLICT(source_id) DO UPDATE SET last_service=max(last_service,excluded.last_service)",
             (source, last),

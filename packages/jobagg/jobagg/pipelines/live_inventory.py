@@ -34,6 +34,7 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
     if diagnostics is None:
         diagnostics = {}
     diagnostics["complete"] = True
+    diagnostics["processed_source_ids"] = []
     if not worker.execute(
         "SELECT 1 FROM sqlite_master WHERE name='remediation_sources'"
     ).fetchone():
@@ -46,11 +47,12 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
             diagnostics["complete"] = False
             break
         source_id = source_row["source_id"]
+        diagnostics["processed_source_ids"].append(source_id)
         try:
             if source_id not in targets or not targets[source_id].is_file():
                 raise ValueError("listing_source_database_unavailable")
-            from jobagg.accepted_evidence import resolve_event,digest
-            accepted=resolve_event(worker,kind='listing',source_id=source_id,evidence_key=digest(json.loads(source_row['listing_proof'])))
+            from jobagg.accepted_evidence import resolve_listing_event
+            accepted = resolve_listing_event(worker, source_id=source_id)
             if accepted is not None:
                 receipt=accepted['receipt']
             else:
