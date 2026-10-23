@@ -109,7 +109,7 @@ def mapped(setup):
         }
 
 
-def make_index(mapped):
+def make_index(mapped, *, relocated=False, reviewed=True):
     root = mapped["setup"]["root"]
     path = root / "index.sqlite3"
     ref = {
@@ -118,6 +118,16 @@ def make_index(mapped):
         "result_path": str(mapped["result"]),
         "result_sha256": sha(mapped["result"]),
     }
+    if relocated:
+        backup = root / "backup"
+        backup.mkdir()
+        for label in ("plan", "result"):
+            original = Path(ref[label + "_path"])
+            target = backup / original.name
+            original.rename(target)
+            ref[label + "_location"] = str(target)
+        if reviewed:
+            ref["locator_review_sha256"] = "a" * 64
     with sqlite3.connect(path) as c:
         occurrences.prepare(c, references=[ref], mapping_sha256=mapped["receipt"]["sha256"])
         assert occurrences.step(
@@ -297,3 +307,100 @@ def test_index_cannot_close_unknown_implementation_or_partial_generation(mapped)
                     deadline_at=time.monotonic() + 5,
                     historical_index=index,
                 )
+
+
+def test_reviewed_backup_location_preserves_logical_generation_and_hash(mapped):
+    attempt, value, digest = artifact(mapped)
+    index = make_index(mapped, relocated=True)
+    assert index.matches(
+        attempt, value, digest, mapped["targets"], deadline_at=time.monotonic() + 5
+    )
+    assert not mapped["plan"].exists() and not mapped["result"].exists()
+    physical = mapped["setup"]["root"] / "backup/plan.json"
+    physical.write_text("{}")
+    with pytest.raises(ValueError, match="dependency_changed"):
+        index.matches(attempt, value, digest, mapped["targets"], deadline_at=time.monotonic() + 5)
+
+
+def test_unreviewed_backup_location_cannot_become_a_generation_proof(mapped):
+    with pytest.raises(ValueError, match="relocation_review_required"):
+        make_index(mapped, relocated=True, reviewed=False)
+
+
+def test_generation_review_requires_exact_committed_journals(mapped):
+    index = make_index(mapped)
+    generation_id = json.loads(mapped["plan"].read_text())["generation_id"]
+    proof = index.generation(generation_id, deadline_at=time.monotonic() + 5)
+    assert proof["producer_complete"]
+    assert proof["changes"] == 1
+    assert not proof["legacy_readback_flag_present"]
+    with pytest.raises(ValueError, match="not_indexed"):
+        index.generation("f" * 32, deadline_at=time.monotonic() + 5)
+
+
+def test_recovered_generation_review_keeps_acceptance_and_export_debt(mapped, tmp_path):
+    from jobagg import runtime_control_catalog as catalogue, acceptance_catalog
+    from test_legacy_wrapper_reconciliation import setup_catalog
+
+    index = make_index(mapped, relocated=True)
+    result = json.loads((tmp_path / "backup/result.json").read_text())
+    # Seed an already imported catalogue fixture; its prior accepted-exit
+    # authority is an input, never produced by this generation-only review.
+    with sqlite3.connect(tmp_path / "review-worker.sqlite3") as conn:
+        evidence = tmp_path / "native-controls"
+        evidence.mkdir()
+        setup_catalog(evidence, conn, mapped["fd"], mapped["owner"])
+        acceptance_catalog.prepare(conn)
+        conn.execute("INSERT INTO jobagg_accepted_exit_runs VALUES('worker',?,'{}')", ("d" * 64,))
+        cursor = conn.execute("SELECT proof_json FROM jobagg_legacy_controls WHERE run_id='worker'")
+        proof = json.loads(cursor.fetchone()[0])
+        proof.update(
+            accepted_exit_sha256="d" * 64,
+            publication={
+                "known_deficits": [{"code": "missing_generation_result"}],
+                "generation_ids": [result["generation_id"]],
+                "result": {"publication": result},
+            },
+        )
+        conn.execute(
+            "UPDATE jobagg_legacy_controls SET disposition='generation_pending',proof_json=? WHERE run_id='worker'",
+            (json.dumps(proof),),
+        )
+        original = catalogue.receipt(conn)
+        authority.activate(
+            conn,
+            epoch="fixture",
+            owner_fd=mapped["fd"],
+            owner_path=mapped["owner"],
+            bootstrap_receipt={
+                "reconciled": True,
+                "source_sha256": "a" * 64,
+                "control_catalogue_sha256": original["sha256"],
+            },
+        )
+        conn.commit()
+        with authority.controller(conn, run_id=None, owner_fd=mapped["fd"]):
+            review = catalogue.reconcile_recovered_generation(
+                conn,
+                "worker",
+                historical_index=index,
+                owner_fd=mapped["fd"],
+                owner_path=mapped["owner"],
+                deadline_at=time.monotonic() + 5,
+            )
+            conn.commit()
+        assert review["same_generation_committed"] and not review["publication_replayed"]
+        assert review["current_accepted_exports_reconciliation_required"]
+        assert not review["completeness_certified"]
+        assert catalogue.oldest_unresolved(conn) is not None
+        assert (
+            conn.execute(
+                "SELECT disposition FROM jobagg_legacy_controls WHERE run_id='worker'"
+            ).fetchone()[0]
+            == "publication_reconciliation_required"
+        )
+        assert catalogue.receipt(conn) == original
+        assert (
+            conn.execute("SELECT proof_sha256 FROM jobagg_accepted_exit_runs").fetchone()[0]
+            == "d" * 64
+        )

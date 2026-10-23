@@ -683,6 +683,8 @@ def close_reconciled(
         if actual["sha256"] != sha:
             raise ValueError("legacy_control_closure_original_evidence_changed")
     proof["reconciliation"] = reconciliation
+    from jobagg.runtime_containment import invalidate
+    invalidate(conn,'explicit historical control review changed')
     conn.execute(
         "UPDATE jobagg_legacy_controls SET disposition='terminal_verified',proof_json=?,repair_reason=NULL WHERE run_id=?",
         (json.dumps(proof, sort_keys=True), run_id),
@@ -807,6 +809,8 @@ def reconcile_wrapper_reference(
     proof["wrapper_process_reconciliation"] = process
     for path, sha in reference["wrapper_controls"].items():
         conn.execute("UPDATE jobagg_legacy_dependencies SET sha256=? WHERE path=?", (sha, path))
+    from jobagg.runtime_containment import invalidate
+    invalidate(conn,'explicit historical control review changed')
     conn.execute(
         "UPDATE jobagg_legacy_controls SET disposition='reference_preserved',proof_json=?,repair_reason=NULL WHERE run_id=?",
         (json.dumps(proof, sort_keys=True), run_id),
@@ -864,3 +868,82 @@ def review_accepted_exit(
     conn.execute('UPDATE jobagg_legacy_controls SET disposition=?,proof_json=?,repair_reason=? WHERE run_id=?',
                  (disposition, json.dumps(proof, sort_keys=True), reason, run_id))
     return {'run_id': run_id, 'disposition': disposition, 'accepted_exit_sha256': accepted['sha256']}
+
+
+def reconcile_recovered_generation(
+    conn, run_id, *, historical_index, owner_fd, owner_path, deadline_at
+):
+    """Prove original recovery finished; retain separate accepted/export debt.
+
+    Only the missing original result locator deficit is eligible. No recovery
+    request is executed and no missing worker exit or current export is inferred.
+    """
+    from jobagg import runtime_authority
+    from jobagg.historical_occurrences import location
+
+    state = runtime_authority.validate(conn)
+    owner(owner_fd, owner_path)
+    if state["phase"] != "idle" or state["owner_path"] != str(owner_path):
+        raise ValueError("recovered_generation_requires_idle_owner")
+    row = conn.execute(
+        "SELECT disposition,proof_json FROM jobagg_legacy_controls WHERE run_id=?", (run_id,)
+    ).fetchone()
+    if row is None or row[0] != "generation_pending":
+        raise ValueError("exact_pending_generation_review_required")
+    proof = json.loads(row[1])
+    publication = proof["publication"]
+    if [v["code"] for v in publication.get("known_deficits", [])] != [
+        "missing_generation_result"
+    ] or len(publication.get("generation_ids", [])) != 1:
+        raise ValueError("pending_generation_has_other_unresolved_proofs")
+    accepted = conn.execute(
+        "SELECT proof_sha256 FROM jobagg_accepted_exit_runs WHERE run_id=?", (run_id,)
+    ).fetchone()
+    if (
+        accepted is None
+        or accepted[0] != proof.get("accepted_exit_sha256")
+        or proof.get("acceptance_hold")
+    ):
+        raise ValueError("pending_generation_successful_exit_unproven")
+    for path, expected in proof["controls"].items():
+        if Path(path).name == "state.json":
+            continue
+        value, record = _json_document(Path(path), deadline_at=deadline_at)
+        if record["sha256"] != expected:
+            raise ValueError("recovered_generation_original_control_changed")
+    generation = historical_index.generation(
+        publication["generation_ids"][0], deadline_at=deadline_at
+    )
+    result, record = _json_document(
+        location(generation["reference"], "result"), deadline_at=deadline_at
+    )
+    original = publication["result"]["publication"]
+    if (
+        result != original
+        or record["sha256"] != generation["reference"]["result_sha256"]
+        or result["plan_sha256"] != generation["reference"]["plan_sha256"]
+    ):
+        raise ValueError("recovered_generation_original_result_differs")
+    reconciliation = {
+        "schema": "original-recovered-generation-review-1",
+        "historical_index_sha256": historical_index.sha256,
+        "generation_id": result["generation_id"],
+        "original_plan_sha256": result["plan_sha256"],
+        "original_result_sha256": record["sha256"],
+        "same_generation_committed": True,
+        "publication_replayed": False,
+        "current_accepted_exports_reconciliation_required": True,
+        "completeness_certified": False,
+    }
+    proof["recovered_generation_review"] = reconciliation
+    from jobagg.runtime_containment import invalidate
+    invalidate(conn,'explicit historical control review changed')
+    conn.execute(
+        "UPDATE jobagg_legacy_controls SET disposition='publication_reconciliation_required',proof_json=?,repair_reason=? WHERE run_id=?",
+        (
+            json.dumps(proof, sort_keys=True),
+            "exact_accepted_identity_and_current_exports_required",
+            run_id,
+        ),
+    )
+    return reconciliation

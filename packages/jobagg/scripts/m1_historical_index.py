@@ -96,7 +96,42 @@ def execute(
             total = 0
             for reference in review["references"]:
                 for label in ("plan", "result"):
-                    p = Path(reference[label + "_path"])
+                    p = occurrences.location(reference, label)
+                    original = Path(reference[label + "_path"])
+                    if p != original:
+                        anchor = reference.get("locator_anchor")
+                        if not isinstance(anchor, dict):
+                            raise ValueError("historical_index_relocation_anchor_required")
+                        anchor_path = Path(anchor["path"])
+                        row = c.execute("SELECT sha256,identity_json FROM jobagg_legacy_dependencies WHERE path=?",
+                                        (str(anchor_path),)).fetchone()
+                        if (row is None or row[0] != anchor["sha256"] or
+                                json.loads(row[1]) != list(_stamp(anchor_path.stat()))):
+                            raise ValueError("historical_index_relocation_anchor_changed")
+                        from jobagg.publication_snapshot import _json_document
+                        value, record = _json_document(anchor_path, deadline_at=deadline)
+                        if (record["sha256"] != anchor["sha256"] or
+                                value.get("plan_path") != reference["plan_path"] or
+                                value.get("plan_sha256") != reference["plan_sha256"]):
+                            raise ValueError("historical_index_relocation_original_plan_unbound")
+                        # A result is independently pinned by the original recovered
+                        # wrapper result; it must equal that wrapper's publication object.
+                        resolution_path = Path(anchor["resolution_path"])
+                        row = c.execute("SELECT sha256,identity_json FROM jobagg_legacy_dependencies WHERE path=?",
+                                        (str(resolution_path),)).fetchone()
+                        if row is None or row[0] != anchor["resolution_sha256"]:
+                            raise ValueError("historical_index_relocation_resolution_unbound")
+                        resolution, rec = _json_document(resolution_path, deadline_at=deadline)
+                        if rec["sha256"] != row[0] or list(_stamp(resolution_path.stat())) != json.loads(row[1]):
+                            raise ValueError("historical_index_relocation_resolution_changed")
+                        recovered_path = resolution_path.parent / resolution["result"]["path"]
+                        recovered, rec = _json_document(recovered_path, deadline_at=deadline)
+                        if rec["sha256"] != resolution["result"]["sha256"] or recovered.get("status") != "published":
+                            raise ValueError("historical_index_relocation_recovery_changed")
+                        producer, rec = _json_document(occurrences.location(reference, "result"), deadline_at=deadline)
+                        if rec["sha256"] != reference["result_sha256"] or recovered.get("publication") != producer:
+                            raise ValueError("historical_index_relocation_producer_differs")
+                        continue
                     if p.resolve() != p:
                         raise ValueError("historical_index_control_alias")
                     row = c.execute(
@@ -109,7 +144,7 @@ def execute(
                         or (row[0] is not None and row[0] != reference[label + "_sha256"])
                     ):
                         raise ValueError("historical_index_original_dependency_changed")
-                size = Path(reference["plan_path"]).stat().st_size
+                size = occurrences.location(reference, "plan").stat().st_size
                 total += size
                 if size > max_plan_bytes or total > max_total_plan_bytes:
                     raise ValueError("historical_index_declared_byte_bound")

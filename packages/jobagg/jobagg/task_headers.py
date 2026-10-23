@@ -77,6 +77,8 @@ def candidates(conn, worker, now, *, excluded_sources=(), excluded_kinds=(), exc
     Ineligible source/host groups are eliminated before task lookup. SQL reads
     remain subject to the caller's deadline and statement-work ceiling.
     """
+    from jobagg.runtime_holds import task_predicate
+    predicate = task_predicate(conn, source="h.source_id", task="h.task_id", host="h.host")
     rows = []
     for source, kind, host in conn.execute(
         "SELECT source_id,kind,host FROM jobagg_task_headers WHERE status='pending' GROUP BY source_id,kind,host"
@@ -90,8 +92,9 @@ def candidates(conn, worker, now, *, excluded_sources=(), excluded_kinds=(), exc
         ):
             continue
         row = conn.execute(
-            """SELECT * FROM jobagg_task_headers WHERE source_id=? AND kind=? AND host=?
-            AND status='pending' AND eligible_at<=? ORDER BY last_attempt_at,discovered_at,task_id LIMIT 1""",
+            "SELECT h.* FROM jobagg_task_headers h WHERE source_id=? AND kind=? AND host=? "
+            "AND status='pending' AND eligible_at<=? AND " + predicate +
+            " ORDER BY last_attempt_at,discovered_at,task_id LIMIT 1",
             (source, kind, host, now),
         ).fetchone()
         if row:

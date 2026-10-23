@@ -118,6 +118,7 @@ class PolicyAuthority:
             value = dict(conn.execute("SELECT * FROM authority WHERE id=1").fetchone())
             if (
                 value["epoch"] != head["epoch"]
+                or (getattr(self.policy, "native_epoch", None) is not None and value["epoch"] != self.policy.native_epoch)
                 or value["revision"] != head["revision"]
                 or value["transaction_id"] != head["transaction_id"]
             ):

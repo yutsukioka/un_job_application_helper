@@ -233,6 +233,9 @@ def proven_empty(conn, run_id, *, accepted_progress, publication_empty_check=Non
             and type(accepted_progress) is int and accepted_progress == 0
             and value['revision'] == value['start_revision']):
         return False
+    from jobagg.runtime_control_catalog import oldest_unresolved
+    if oldest_unresolved(conn) is not None:
+        return False  # Contained historical debt still cannot earn empty credit.
     if publication_empty_check is not None:
         return publication_empty_check(value) is True
     from jobagg.publication_fence import verify_boundary

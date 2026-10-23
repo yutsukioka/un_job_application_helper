@@ -387,9 +387,19 @@ def vector(conn, *, contract_sha256, now):
     held = conn.execute(
         "SELECT unit,version,reason FROM jobagg_dirty_current WHERE disposition='held' ORDER BY first_changed_at,unit LIMIT 1"
     ).fetchone()
+    unscoped = None
+    for prefix in ("unknown:", "deleted:"):
+        unscoped = conn.execute(
+            "SELECT unit,version,reason FROM jobagg_dirty_current INDEXED BY sqlite_autoindex_jobagg_dirty_current_1 "
+            "WHERE unit>=? AND unit<? AND disposition='held' LIMIT 1",
+            (prefix, prefix[:-1] + ";"),
+        ).fetchone()
+        if unscoped:
+            break
     return {
         "schema": SCHEMA,
         "epoch": state["epoch"],
+        "unscoped_held": list(unscoped) if unscoped else None,
         "empty": not pending and not held and not reasons,
         "pending": list(pending) if pending else None,
         "held": list(held) if held else None,
@@ -458,6 +468,12 @@ def select(conn, *, policy, contract_sha256, output_root, source_paths, deadline
         if time.monotonic() + policy["minimum_seconds"] >= deadline_at:
             break
         source = row["source_id"]
+        from jobagg.runtime_holds import find as scoped_integrity_hold
+        hold = scoped_integrity_hold(conn, source=source, unit=row["unit"])
+        if hold:
+            holds.append({"unit": row["unit"], "version": row["version"],
+                          "reason": "scoped_integrity_hold: " + hold["reason"]})
+            continue
         if source not in source_paths or row["kind"] == "unknown":
             holds.append(
                 {
@@ -585,6 +601,8 @@ def acknowledge(conn, selection, *, result_sha256, processed_units=(), rejected=
     Omitted processing evidence retains pending work, including old generation
     results. A planned cap/deadline cannot silently clear the unvisited suffix.
     """
+    from jobagg.runtime_holds import require_selection
+    require_selection(conn, selection)
     selected = {(row["unit"], row["version"]) for row in selection["units"]}
     processed = {(row["unit"], row["version"]) for row in processed_units}
     if not processed <= selected:

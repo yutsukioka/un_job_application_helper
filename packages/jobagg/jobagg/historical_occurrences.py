@@ -41,6 +41,25 @@ def identity(kind, artifact, artifact_sha256=None):
     return digest(artifact)
 
 
+def location(reference, label):
+    """An exact reviewed physical locator; logical producer bindings stay intact."""
+    original = Path(reference[label + "_path"])
+    physical = Path(reference.get(label + "_location", original))
+    if (
+        not original.is_absolute()
+        or ".." in original.parts
+        or physical.resolve() != physical
+        or not physical.is_absolute()
+        or ".." in physical.parts
+    ):
+        raise ValueError("historical_generation_locator_invalid")
+    if physical != original and not re.fullmatch(
+        "[a-f0-9]{64}", reference.get("locator_review_sha256", "")
+    ):
+        raise ValueError("historical_generation_relocation_review_required")
+    return physical
+
+
 def prepare(conn, *, references, mapping_sha256):
     if not isinstance(references, list) or not 0 < len(references) <= 512:
         raise ValueError("finite_historical_generation_inventory_required")
@@ -48,6 +67,9 @@ def prepare(conn, *, references, mapping_sha256):
         {Path(r["plan_path"]).parent.name for r in references}
     ) != len(references):
         raise ValueError("historical_generation_inventory_duplicate")
+    for reference in references:
+        for label in ("plan", "result"):
+            location(reference, label)
     conn.executescript("""CREATE TABLE IF NOT EXISTS index_state(id INTEGER PRIMARY KEY,contract TEXT,complete INTEGER);
     CREATE TABLE IF NOT EXISTS plans(generation_id TEXT PRIMARY KEY,proof_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS occurrences(kind TEXT,identity_sha256 TEXT,generation_id TEXT,publication_key TEXT,
@@ -81,15 +103,15 @@ def step(conn, *, mapping, limit, deadline_at, max_plan_bytes):
                 continue
             if processed >= limit:
                 break
-            if Path(reference["result_path"]).stat().st_size > 16 * 1024**2:
+            if location(reference, "result").stat().st_size > 16 * 1024**2:
                 raise ValueError("historical_generation_result_oversized")
             result, result_record = _json_document(
-                Path(reference["result_path"]), deadline_at=deadline_at
+                location(reference, "result"), deadline_at=deadline_at
             )
             if result_record["sha256"] != reference["result_sha256"]:
                 raise ValueError("historical_generation_result_changed")
             plan, record = read_plan(
-                reference["plan_path"],
+                location(reference, "plan"),
                 expected_sha256=reference["plan_sha256"],
                 deadline_at=deadline_at,
                 max_bytes=max_plan_bytes,
@@ -206,7 +228,7 @@ def step(conn, *, mapping, limit, deadline_at, max_plan_bytes):
             }
             mapping.validate()
             for label in ("plan", "result"):
-                p = Path(reference[label + "_path"])
+                p = location(reference, label)
                 if p.resolve() != p or list(_stamp(p.stat())) != proof[label + "_identity"]:
                     raise ValueError("historical_generation_dependency_changed_before_checkpoint")
             with conn:
@@ -252,10 +274,40 @@ class Index:
                 _check(deadline_at)
                 proof = json.loads(raw)
                 for label in ("plan", "result"):
-                    p = Path(proof["reference"][label + "_path"])
+                    p = location(proof["reference"], label)
                     if p.resolve() != p or list(_stamp(p.stat())) != proof[label + "_identity"]:
                         raise ValueError("historical_occurrence_index_dependency_changed")
         self.sha256 = expected_sha256
+
+    def generation(self, generation_id, *, deadline_at):
+        _check(deadline_at)
+        if self.path.resolve() != self.path or _stamp(self.path.stat()) != self.signature:
+            raise ValueError("historical_occurrence_index_changed")
+        with closing(
+            sqlite3.connect(self.path.as_uri() + "?mode=ro&immutable=1", uri=True)
+        ) as conn:
+            row = conn.execute(
+                "SELECT proof_json FROM plans WHERE generation_id=?", (generation_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("historical_generation_not_indexed")
+            proof = json.loads(row[0])
+            for label in ("plan", "result"):
+                path = location(proof["reference"], label)
+                if list(_stamp(path.stat())) != proof[label + "_identity"]:
+                    raise ValueError("historical_occurrence_index_dependency_changed")
+            count, failures = conn.execute(
+                "SELECT count(*),coalesce(sum(journal_verified!=1),0) FROM occurrences WHERE generation_id=?",
+                (generation_id,),
+            ).fetchone()
+            if (
+                not proof["producer_complete"]
+                or failures
+                or count < proof["changes"] + proof["listings"]
+            ):
+                raise ValueError("historical_generation_commit_incomplete")
+            self.mapping.validate()
+            return proof
 
     def matches(self, attempt, artifact, artifact_sha256, destinations, *, deadline_at):
         _check(deadline_at)
@@ -276,7 +328,7 @@ class Index:
                     continue
                 proof = json.loads(raw)
                 for label in ("plan", "result"):
-                    p = Path(proof["reference"][label + "_path"])
+                    p = location(proof["reference"], label)
                     if p.resolve() != p or list(_stamp(p.stat())) != proof[label + "_identity"]:
                         raise ValueError("historical_occurrence_index_dependency_changed")
                 inverse = {v["copy"]: k for k, v in self.mapping.rows.items()}

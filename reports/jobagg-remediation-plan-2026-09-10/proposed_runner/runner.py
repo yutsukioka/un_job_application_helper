@@ -1626,6 +1626,11 @@ def require_native_capabilities(config, conn):
         require(isinstance(config.get('policy_audit'), dict) and isinstance(config.get('publication_admission'), dict),
                 'native measured admission and evidence audit contracts required')
         policy_head = Path(str(config['shared_lock_path']) + '.worker-policy') / 'authority.json'
+        if config.get('policy_authority_location') is not None:
+            policy_type = package_helper(config, 'pipelines.worker_policy').SharedPolicy
+            native_policy = policy_type(config['shared_lock_path'], [], native_location=config['policy_authority_location'])
+            require(native_policy.inspect().get('authority') == 'indexed_sql', 'existing native policy authority required')
+            policy_head = native_policy.root / 'authority.json'
         require(policy_head.is_file(), 'native all-writer policy migration required')
 
 
@@ -1708,28 +1713,78 @@ def runtime_projection_target(config, run_id, controls):
     return Path(context['limits']['scratch_dir']) / run_id / Path(controls).relative_to(root) / 'publication_snapshot.sqlite3'
 
 
+def runtime_containment_args(config):
+    return {
+        "config_sha256": config["_config_sha256"],
+        "implementation_sha256": runtime_publication_contract(config)[
+            "jobagg_implementation_sha256"
+        ],
+        "policy_location": config.get("policy_authority_location"),
+    }
+
+
+def runtime_history_review(config, conn):
+    helper = package_helper(config, "runtime_containment")
+    approved = helper.approved(conn, **runtime_containment_args(config))
+    return approved, helper.summary(conn)
+
+
 def runtime_acknowledge(config, run_id, result, request, descriptor):
-    work = package_helper(config, 'publication_work')
+    work = package_helper(config, "publication_work")
     with runtime_connection(config) as conn:
         if not work.exists(conn):
-            return {'drained': result.get('pending_backlog_empty') is True,
-                    'empty': result.get('pending_backlog_empty') is True, 'held': None}
-        selection = request.get('publication_selection')
-        require(isinstance(selection, dict) and result.get('publication', {}).get('publication_selection') == selection,
-                'selected publication acknowledgement differs from the admitted dependency set')
-        require(result.get('readback_verified') is True, 'selected publication lacks destination/export readback')
-        authority = package_helper(config, 'runtime_authority')
-        require(result.get('publication_boundary') is not None, 'native publication requires a complete destination/export boundary')
-        authority.remember_publication_boundary(conn, run_id, result['publication_boundary'])
+            return {
+                "drained": result.get("pending_backlog_empty") is True,
+                "empty": result.get("pending_backlog_empty") is True,
+                "held": None,
+            }
+        selection = request.get("publication_selection")
+        require(
+            isinstance(selection, dict)
+            and result.get("publication", {}).get("publication_selection") == selection,
+            "selected publication acknowledgement differs from the admitted dependency set",
+        )
+        require(
+            result.get("readback_verified") is True,
+            "selected publication lacks destination/export readback",
+        )
+        authority = package_helper(config, "runtime_authority")
+        require(
+            result.get("publication_boundary") is not None,
+            "native publication requires a complete destination/export boundary",
+        )
+        authority.remember_publication_boundary(
+            conn, run_id, result["publication_boundary"]
+        )
         with authority.controller(conn, run_id=run_id, owner_fd=descriptor):
-            work.acknowledge(conn, selection, result_sha256=hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest(),
-                             processed_units=result.get('publication', {}).get('processed_units', []),
-                             rejected=result.get('publication', {}).get('rejected', []))
-        vector = work.vector(conn, contract_sha256=runtime_publication_contract(config)['sha256'], now=time.time())
-        # Scoped rejections stay in the durable queue; no pending version can be
-        # bypassed. Held work remains visible and can never earn empty credit.
-        return {'drained': vector['pending'] is None and not vector['revalidation_reasons'],
-                'empty': vector['empty'], 'held': vector['held']}
+            work.acknowledge(
+                conn,
+                selection,
+                result_sha256=hashlib.sha256(
+                    json.dumps(result, sort_keys=True).encode()
+                ).hexdigest(),
+                processed_units=result.get("publication", {}).get(
+                    "processed_units", []
+                ),
+                rejected=result.get("publication", {}).get("rejected", []),
+            )
+        vector = work.vector(
+            conn,
+            contract_sha256=runtime_publication_contract(config)["sha256"],
+            now=time.time(),
+        )
+        # A finished bounded batch preserves both scoped current and historical
+        # debt. Neither can earn authoritative empty-backlog credit.
+        _, historical = runtime_history_review(config, conn)
+        return {
+            "drained": vector["pending"] is None
+            and not vector["revalidation_reasons"]
+            and not vector.get("unscoped_held"),
+            "empty": vector["empty"]
+            and not (historical or {}).get("historical_control_records_held"),
+            "held": vector["held"] or historical,
+            "historical_held": historical,
+        }
 
 
 def runtime_no_write_evidence(config, controls):
@@ -1829,8 +1884,11 @@ def runtime_resume(config, descriptor):
         with runtime_connection(config) as conn:
             vector = work.vector(conn, contract_sha256=runtime_publication_contract(config)['sha256'], now=time.time()) if work.exists(conn) else None
             legacy=package_helper(config,'runtime_control_catalog').oldest_unresolved(conn)
-            require(legacy is None or (legacy['disposition']=='accepted_pending' and vector and (vector['pending'] or vector['revalidation_reasons'])),
+            contained,historical=runtime_history_review(config,conn)
+            config['_runtime_historical_held']=historical
+            require(legacy is None or contained or (legacy['disposition']=='accepted_pending' and vector and (vector['pending'] or vector['revalidation_reasons'])),
                     'legacy runtime control requires exact bounded reconciliation before fetching: '+str(legacy))
+            require(not vector or not vector.get('unscoped_held'),'unknown current operation requires explicit reconciliation')
             if vector:
                 control = package_helper(config, 'runtime_authority').publication_control(conn)
                 require(package_helper(config, 'publication_fence').verify_boundary(control.get('publication_cursor'),
@@ -1845,7 +1903,7 @@ def runtime_resume(config, descriptor):
                     control_dir=config['state_dir'] / 'runs' / run_id,
                     publication_scope=runtime_publication_scope(config), started_at=now().isoformat())
             else:
-                require(not vector or not vector['held'], 'accepted publication units require scoped repair before fetching: '+str(vector))
+                require(not vector or not vector['held'] or contained, 'accepted publication units require scoped repair before fetching: '+str(vector))
                 return None
         runtime_queue_controls(config, run_id, descriptor)
         return runtime_resume(config, descriptor)
@@ -2930,6 +2988,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
     }
     if config.get('policy_audit'):
         request['policy_audit'] = config['policy_audit']
+    if config.get('policy_authority_location') is not None:
+        request['policy_authority_location'] = config['policy_authority_location']
     if runtime_enabled(config) and 'jobagg.remediation_worker' in config.get('worker_argv',[]):
         request['expected_implementation_sha256']=runtime_publication_contract(config)['jobagg_implementation_sha256']
         request['runtime_contract']=runtime_publication_contract(config)
@@ -3163,6 +3223,18 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                 if skip_publication:
                     record.update(publication_status="proven_empty", backlog_authoritatively_empty=True,
                                   accepted_progress=0)
+                else:
+                    with runtime_connection(config) as conn:
+                        scoped_noop=package_helper(config,'runtime_containment').can_close_scoped_noop(
+                            conn,run_id,accepted_progress=accepted_progress,
+                            contract_sha256=runtime_publication_contract(config)['sha256'],**runtime_containment_args(config))
+                        held=package_helper(config,'runtime_containment').summary(conn)
+                    if scoped_noop:
+                        skip_publication=True
+                        record.update(publication_status='scoped_hold_noop',backlog_authoritatively_empty=False,
+                                      pending_backlog_empty=False,publication_held=held,accepted_progress=0)
+                        status='incomplete'
+                        reasons.append('Scoped integrity or historical holds remain; no accepted work in this batch')
             if not skip_publication and (storage_context or runtime_enabled(config)):
                 pending = package_helper(config, "pending_publication")
                 pending.seal(config["state_dir"], run_id,
@@ -3357,6 +3429,10 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
                 with runtime_connection(config) as conn:
                     package_helper(config, "runtime_authority").close_empty(conn, run_id, accepted_progress=0,
                         contract_sha256=runtime_publication_contract(config)['sha256'])
+            if runtime_enabled(config) and record.get('publication_status')=='scoped_hold_noop':
+                with runtime_connection(config) as conn:
+                    package_helper(config,'runtime_containment').close_scoped_noop(conn,run_id,accepted_progress=0,
+                        contract_sha256=runtime_publication_contract(config)['sha256'],**runtime_containment_args(config))
             if (runtime_enabled(config) and record.get("publication_status") in {"published", "noop"}
                     and record.get('publication_drain_complete', record.get('pending_backlog_empty')) is True):
                 with runtime_connection(config) as conn:
