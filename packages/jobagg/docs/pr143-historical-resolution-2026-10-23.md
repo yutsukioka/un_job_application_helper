@@ -167,3 +167,30 @@ At **17:12 EAT**, deployed M0, production configuration, maintenance marker,
 health and publication gate hashes matched the retained boundary. The actual
 owner remained inode 4728, was available and empty; there were no production
 source heads, active JobAgg cron lines or matching worker/publisher processes.
+
+## Final immutable entry rehearsal and storage observation
+
+Committed code `f2d6d4243328a27cdd96e97044b80e06947dc2b4` is independently staged
+read-only at `pr143-f2d6d424-1ea470f3e46b` (1,956 files; source-manifest SHA-256
+`294de0254cfe91853fa57fce863df160d742136f0fb8d20fa8c10e137424f492`).
+Only preparation drafts point to it. At **17:14 EAT**, explicit copied contract
+revalidation retained all 7,314 dirty units and added their 7,314 new versions:
+**36,592 versions** total, source revision **26,196**, phase idle. The 50-store /
+200-export boundary and current backup bindings verify; policy revision and bytes
+remain unchanged. Normal immutable entry returned `maintenance_paused`; separate
+preflight rejected the unapproved settings. Both OS production-write and network
+denials were demonstrated. No full admitted-cycle rehearsal is claimed.
+The private rehearsal receipt SHA-256 is
+`521afc12f6decd31c4afc3b923368499b37f08ce7a309728a6dfe0641b2a0de7`.
+
+The subsequent read-only storage check reported **431,661,232 KiB** allocated
+across the production tree (about **442.0 GB**), with approximately **661.7 GB**
+filesystem space available. This sums path allocations; APFS clones/shared extents
+mean it is not a measurement of unique physical occupancy. It nevertheless
+exceeds the handover's **100,000,000,000-byte** managed-storage target and requires
+explicit native accounting/admission resolution. A historical code-only capacity
+exception does not approve future growth. No files were deleted, retired or
+copied to resolve that gate. Unresolved or sole-copy evidence cannot be treated
+as disposable, and compression/retention remain disabled in the candidate drafts.
+This is an additional readiness issue, not permission to waive capacity or to
+activate production with the other gates unresolved.
