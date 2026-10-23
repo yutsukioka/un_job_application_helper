@@ -6,8 +6,6 @@ must be normalized actual request hosts, not organization or source aliases.
 This module neither grants access permission nor certifies completed content.
 """
 
-import hashlib
-
 from dataclasses import dataclass
 from collections.abc import Iterable, Mapping
 from math import isfinite
@@ -82,8 +80,3 @@ def select_due(
         ),
         default=None,
     )
-
-
-def task_key(source, kind, identity=""):
-    """Shared immutable scheduling identity for worker and accepted lineage."""
-    return hashlib.sha256(f"{source}\0{kind}\0{identity}".encode()).hexdigest()

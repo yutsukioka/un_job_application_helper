@@ -1,11 +1,11 @@
 """Independent captured-page counts for UNV and UNOPS public inventories."""
 from copy import deepcopy
 from datetime import datetime
+import gzip
 import hashlib
 from html.parser import HTMLParser
 import json
 from pathlib import Path
-from jobagg.verification_budget import read as verification_read, VerificationBudgetExceeded
 import re
 from urllib.parse import urlencode, urlsplit, urljoin
 from jobagg.pipelines.inventory_api_contracts import require, integer, identifier, jobs_by_id, raw_contains, url_signature
@@ -77,17 +77,15 @@ def verify_recovery_listing(source, jobs, capture_paths):
                 require(meta.get('method') == 'GET' and meta.get('status_code') == 200
                         and meta.get('body_captured') is True, 'UNOPS requires successful captured GET')
                 require(url_signature(meta['url']) == url_signature(expected) == url_signature(meta['response_url']), 'UNOPS page URL differs')
-                body = verification_read(Path(meta['artifact']), compressed=True)
+                body = gzip.decompress(Path(meta['artifact']).read_bytes())
                 require(hashlib.sha256(body).hexdigest() == meta['body_sha256'], 'UNOPS body hash differs')
-                html = UNOPSPage()
-                html.feed(body.decode('utf-8'))
+                html = UNOPSPage();html.feed(body.decode('utf-8'))
                 require(len(html.totals) == 1, 'UNOPS visible total missing or inconsistent')
                 total = next(iter(html.totals))
                 page_ids = []
                 # Cards can repeat the same detail link for title and CTA.
                 for link in dict.fromkeys(html.links):
-                    url = urljoin(endpoint, link)
-                    parts = urlsplit(url)
+                    url = urljoin(endpoint, link);parts = urlsplit(url)
                     require(parts.hostname == urlsplit(endpoint).hostname, 'UNOPS vacancy host differs')
                     key = parts.path.rstrip('/').rsplit('/',1)[-1]
                     require(key.isdigit() and key in parsed and parsed[key].raw.get('_detail_url') == url, 'UNOPS captured/parsed identity differs')
@@ -104,16 +102,12 @@ def verify_recovery_listing(source, jobs, capture_paths):
                     'Invalid listing capture interval')
             result['started_at'] = min(result.get('started_at', stamps[0].isoformat()), stamps[0].isoformat())
             result['finished_at'] = max(result.get('finished_at', stamps[1].isoformat()), stamps[1].isoformat())
-            ids.extend(page_ids)
-            totals.add(total)
-            pages += 1
+            ids.extend(page_ids);totals.add(total);pages += 1
             require(len(totals) == 1 and len(ids) <= total, 'Advertised total changed during pagination')
             terminal = len(ids) == total
             require(terminal or len(page_ids) == limit, 'Partial page before advertised total')
         require(pages > 0 and terminal and set(ids) == set(parsed), 'Truncated or mismatched inventory')
         result.update(complete=True, reported_total=next(iter(totals)), pages=pages)
-    except VerificationBudgetExceeded:
-        raise
     except (ValueError, KeyError, TypeError, OSError) as exc:
         result['reasons'] = [str(exc)]
     return result

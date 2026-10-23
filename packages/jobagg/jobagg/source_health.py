@@ -27,10 +27,13 @@ def source_health(conn, source_id, *, now=None, hold=None, max_age=21600):
         "SELECT max(finished_at) FROM remediation_attempts WHERE source_id=? AND status='done'",
         (source_id,),
     ).fetchone()[0]
-    from jobagg.worker_summaries import counts as task_counts
-    counts = {}
-    for row in task_counts(conn, source_id):
-        counts[row["status"]] = counts.get(row["status"], 0) + row["n"]
+    counts = {
+        row["status"]: row["n"]
+        for row in conn.execute(
+            "SELECT status,count(*) n FROM remediation_tasks WHERE source_id=? GROUP BY status",
+            (source_id,),
+        )
+    }
     retry_due = conn.execute(
         "SELECT min(eligible_at) FROM remediation_tasks WHERE source_id=? AND status='pending' AND last_error IS NOT NULL",
         (source_id,),
@@ -225,37 +228,18 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         return {"host": host, "eligible": effective <= now,
                 "next_permitted_attempt_at": effective, "reasons": reasons}
 
-    from jobagg.worker_summaries import counts as task_counts
-    for row in task_counts(conn, source.id):
+    for row in conn.execute(
+        "SELECT kind,status,count(*) AS n FROM remediation_tasks WHERE source_id=? GROUP BY kind,status",
+        (source.id,),
+    ):
         kind_counts.setdefault(row["kind"], {"states": {}, "eligible_pending": 0,
                                             "deferred_pending": 0, "held_pending": 0,
                                             "out_of_scope_pending": 0})["states"][row["status"]] = row["n"]
-    from jobagg.task_headers import exists as headers_exist
-    if headers_exist(conn):
-        rows = []
-        for group in conn.execute(
-            "SELECT source_id,kind,host,status,"
-            "sum(eligible_at<=?) AS due_n,min(CASE WHEN eligible_at<=? THEN eligible_at END) AS due_at,"
-            "sum(eligible_at>?) AS future_n,min(CASE WHEN eligible_at>? THEN eligible_at END) AS future_at "
-            "FROM jobagg_task_headers WHERE source_id=? AND status='pending' GROUP BY kind,host,status",
-            (now,now,now,now,source.id),
-        ):
-            # Two admission classes per source/kind/host preserve exact counts
-            # and the earliest future due time without one Python row per task.
-            for prefix in ('due', 'future'):
-                if group[prefix+'_n']:
-                    rows.append({**dict(group), '_host':group['host'], 'last_error':None,
-                                 'eligible_at':group[prefix+'_at'], 'weight':group[prefix+'_n']})
-        listing = conn.execute("SELECT * FROM remediation_tasks WHERE source_id=? AND kind='listing' LIMIT 1",(source.id,)).fetchone()
-        if listing and listing['status'] != 'pending':
-            rows.append(dict(listing))
-    else:
-        rows = [dict(row) for row in conn.execute(
-            "SELECT kind,status,eligible_at,payload,last_error FROM remediation_tasks "
-            "WHERE source_id=? AND (status='pending' OR kind='listing')", (source.id,),
-        )]
+    rows = [dict(row) for row in conn.execute(
+        "SELECT kind,status,eligible_at,payload,last_error FROM remediation_tasks "
+        "WHERE source_id=? AND (status='pending' OR kind='listing')", (source.id,),
+    )]
     pending_reasons = Counter()
-    pending_eligible_hosts = set()
     listing_task = None
     for task in rows:
         task["source_id"] = source.id
@@ -264,19 +248,17 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         if task["status"] != "pending":
             continue
         counts = kind_counts[task["kind"]]
-        weight = task.get('weight', 1)
         if task["kind"] == "document" and source.extra.get("fetch_attachments", True) is False:
-            counts["out_of_scope_pending"] += weight
+            counts["out_of_scope_pending"] += 1
             continue
         admission = admission_for(task, due=task["eligible_at"])
-        pending_reasons.update({reason:weight for reason in admission["reasons"]})
+        pending_reasons.update(admission["reasons"])
         if admission["eligible"]:
-            counts["eligible_pending"] += weight
-            pending_eligible_hosts.add(admission["host"])
+            counts["eligible_pending"] += 1
         elif admission["next_permitted_attempt_at"] is None:
-            counts["held_pending"] += weight
+            counts["held_pending"] += 1
         else:
-            counts["deferred_pending"] += weight
+            counts["deferred_pending"] += 1
         if admission["next_permitted_attempt_at"] is not None:
             pending_times.append(admission["next_permitted_attempt_at"])
 
@@ -314,7 +296,6 @@ def worker_source_health(worker, conn, source, listing_state, *, now, source_hol
         "task_eligibility": kind_counts,
         "deadline_holds": hold_summaries(conn, source.id),
         "eligible_pending_tasks": sum(counts["eligible_pending"] for counts in kind_counts.values()),
-        "pending_eligible_hosts": sorted(pending_eligible_hosts),
         "next_pending_attempt_at": min(pending_times) if pending_times else None,
         "pending_exclusion_reasons": dict(pending_reasons),
         "source_policy_hold": source_hold,

@@ -294,15 +294,8 @@ class DurableCapture:
                 state["last_request_at"] = completed
                 save(state_path, state)
 
-    def _remaining_budget(self):
-        from jobagg.publication_deadline import current_budget
-        from jobagg.runtime_clock import remaining
-        continuous = current_budget()
-        return min(self.deadline_at-time.time() if self.deadline_at is not None else float('inf'),
-                   remaining(continuous) if continuous is not None else float('inf'))
-
     def _check_deadline(self, delay=0):
-        if self._remaining_budget() <= delay:
+        if self.deadline_at is not None and time.time() + delay >= self.deadline_at:
             raise HostIneligible("Bounded worker deadline reached", category="budget")
 
     def complete_redirect_probe(self, host):
@@ -398,14 +391,16 @@ class DurableCapture:
                     self.last_host = host
                     self._check_deadline(request_allowance)
                     kwargs["timeout_seconds"] = configured_timeout
-                    kwargs["timeout_seconds"] = min(configured_timeout, self._remaining_budget()-1.0)
+                    if self.deadline_at is not None:
+                        kwargs["timeout_seconds"] = min(
+                            configured_timeout, self.deadline_at - time.time() - 1.0
+                        )
                     record["deadline_limited"] = kwargs["timeout_seconds"] < configured_timeout
                     self.dispatched += 1
                     record["state"] = "dispatched_before_response"
                     record["effective_timeout_seconds"] = float(kwargs.get("timeout_seconds") or self.client.timeout_seconds)
-                    budget_remaining = self._remaining_budget()
                     record["worker_budget_remaining_seconds"] = (
-                        max(0,budget_remaining) if budget_remaining != float("inf") else None
+                        max(0, self.deadline_at - time.time()) if self.deadline_at is not None else None
                     )
                     save(record_path, record)
                     stage = "transport"
@@ -588,11 +583,9 @@ class DurableCapture:
                     category = record.get("failure_category") or (
                         classify_failure(exc) if stage == "transport" or status is not None else "local_failure"
                     )
-                    from jobagg.publication_deadline import expired
-                    if (stage == "transport" and status is None
-                            and any(isinstance(error, TimeoutError) for error in exception_chain(exc))
-                            and (expired(None) or (record.get("deadline_limited")
-                                 and record["transport_elapsed_seconds"] >= record["effective_timeout_seconds"]))):
+                    if (stage == "transport" and status is None and record.get("deadline_limited")
+                            and record["transport_elapsed_seconds"] >= record["effective_timeout_seconds"]
+                            and any(isinstance(error, TimeoutError) for error in exception_chain(exc))):
                         # Only expiration of the clipped allowance is a local
                         # budget event. Early timeouts still charge host recovery.
                         record.update(failure_category="local_budget", failure_stage=stage)

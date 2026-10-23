@@ -65,13 +65,17 @@ def test_existing_worker_migrates_indexes_without_resetting_history_or_fetching(
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
         }
         assert INDEX_NAMES <= indexes
-        # M0 retains the deployed competing kind-started index. Plan spelling
-        # is not an acceptance test; the bounded joint-schema fixture in test_runtime_m0_baseline.py
-        # records its measured SQL cost separately from artifact validation.
-        assert "idx_remediation_attempts_kind_started" in indexes
-        rows = list(conn.execute(DETAIL_ATTEMPTS_QUERY, ("demo_workday", "R1")))
-        assert rows and all(row["source_id"] == "demo_workday" for row in rows)
-        assert all(row["status"] == "done" and row["finished_at"] is not None for row in rows)
+        task_plan = list(conn.execute("EXPLAIN QUERY PLAN " + DETAIL_ATTEMPTS_QUERY, ("demo_workday", "R1")))
+        operations = [str(row[3]) for row in task_plan]
+        assert any(
+            "SEARCH t" in operation and "idx_remediation_tasks_detail_identity" in operation
+            for operation in operations
+        )
+        assert any(
+            "SEARCH a" in operation and "idx_remediation_attempts_detail_lineage" in operation
+            for operation in operations
+        )
+        assert not any("SCAN a" in operation for operation in operations)
     assert (worker.workspace / "worker_workspace.json").read_bytes() == marker
     assert calls == network_calls
 

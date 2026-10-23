@@ -50,9 +50,6 @@ jobagg = [
 ]
 
 [tool.pytest.ini_options]
-# Keep failure evidence without accumulating every successful fixture.
-tmp_path_retention_policy = "failed"
-tmp_path_retention_count = 1
 testpaths = ["tests"]
 pythonpath = ["."]
 

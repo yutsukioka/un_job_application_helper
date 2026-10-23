@@ -284,37 +284,3 @@ def test_recovery_probe_requires_full_timeout_not_clipped_batch_remainder(tmp_pa
     record = json.loads((tmp_path / 'evidence/http/00001.json').read_text())
     assert record['failure_category'] == 'local_budget'
     assert record['failure_stage'] == 'local_pre_dispatch' and not record['body_captured']
-
-
-@pytest.mark.parametrize("certificate", [False, True])
-def test_masked_sleep_uses_native_budget_without_weakening_tls_review(
-    tmp_path, monkeypatch, certificate
-):
-    import ssl
-    from jobagg import runtime_clock, publication_deadline
-
-    clock = [100.0]
-    monkeypatch.setattr(runtime_clock, "now", lambda: clock[0])
-
-    def transport(url, **kwargs):
-        assert 0 < kwargs["timeout_seconds"] <= 9
-        clock[0] = 120  # Monotonic/UTC may both hide this elapsed sleep.
-        if certificate:
-            raise ssl.SSLCertVerificationError("certificate remains a review hold")
-        raise TimeoutError("request returned after local continuous expiry")
-
-    guarded = capture(tmp_path, monkeypatch, transport, deadline_at=time.time() + 1000)
-    with publication_deadline.continuous_budget(runtime_clock.budget(10)):
-        if certificate:
-            with pytest.raises(ssl.SSLCertVerificationError):
-                guarded.request("https://one.example/123", method="GET")
-        else:
-            with pytest.raises(HostIneligible) as error:
-                guarded.request("https://one.example/123", method="GET")
-            assert error.value.category == "budget"
-    state = json.loads(next((tmp_path / "hosts").glob("*.json")).read_text())
-    assert bool(state.get("stopped")) is certificate
-    assert "recovery" not in state
-    receipt = json.loads((tmp_path / "evidence/http/00001.json").read_text())
-    assert receipt["worker_budget_remaining_seconds"] <= 10
-    assert receipt["failure_category"] == ("tls_validation" if certificate else "local_budget")

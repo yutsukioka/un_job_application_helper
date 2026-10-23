@@ -85,9 +85,6 @@ class RunnerTests(unittest.TestCase):
         for mode in ("bad_run_id", "bad_manifest", "missing_source", "bad_count", "duplicate_id",
                      "stale_report", "stale_detail", "tampered_evidence", "missing_report", "nonzero"):
             with self.subTest(mode=mode):
-                # Each validator case is isolated from the M1 recurring-stage
-                # circuit; configuration changes alone no longer reset it.
-                (self.root / "state/failure_condition.json").unlink(missing_ok=True)
                 self.configure(mode)
                 self.assert_state(3, "process_failure")
 

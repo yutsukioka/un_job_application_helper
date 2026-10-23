@@ -34,7 +34,6 @@ from jobagg.pipelines.document_readback import document_readback
 from jobagg.pipelines.publication_exports import publish_exports
 from jobagg.pipelines.sync_source import load_sources
 from jobagg.publication_deadline import expired
-from jobagg.verification_budget import check as verification_check, scope as verification_scope, VerificationBudgetExceeded
 from jobagg.publication_storage import charge, ensure_directory, write_scope
 
 VERSION = "incremental-live-publication-1"
@@ -55,7 +54,6 @@ def _sha(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
-            verification_check()
             digest.update(block)
     return digest.hexdigest()
 
@@ -84,8 +82,6 @@ def _epoch(value):
 def _ro(path):
     connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
-    connection.execute('PRAGMA busy_timeout=1000')
-    connection.set_progress_handler(lambda:int(expired(None)),256)
     return connection
 
 
@@ -138,7 +134,6 @@ def _capture(path, expected_sha=None):
         digest = hashlib.sha256()
         size = 0
         for block in iter(lambda: source.read(1024 * 1024), b""):
-            verification_check()
             digest.update(block)
             size += len(block)
     if digest.hexdigest() != meta.get("body_sha256") or size != meta.get("body_bytes"):
@@ -148,9 +143,6 @@ def _capture(path, expected_sha=None):
 
 def _accepted_detail(conn, row, observation):
     proof = json.loads(observation["proof"])
-    from jobagg.accepted_evidence import legacy_rejection
-    if reason := legacy_rejection(conn, row['job_key'], proof):
-        raise ValueError(reason)
     body_hash = hashlib.sha256((row["description"] or "").encode()).hexdigest()
     if (
         proof.get("source_id") != row["source_id"]
@@ -217,18 +209,13 @@ def _documents(conn, row, proof):
                 != record["text_sha256"]
             ):
                 raise ValueError("document_identity_parent_or_hash_conflict")
-            from jobagg.accepted_evidence import resolve_event,digest
-            accepted=resolve_event(conn,kind='document',source_id=row['source_id'],task_id=record['task_id'],evidence_key=digest(doc))
-            if accepted is not None:
-                payload,receipt=accepted['payload'],accepted['receipt']
-            else:
-                task = conn.execute(
-                    "SELECT receipt,payload,status FROM remediation_tasks WHERE task_id=?",
-                    (record["task_id"],),
-                ).fetchone()
-                if not task or task["status"] != "done":
-                    raise ValueError("document_task_not_complete")
-                payload, receipt = json.loads(task["payload"]), json.loads(task["receipt"])
+            task = conn.execute(
+                "SELECT receipt,payload,status FROM remediation_tasks WHERE task_id=?",
+                (record["task_id"],),
+            ).fetchone()
+            if not task or task["status"] != "done":
+                raise ValueError("document_task_not_complete")
+            payload, receipt = json.loads(task["payload"]), json.loads(task["receipt"])
             if payload.get("url") != record["url"] or payload.get("job_key") != row["job_key"]:
                 raise ValueError("document_task_association_differs")
             path = Path(receipt["manifest"])
@@ -253,8 +240,6 @@ def _documents(conn, row, proof):
             ):
                 raise ValueError("document_capture_bytes_not_bound")
             documents.append(doc)
-        except VerificationBudgetExceeded:
-            raise
         except (ValueError, KeyError, OSError, sqlite3.DatabaseError) as exc:
             rejected.append({"task_id": record["task_id"], "reason": str(exc)})
     return documents, rejected
@@ -300,13 +285,8 @@ def _latest_detail(row, conn):
     return max((_epoch(value) for value in clocks if value), default=0.0)
 
 
-def plan_publication(*args,deadline_at=None,**kwargs):
-    with verification_scope(deadline_at):
-        return _plan_publication(*args,deadline_at=deadline_at,**kwargs)
-
-
-def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20, deadline_at=None, job_keys=None, selected_targets=None):
-    _validate_targets(worker_database, output_dir, known_paths=selected_targets)
+def plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20, deadline_at=None, job_keys=None):
+    _validate_targets(worker_database, output_dir)
     output = Path(output_dir).resolve()
     sources = {source.id: source for source in load_sources(registry_path)}
     targets = {
@@ -320,10 +300,8 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
         "created_at": _now(),
         "output_dir": str(output),
         "worker_database": str(Path(worker_database).resolve()),
-        "publication_target_paths": sorted(str(path) for path in {*targets.values(), output / "all_jobs.sqlite3"}),
         "registry_sha256": _sha(registry_path),
         "changes": [],
-        "processed_units": [],
         "listing_frames": [],
         "rejected": [],
         "unchanged": 0,
@@ -346,38 +324,20 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
         if projected is not None:
             plan["listing_only"] = projected["jobs_without_observations"]
             plan["publication_projection"] = projected
-            selection = projected.get('selection')
-            if selection is not None:
-                plan['publication_selection'] = selection
-                # Health units carry no public row/frame mutation. Their no-op
-                # is accepted only with the same verified destination boundary.
-                plan['processed_units'] = [
-                    {'unit': item['unit'], 'version': item['version']}
-                    for item in selection['units'] if item['kind'] == 'health'
-                ]
         observations = worker.execute(
             "SELECT * FROM remediation_observations ORDER BY checked_at,job_key"
         ).fetchall()
         from jobagg.pipelines.live_inventory import plan_frames
 
-        listing_diagnostics = {}
         if job_keys is None:
             plan["listing_frames"], listing_rejected = plan_frames(
-                worker, consolidated, sources, targets, limit=5, deadline_at=deadline_at, diagnostics=listing_diagnostics, selection=plan.get('publication_selection')
+                worker, consolidated, sources, targets, limit=5, deadline_at=deadline_at
             )
         else:
             selected = set(job_keys)
             observations = [row for row in observations if row["job_key"] in selected]
             plan["selected_job_keys"] = sorted(selected)
             listing_rejected = []
-        processed_sources = set(listing_diagnostics.get("processed_source_ids", []))
-        plan["processed_units"].extend(
-            {"unit": item["unit"], "version": item["version"]}
-            for item in plan.get("publication_selection", {}).get("units", [])
-            if item["kind"] == "listing" and item["source_id"] in processed_sources
-        )
-        if listing_diagnostics.get("complete") is False:
-            plan["budget_exhausted"] = True
         plan["rejected"].extend(listing_rejected)
         plan["observation_set_sha256"] = _digest(
             {
@@ -401,12 +361,6 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
                 plan["budget_exhausted"] = True
                 break
             row = _row(worker, observation["job_key"])
-            selected_unit = next((item for item in plan.get('publication_selection', {}).get('units', [])
-                                  if item['job_key'] == observation['job_key']), {})
-            if selected_unit:
-                plan['processed_units'].append(
-                    {'unit': selected_unit['unit'], 'version': selected_unit['version']})
-            force_revalidation = selected_unit.get('operation') in {'time_transition_revalidation', 'contract_revalidation'}
             try:
                 if not row or row["source_id"] not in targets:
                     raise ValueError("source_missing_or_disabled")
@@ -424,7 +378,7 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
                 key = _publication_key(row, observation, [])
                 with closing(_ro(target)) as source_conn:
                     if (
-                        not force_revalidation and not document_manifest_rows
+                        not document_manifest_rows
                         and _receipt_exists(source_conn, key)
                         and _receipt_exists(consolidated, key)
                     ):
@@ -434,16 +388,13 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
                 documents, document_rejected = (_documents(worker, row, proof)
                     if attachments_in_scope else ([], []))
                 key = _publication_key(row, observation, documents)
-                if force_revalidation:
-                    key = _digest({'accepted_publication_key': key, 'revalidation_version': selected_unit['version'],
-                                   'contract': plan['publication_selection']['contract_sha256']})
                 plan["rejected"].extend(
                     {"job_key": row["job_key"], **item} for item in document_rejected
                 )
                 with closing(_ro(target)) as source_conn:
                     source_row = _resolve(source_conn, row)
                     all_row = _resolve(consolidated, row)
-                    if not force_revalidation and not attachments_in_scope and all(
+                    if not attachments_in_scope and all(
                         previous and _raw(previous).get("_deterministic_fetch_observation") == proof
                         and all(previous.get(field) == row.get(field) for field in _PUBLIC_FIELDS)
                         for previous in (source_row, all_row)
@@ -568,20 +519,15 @@ def _plan_publication(worker_database, registry_path, output_dir, *, max_jobs=20
                             change, destination["before"], connection
                         )
                     plan["changes"].append(change)
-            except VerificationBudgetExceeded:
-                raise
             except (ValueError, KeyError, OSError, sqlite3.DatabaseError) as exc:
                 plan["rejected"].append({"job_key": observation["job_key"], "reason": str(exc)})
-    plan["pending_backlog_empty_after_generation"] = (
-        'publication_selection' not in plan and job_keys is None and listing_diagnostics.get("complete") is True
-        and not plan["budget_exhausted"] and not plan["rejected"])
     return plan
 
 
-def _validate_targets(worker_database, output_dir, *, known_paths=None):
+def _validate_targets(worker_database, output_dir):
     output = Path(output_dir)
     worker = Path(worker_database)
-    paths = [worker, *(Path(path) for path in known_paths)] if known_paths is not None else [
+    paths = [
         worker,
         *output.glob("*_jobs.sqlite3"),
         *output.glob("*_jobs_*.json"),
@@ -1037,10 +983,9 @@ def _apply_database(path, changes, generation, fault=None, frames=(), *, plan=No
                     or (wal.stat().st_size if wal.exists() else 0) > old_wal_bytes):
                 raise ValueError("publication_database_grew_after_admission")
             conn.execute(f"PRAGMA max_page_count={maximum_pages}")
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (_JOURNAL,)).fetchone():
-            conn.execute(
-                f"CREATE TABLE IF NOT EXISTS {_JOURNAL}(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)"
-            )
+        conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {_JOURNAL}(publication_key TEXT PRIMARY KEY,generation_id TEXT NOT NULL,job_key TEXT NOT NULL,committed_at TEXT NOT NULL)"
+        )
         semantic_versions = set() if policy else None
         pending_receipts = [] if policy else None
         if policy:
@@ -1266,24 +1211,9 @@ def _finish_generation(plan, gate, gate_path, deadline_at, fault=None, *, lease=
             allowed_roots=[plan["output_dir"]], deadline_at=deadline_at,
         )
         _save(Path(plan["generation_root"]) / "semantic-coverage.json", aggregate)
-    publication_boundary = None
-    if (plan.get("publication_target_paths") and
-            (not plan.get("previous_publication_boundary") or plan.get("previous_publication_boundary_verified") is True)):
-        from jobagg.publication_fence import seal_boundary
-        manifest_path = Path(plan["generation_root"]) / "exports.json"
-        publication_boundary = seal_boundary(
-            plan["publication_target_paths"], json.loads(manifest_path.read_text()),
-            output_root=plan["output_dir"], previous=plan.get("previous_publication_boundary"))
     gate.update(
         state="complete",
-        publication_boundary=publication_boundary,
-        publication_selection=plan.get('publication_selection'),
-        processed_units=plan.get('processed_units', []),
-        rejected=plan.get('rejected', []),
         status="published",
-        readback_verified=True,
-        pending_backlog_empty=(plan.get("pending_backlog_empty_after_generation") is True and
-                               (not plan.get("previous_publication_boundary") or plan.get("previous_publication_boundary_verified") is True)),
         completed_at=_now(),
         changed_jobs=len(plan["changes"]),
         published_listing_frames=len(plan["listing_frames"]),
@@ -1310,8 +1240,6 @@ def _publish_incremental(
     job_keys=None,
     publication_policy=None,
     storage_budget_lease=None,
-    previous_publication_boundary=None,
-    publication_selection=None,
 ):
     """Publish while the caller holds the shared owner; never acquires it twice.
 
@@ -1319,7 +1247,7 @@ def _publish_incremental(
     ``deadline_at`` is a monotonic clock. An individual transaction/export is a
     bounded indivisible unit; the caller must provide a hard outer deadline.
     """
-    _validate_targets(worker_database, output_dir, known_paths=publication_selection['target_paths'] if publication_selection else None)
+    _validate_targets(worker_database, output_dir)
     gate_path = Path(output_dir).resolve() / GATE_NAME
     gate = json.loads(gate_path.read_text()) if gate_path.exists() else None
     if gate and gate.get("state") != "complete":
@@ -1335,27 +1263,16 @@ def _publish_incremental(
             raise ValueError("recovery_publication_policy_changed")
         return _finish_generation(plan, gate, gate_path, deadline_at, fault, lease=storage_budget_lease)
     plan = plan_publication(
-        worker_database, registry_path, output_dir, max_jobs=max_jobs, deadline_at=deadline_at, job_keys=job_keys,
-        selected_targets=publication_selection['target_paths'] if publication_selection else None
+        worker_database, registry_path, output_dir, max_jobs=max_jobs, deadline_at=deadline_at, job_keys=job_keys
     )
-    if publication_selection is not None and plan.get('publication_selection') != publication_selection:
-        raise ValueError('selected_projection_dependency_seal_differs')
     if publication_policy is not None:
         plan["publication_policy"] = publication_policy
-    if previous_publication_boundary is not None:
-        from jobagg.publication_fence import publication_scope, verify_boundary
-        plan["previous_publication_boundary"] = previous_publication_boundary
-        plan["previous_publication_boundary_verified"] = verify_boundary(
-            previous_publication_boundary, expected_scope=publication_scope(registry_path, output_dir))
     if not execute:
         return {"status": "preview", "plan": plan}
     if not plan["changes"] and not plan["listing_frames"]:
         return {
             "status": "deferred" if plan["budget_exhausted"] else "no_changes",
             "generation_not_started": True,
-            "publication_selection": plan.get('publication_selection'),
-            "processed_units": plan["processed_units"],
-            "pending_backlog_empty": plan.get("pending_backlog_empty_after_generation") is True,
             "unchanged": plan["unchanged"],
             "rejected": plan["rejected"],
             "listing_only": plan["listing_only"],
@@ -1418,14 +1335,12 @@ def publish_incremental(*args, publication_policy=None, storage_budget_lease=Non
         storage_budget_lease = json.loads(os.environ["JOBAGG_STORAGE_BUDGET_LEASE"])
     if execute and bool(publication_policy) != bool(storage_budget_lease):
         raise ValueError("publication_policy_and_budget_lease_required_together")
-    with verification_scope(kwargs.get('deadline_at'),check_after=False), write_scope(storage_budget_lease if execute else None,
+    with write_scope(storage_budget_lease if execute else None,
                      (publication_policy or {}).get("write_limits")) as escrow:
         result = _publish_incremental(
             *args, publication_policy=publication_policy,
             storage_budget_lease=storage_budget_lease, **kwargs,
         )
-        if result.get('status') not in {'deferred','publication_pending'}:
-            verification_check()
         if escrow is not None and result.get("status") in {"publication_pending", "deferred"}:
             escrow.keep_open = True
         return result

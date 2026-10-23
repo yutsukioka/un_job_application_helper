@@ -1,9 +1,9 @@
 """Captured full-inventory contracts for the September four-source repair."""
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
-from jobagg.verification_budget import read as verification_read, VerificationBudgetExceeded
 
 from jobagg.pipelines.inventory_api_contracts import require, jobs_by_id, raw_contains
 
@@ -34,7 +34,7 @@ def body(meta):
         meta.get("status_code") == 200 and meta.get("body_captured") is True,
         "Inventory requires a captured successful response",
     )
-    data = verification_read(Path(meta["artifact"]), compressed=True)
+    data = gzip.decompress(Path(meta["artifact"]).read_bytes())
     require(
         hashlib.sha256(data).hexdigest() == meta.get("body_sha256"),
         "Inventory capture hash changed",
@@ -213,8 +213,6 @@ def verify_four_source(source, jobs, capture_paths):
             reported_total=total,
             verified_zero=total == 0,
         )
-    except VerificationBudgetExceeded:
-        raise
     except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         result["reasons"].append(str(exc))
     return result
@@ -281,8 +279,6 @@ def verify_table_listing(source, jobs, capture_paths):
                 {"path": str(path), "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
             ],
         )
-    except VerificationBudgetExceeded:
-        raise
     except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         result["reasons"].append(str(exc))
     return result

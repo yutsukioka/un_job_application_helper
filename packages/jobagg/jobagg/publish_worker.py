@@ -34,7 +34,7 @@ def _owner(path, inherited):
                 fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 fcntl.flock(inherited, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                yield inherited
+                yield
             else:
                 fcntl.flock(probe, fcntl.LOCK_UN)
                 raise ValueError("Inherited shared owner is not locked")
@@ -42,7 +42,7 @@ def _owner(path, inherited):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as owner:
             fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            yield owner.fileno()
+            yield
 
 
 def _request(args, *, owner_held=False, deadline_at=None, validation=None):
@@ -64,11 +64,6 @@ def _request(args, *, owner_held=False, deadline_at=None, validation=None):
             0, float(request["deadline_epoch"]) - time.time()
         )
         deadline_at = min(deadline_at, requested_deadline) if deadline_at is not None else requested_deadline
-    if request.get('runtime_contract'):
-        from jobagg.runtime_contract import verify
-        from jobagg.verification_budget import scope
-        with scope(deadline_at,request.get('deadline_epoch')):
-            verify(request['runtime_contract'],package_root=Path(__file__).parent.parent)
     checked = validate_publication_snapshot(
         request, args.worker_database, owner_held=owner_held, deadline_at=deadline_at
     )
@@ -83,8 +78,6 @@ def _request(args, *, owner_held=False, deadline_at=None, validation=None):
 
 
 def main(argv=None):
-    from jobagg import runtime_clock
-    entered_continuous, entered_wall, entered_monotonic = runtime_clock.now(), time.time(), time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("worker-database", "registry", "output-dir", "state-dir", "shared-lock"):
         parser.add_argument("--" + name, required=True)
@@ -97,16 +90,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.max_jobs < 1 or args.max_seconds <= 0:
         parser.error("max-jobs and max-seconds must be positive")
-    from jobagg.publication_deadline import continuous_budget, current_budget
-    phase = runtime_clock.budget(args.max_seconds, parent=current_budget(),
-                                started=entered_continuous, started_wall=entered_wall)
-    with continuous_budget(phase):
-        if runtime_clock.remaining(phase) <= 0:
-            raise TimeoutError('publisher entry budget expired')
-        return _run(args, entered_monotonic)
-
-
-def _run(args, started):
+    started = time.monotonic()
     inherited = args.owner_fd
     if inherited is None and os.environ.get("JOBAGG_SHARED_LOCK_FD"):
         inherited = int(os.environ["JOBAGG_SHARED_LOCK_FD"])
@@ -154,19 +138,12 @@ def _run(args, started):
                     request_identity=_recovery_identity(request) if request else None,
                     publication_policy=policy,
                     storage_budget_lease=lease,
-                    previous_publication_boundary=request.get("previous_publication_boundary"),
-                    publication_selection=request.get('publication_selection'),
                 )
         if recovery and (
             result.get("generation_id") != recovery["binding"]["generation_id"]
             or result.get("observation_set_sha256") != recovery["binding"]["observation_set_sha256"]
         ):
             raise ValueError("Publisher returned a different recovery generation")
-        if result.get("status") == "no_changes" and request.get("previous_publication_boundary"):
-            from jobagg.publication_fence import publication_scope, verify_boundary
-            if verify_boundary(request["previous_publication_boundary"], expected_scope=publication_scope(args.registry, args.output_dir)):
-                result["publication_boundary"] = request["previous_publication_boundary"]
-                result["readback_verified"] = True
         if request:
             status = {"published": "published", "no_changes": "noop", "deferred": "deferred"}.get(
                 result["status"], "incomplete"
@@ -178,17 +155,9 @@ def _run(args, started):
                 "publication_snapshot_validation": checked["validation_receipt"],
                 "status": status,
                 "publication": result,
-                "publication_boundary": result.get("publication_boundary"),
-                "readback_verified": result.get("readback_verified") is True,
-                "pending_backlog_empty": result.get("pending_backlog_empty") is True,
                 "observation_set_sha256": result.get("observation_set_sha256"),
                 "whole_job_completeness_certified": False,
             }
-        if request.get('runtime_contract') and result.get('status') in {'published','noop'}:
-            from jobagg.runtime_contract import verify
-            from jobagg.verification_budget import scope
-            with scope(deadline,request.get('deadline_epoch')):
-                verify(request['runtime_contract'],package_root=Path(__file__).parent.parent)
         if args.report:
             _save(args.report, result)
         return result
@@ -198,14 +167,9 @@ def _run(args, started):
             with write_scope(lease, (policy or {}).get("write_limits")) as escrow:
                 if lease is not None and not Path(args.shared_lock).is_file():
                     raise ValueError("admitted_publication_requires_existing_owner")
-                with _owner(args.shared_lock, inherited) as descriptor:
-                    from jobagg.publication_fence import writer_scope
-                    with writer_scope(descriptor, args.shared_lock, args.output_dir):
-                        result = invoke(owner_held=True)
-                if escrow is not None and (result.get("status") in {"incomplete", "deferred"}
-                                           or initial_request.get('publication_selection') is not None):
-                    # Native batches share one finite escrow. The owner settles
-                    # it only after conditional queue acknowledgements drain it.
+                with _owner(args.shared_lock, inherited):
+                    result = invoke(owner_held=True)
+                if escrow is not None and result.get("status") in {"incomplete", "deferred"}:
                     escrow.keep_open = True
         except BlockingIOError:
             result = {"status": "owner_busy", "completeness_certified": False}

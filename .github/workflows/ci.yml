@@ -13,10 +13,6 @@ permissions:
 jobs:
   python:
     runs-on: ubuntu-latest
-    env:
-      # Cover package-specific configs and the separate security rerun.
-      # Passing tmp_path fixtures are removed; failed-test evidence is retained.
-      PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 

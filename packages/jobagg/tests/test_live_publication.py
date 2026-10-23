@@ -519,7 +519,7 @@ def add_frame(setup, *, external_ids=("001", "002"), observed="2025-09-14T12:00:
             "CREATE TABLE IF NOT EXISTS remediation_sources(source_id TEXT PRIMARY KEY,last_list_at REAL,listing_ids TEXT,listing_proof TEXT)"
         )
         conn.execute(
-            "INSERT OR REPLACE INTO remediation_sources(source_id,last_list_at,listing_ids,listing_proof) VALUES(?,?,?,?)",
+            "INSERT OR REPLACE INTO remediation_sources VALUES(?,?,?,?)",
             (
                 source,
                 datetime.fromisoformat(observed).timestamp(),

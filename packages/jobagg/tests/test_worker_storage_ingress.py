@@ -14,9 +14,7 @@ from jobagg.http import JobAggHTTPClient, ResponseTooLargeError
 from jobagg.remediation_worker import WorkerStorage
 from jobagg.storage_budget import BudgetLedger, CONTROL_ENVELOPE_BYTES, TOTAL_LIMIT, assess, inventory, parse_budget_config, StorageBudgetDeferred
 from test_http import FakeHeaders
-from test_remediation_worker import setup  # noqa: F401
-
-# ruff: noqa: F811
+from test_remediation_worker import setup
 
 
 class Stream:
@@ -187,36 +185,34 @@ def test_global_claim_shortage_cannot_charge_shared_attempt(setup, monkeypatch):
     worker, replies, calls, tmp, request, ledger = enable_storage(setup, monkeypatch)
     worker.storage = WorkerStorage(worker, ledger.for_writer("worker").wire(), request["storage_limits"])
     worker.storage.activate(request["semantic_history_policy"])
-    from jobagg.remediation_worker import shared_owner
-    with shared_owner(worker.shared_lock) as fd:
-        worker._runtime_owner_fd=fd
-        with admitted_file_writes(worker.storage.file_write):
-            worker.seed_listings()
-            task = worker.choose()
-            before = ledger.remaining_envelope()["essential"]
-            worker.storage.preclaim(task)
-            complete_cost = before - ledger.remaining_envelope()["essential"]
-            claim_grant = worker.storage.completion[task["task_id"]].get("claim_database")
-            other_cost = complete_cost - (claim_grant.maximum if claim_grant else 0)
-            with sqlite3.connect(worker.db.path.as_uri() + "?mode=ro", uri=True) as conn:
-                _, claim_bound = worker.storage.database_bound(conn)
-            worker.storage.release_task(task["task_id"])
-            # Enough for ingress/hold/control and half the claim transaction: the
-            # missing global claim allowance must fail before shared quota history.
-            keep = other_cost + claim_bound // 2
-            occupied = ledger.reserve("essential", ledger.remaining_envelope()["essential"] - keep,
-                                      path=worker.workspace, operation_id="other-admitted-work")
-            policy_before = {path: path.read_bytes() for path in worker.shared_policy.root.rglob("*.json")}
-            try:
-                with pytest.raises(StorageBudgetDeferred):
-                    worker.admit(task, time.time() + 120)
-                assert query(worker, "SELECT count(*) FROM remediation_attempts") == [(0,)]
-                assert query(worker, "SELECT status,attempts FROM remediation_tasks") == [("pending", 0)]
-                assert {path: path.read_bytes() for path in worker.shared_policy.root.rglob("*.json")} == policy_before
-                assert set(ledger.snapshot()["operations"]) == {"other-admitted-work"}
-                assert calls == []
-            finally:
-                occupied.settle(0)
+    with admitted_file_writes(worker.storage.file_write):
+        worker.seed_listings()
+        task = worker.choose()
+        before = ledger.remaining_envelope()["essential"]
+        worker.storage.preclaim(task)
+        complete_cost = before - ledger.remaining_envelope()["essential"]
+        claim_grant = worker.storage.completion[task["task_id"]].get("claim_database")
+        other_cost = complete_cost - (claim_grant.maximum if claim_grant else 0)
+        with sqlite3.connect(worker.db.path.as_uri() + "?mode=ro", uri=True) as conn:
+            _, claim_bound = worker.storage.database_bound(conn)
+        worker.storage.release_task(task["task_id"])
+        # Enough for ingress/hold/control and half the claim transaction: the
+        # missing global claim allowance must fail before shared quota history.
+        keep = other_cost + claim_bound // 2
+        occupied = ledger.reserve("essential", ledger.remaining_envelope()["essential"] - keep,
+                                  path=worker.workspace, operation_id="other-admitted-work")
+        policy_before = {path: path.read_bytes() for path in worker.shared_policy.root.rglob("*.json")}
+        try:
+            with pytest.raises(StorageBudgetDeferred):
+                worker.admit(task, time.time() + 120)
+            assert query(worker, "SELECT count(*) FROM remediation_attempts") == [(0,)]
+            assert query(worker, "SELECT status,attempts FROM remediation_tasks") == [("pending", 0)]
+            assert {path: path.read_bytes() for path in worker.shared_policy.root.rglob("*.json")} == policy_before
+            assert set(ledger.snapshot()["operations"]) == {"other-admitted-work"}
+            assert calls == []
+        finally:
+            occupied.settle(0)
+
 
 def test_browser_fails_closed_before_claim_and_provider(setup, monkeypatch):
     worker, replies, calls, tmp, request, ledger = enable_storage(setup, monkeypatch)
