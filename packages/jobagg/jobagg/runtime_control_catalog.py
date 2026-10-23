@@ -639,15 +639,24 @@ def close_reconciled(
     deadline_at,
     generation_references=(),
     reviewed_generation_sha256=(),
+    historical_index=None,
 ):
     """Compute exact accepted/export reconciliation here; never trust a boolean."""
     owner(owner_fd, owner_path)
     row = conn.execute(
-        "SELECT control_root,proof_json FROM jobagg_legacy_controls WHERE run_id=?", (run_id,)
+        "SELECT control_root,proof_json,disposition FROM jobagg_legacy_controls WHERE run_id=?", (run_id,)
     ).fetchone()
     if row is None:
         raise ValueError("legacy_control_closure_run_unknown")
     proof = json.loads(row[1])
+    if historical_index is not None:
+        accepted = conn.execute(
+            "SELECT proof_sha256 FROM jobagg_accepted_exit_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if (row[2] not in {"publication_reconciliation_required", "terminal_verified"}
+                or accepted is None or accepted[0] != proof.get("accepted_exit_sha256")
+                or proof.get("acceptance_hold") or proof.get("publication_review_hold")):
+            raise ValueError("historical_index_requires_reviewed_accepted_terminal_run")
     if proof.get("publication_contradiction_review_hold"):
         raise ValueError("legacy_publication_contradiction_requires_separate_review_resolution")
     from jobagg.runtime_reconciliation import reconcile_run
@@ -661,6 +670,7 @@ def close_reconciled(
         expected_publication_scope=expected_publication_scope,
         generation_references=generation_references,
         reviewed_generation_sha256=reviewed_generation_sha256,
+        historical_index=historical_index,
     )
     if not reconciliation["activation_reconciled"]:
         raise ValueError("legacy_control_closure_requires_exact_identity_and_export_reconciliation")
