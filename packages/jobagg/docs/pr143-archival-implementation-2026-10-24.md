@@ -79,9 +79,7 @@ The existing general compression retirement switches are not used by this
 executor and are not a deployment procedure.
 
 Automatic approval review rejected the initial retirement-capable executor as
-outside the retained authorization. Consequently a guarded original-file handoff
-is still pending explicit approval; no such implementation or production
-retirement is part of this increment.
+outside the retained authorization. The user subsequently authorized [guarded removal in isolated copies only](pr143-isolated-archive-removal-2026-10-24.md). That separate operation is now implemented; the additive executor remains unchanged and production retirement is not authorized.
 
 ## Validation and remaining deployment gates
 

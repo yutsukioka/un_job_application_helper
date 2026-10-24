@@ -22,7 +22,18 @@ def write(path, value):
 
 
 @pytest.fixture
-def page(tmp_path):
+def page(tmp_path, monkeypatch):
+    # Model reviewed capacity for these tiny synthetic artifacts. Hosted runners
+    # can have less than the production 20 GiB floor even with no test buildup.
+    # Explicit low-reserve cases override this model and must still be rejected.
+    actual_usage = migration.shutil.disk_usage
+
+    def reviewed_fixture_capacity(path):
+        actual = actual_usage(path)
+        extra = 64 * 1024**3
+        return type(actual)(actual.total + extra, actual.used, actual.free + extra)
+
+    monkeypatch.setattr(migration.shutil, "disk_usage", reviewed_fixture_capacity)
     root = tmp_path
     state, dispatcher, output = root / "publication", root / "dispatcher", root / "output"
     (dispatcher / "runs").mkdir(parents=True)
