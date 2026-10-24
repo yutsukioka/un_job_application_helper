@@ -1,5 +1,7 @@
 # PR #143 production deployment gates — 24 October 2026
 
+The [authorized production preflight at 20:04 EAT](pr143-authorized-production-preflight-2026-10-24.md) supersedes this earlier status. Final activation is authorized, but the complete measured-artifact intersection demonstrates a remaining native catalogue/reader migration blocker. Production remains fenced.
+
 Observed Africa/Nairobi; latest preservation check **2026-10-24T10:34:37.132823+03:00**.
 The user's instruction to implement steps 1–7 authorizes a conditional production
 cutover after its acceptance gates. No additional activation permission is being
