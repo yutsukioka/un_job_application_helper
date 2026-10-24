@@ -56,7 +56,8 @@ def _schema_hash(conn):
     return hashlib.sha256(json.dumps([tuple(row) for row in rows], sort_keys=True).encode()).hexdigest()
 
 
-def validate(conn):
+def _validate_structure(conn):
+    """Validate SQL fences only; ordinary admission must also validate the head."""
     value = state(conn)
     if value is None or value['schema'] != SCHEMA:
         raise RuntimeRepairRequired('runtime_authority_missing_or_unknown')
@@ -81,6 +82,11 @@ def validate(conn):
     for name, sql in _triggers(tables).items():
         if name not in actual or ' '.join(actual[name].split()) != ' '.join(sql.split()):
             raise RuntimeRepairRequired('runtime_fence_changed')
+    return value
+
+
+def validate(conn):
+    value = _validate_structure(conn)
     from jobagg.runtime_source_head import validate as validate_head
     validate_head(conn, value)
     return value
