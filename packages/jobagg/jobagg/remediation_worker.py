@@ -82,7 +82,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "f7ddc51178e8d4ca8b825e8091117b122a668fe649ac86f883962d318c8f1824"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "5c62ee699fe53e5f1ab33f05058a5aff68be6ad05f6056783da0baf564ae5fab"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})
@@ -759,6 +759,7 @@ class Worker:
         max_requests_per_task=200,
         client_factory=None,
         policy_bootstrap=None,
+        policy_authority_location=None,
         max_detail_tasks=None,
         parallel_sources=1,
     ):
@@ -797,7 +798,7 @@ class Worker:
         if len({s.id for s in self.sources}) != len(self.sources):
             raise ValueError("Duplicate configured source IDs")
         self.by_id = {s.id: s for s in self.sources if s.enabled}
-        self.shared_policy = SharedPolicy(self.shared_lock, self.by_id, policy_bootstrap)
+        self.shared_policy = SharedPolicy(self.shared_lock, self.by_id, policy_bootstrap, native_location=policy_authority_location)
         self.policy = load_policy(self.robots_path)
         self.client_factory = client_factory or _http_client_for_source
         self.binding = {
@@ -1170,6 +1171,9 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                         ) AS last_attempt_at FROM remediation_tasks t WHERE t.status='pending'""")
                     if row["kind"] not in excluded_kinds and row["source_id"] in self.by_id
                 ]
+            from jobagg.runtime_holds import find as scoped_integrity_hold
+            rows = [row for row in rows if not scoped_integrity_hold(conn, source=row["source_id"],
+                    task=row["task_id"], host=row.get("_host") or self.task_host(row))]
             source_states = {row["source_id"]: dict(row) for row in conn.execute(
                 "SELECT source_id,last_service,last_list_at,listing_proof FROM remediation_sources")}
             served = {key: state["last_service"] for key, state in source_states.items()}
@@ -1281,6 +1285,10 @@ CREATE INDEX IF NOT EXISTS idx_remediation_tasks_source_kind_status
                 raise ValueError("Task already claimed")
             if any(row[key] != task[key] for key in ("payload", "source_id", "kind")):
                 raise ValueError("Selected task changed before durable reservation")
+            from jobagg.runtime_holds import find as scoped_integrity_hold
+            hold = scoped_integrity_hold(conn, source=task["source_id"], task=task["task_id"], host=self.task_host(task))
+            if hold:
+                raise HostIneligible("Scoped integrity hold before durable reservation: " + hold["reason"])
             state = self.host_state(self.task_host(task))
             if task["kind"] != "listing" and listing_recovery_pending(
                 conn.execute("SELECT last_list_at,listing_proof FROM remediation_sources WHERE source_id=?",
@@ -2866,6 +2874,8 @@ def _run_worker(a, entered_monotonic, entered_wall, phase):
         if bool(a.request) != bool(a.report):
             raise ValueError("--request and --report must be supplied together")
         request = validate_request(a.request, a.report, a.registry) if a.request else None
+        if request and request.get('policy_authority_location') is not None and not request.get('runtime_contract'):
+            raise ValueError('native policy location requires the sealed dispatcher runtime contract')
         worker = Worker(
             registry=a.registry,
             robots=a.robots,
@@ -2874,6 +2884,7 @@ def _run_worker(a, entered_monotonic, entered_wall, phase):
             max_tasks=a.max_tasks,
             max_seconds=a.max_seconds,
             policy_bootstrap=a.policy_bootstrap,
+            policy_authority_location=(request or {}).get('policy_authority_location'),
             max_detail_tasks=a.max_detail_tasks,
             parallel_sources=a.parallel_sources,
             max_requests_per_task=a.max_requests_per_task,

@@ -17,6 +17,7 @@ import uuid
 
 from jobagg.atomic_files import atomic_write_text
 from jobagg.publication_fence import _owner
+from jobagg.policy_evidence import EvidenceLocations, NAME as LOCATIONS_NAME
 
 SCHEMA = "jobagg-policy-authority-3"
 
@@ -117,6 +118,7 @@ class PolicyAuthority:
             value = dict(conn.execute("SELECT * FROM authority WHERE id=1").fetchone())
             if (
                 value["epoch"] != head["epoch"]
+                or (getattr(self.policy, "native_epoch", None) is not None and value["epoch"] != self.policy.native_epoch)
                 or value["revision"] != head["revision"]
                 or value["transaction_id"] != head["transaction_id"]
             ):
@@ -188,6 +190,9 @@ class PolicyAuthority:
     def _verify_boundary(self, head):
         from jobagg.publication_fence import _file_identity
 
+        locations = self.policy.root / LOCATIONS_NAME
+        if locations.exists() and str(locations) not in head.get('immutable_controls', {}):
+            raise ValueError('policy_evidence_locations_not_admitted')
         for path, identity in head.get("immutable_controls", {}).items():
             try:
                 actual = _file_identity(path)
@@ -295,7 +300,10 @@ class PolicyAuthority:
         Quota rows are retained even when evidence is damaged. Failed or overdue
         audit prevents admission; it never empties the source's charge history.
         """
-        if type(limit) is not int or limit <= 0 or maximum_lag_seconds <= 0:
+        if (type(limit) is not int or limit <= 0
+                or type(maximum_lag_seconds) not in (int, float)
+                or not math.isfinite(maximum_lag_seconds) or maximum_lag_seconds <= 0
+                or type(now) not in (int, float) or not math.isfinite(now) or now < 0):
             raise ValueError("finite_policy_audit_contract_required")
         # Overdue admission is a read-only hold, not an uncertain write. An
         # explicitly invoked catch-up still checks finite pages and retains all
@@ -314,9 +322,10 @@ class PolicyAuthority:
                 "SELECT path,sha256 FROM evidence WHERE path>? ORDER BY path LIMIT ?",
                 (control["audit_cursor"], limit),
             ).fetchall()
+            locations = EvidenceLocations(self.policy)
             for row in rows:
                 self._check_budget()
-                if _sha(row["path"], self._check_budget) != row["sha256"]:
+                if locations.sha(row["path"], row["sha256"], _sha, self._check_budget) != row["sha256"]:
                     raise ValueError("policy_evidence_missing_or_changed_charges_retained")
             more = (
                 rows

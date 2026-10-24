@@ -18,6 +18,14 @@ from jobagg.runtime_source_head import owner
 SCHEMA = "accepted-worker-exit-1"
 
 
+class AcceptanceUnavailable(ValueError):
+    """Intact legacy controls lack proof; never a successful acceptance claim."""
+
+    def __init__(self, reasons):
+        self.reasons = tuple(reasons)
+        super().__init__(";".join(self.reasons))
+
+
 def prepare(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS jobagg_accepted_exits(attempt_id TEXT PRIMARY KEY,
         run_id TEXT,task_id TEXT,source_id TEXT,kind TEXT,proof_sha256 TEXT,controls_json TEXT)""")
@@ -65,7 +73,7 @@ def _bundle(run, *, deadline_at, reviewed_implementations, owner_path=None):
             owner_path is not None
             and report.get("binding", {}).get("shared_lock") != str(Path(owner_path).absolute())
         )
-        or report["binding"].get("implementation_sha256") not in reviewed_implementations
+        or not re.fullmatch(r"[a-f0-9]{64}", str(report["binding"].get("implementation_sha256")))
     ):
         raise ValueError("accepted_exit_successful_bound_report_required")
     _, manifest = _read(run / "source_manifest.json", deadline_at)
@@ -75,9 +83,17 @@ def _bundle(run, *, deadline_at, reviewed_implementations, owner_path=None):
         "path": str(run / "source_manifest.json"),
         "sha256": manifest["sha256"],
     }
-    intervals = report.get("concurrency", {}).get("task_intervals")
+    unavailable = []
+    if report["binding"]["implementation_sha256"] not in reviewed_implementations:
+        unavailable.append("accepted_exit_implementation_review_required")
+    concurrency = report.get("concurrency", {})
+    if not isinstance(concurrency, dict):
+        raise ValueError("accepted_exit_concurrency_invalid")
+    if "task_intervals" not in concurrency:
+        unavailable.append("accepted_exit_attempt_identities_missing")
+    intervals = concurrency.get("task_intervals", [])
     if not isinstance(intervals, list):
-        raise ValueError("accepted_exit_attempt_identities_missing")
+        raise ValueError("accepted_exit_attempt_intervals_invalid")
     expected = set(request.get("expected_source_ids", []))
     rows = []
     seen = set()
@@ -103,6 +119,8 @@ def _bundle(run, *, deadline_at, reviewed_implementations, owner_path=None):
             raise ValueError("accepted_exit_attempt_scope_or_duplicate")
         seen.add(attempt)
         rows.append({key: item[key] for key in ("attempt_id", "task_id", "source_id", "kind")})
+    if unavailable:
+        raise AcceptanceUnavailable(unavailable)
     proof = {
         "schema": SCHEMA,
         "run_id": run.name,

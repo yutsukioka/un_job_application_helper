@@ -49,6 +49,10 @@ def plan_frames(worker, consolidated, sources, targets, *, limit, deadline_at=No
         source_id = source_row["source_id"]
         diagnostics["processed_source_ids"].append(source_id)
         try:
+            from jobagg.runtime_holds import find as scoped_integrity_hold
+            hold = scoped_integrity_hold(worker, source=source_id, unit="listing:" + source_id)
+            if hold:
+                raise ValueError("publication_scope_integrity_hold: " + hold["reason"])
             if source_id not in targets or not targets[source_id].is_file():
                 raise ValueError("listing_source_database_unavailable")
             from jobagg.accepted_evidence import resolve_listing_event

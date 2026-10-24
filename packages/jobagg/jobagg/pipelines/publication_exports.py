@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import stat
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -19,6 +20,7 @@ from jobagg.atomic_files import atomic_write_text
 from jobagg.db import JobDatabase
 from jobagg.pipelines.exports import export_jobs
 from jobagg.publication_deadline import expired
+from jobagg.verification_budget import VerificationBudgetExceeded, check, scope
 from jobagg.publication_storage import charge, ensure_directory
 from jobagg.retained_artifacts import archived_fingerprint, open_artifact
 
@@ -58,10 +60,14 @@ def _fingerprint(path):
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise ValueError(f"export_evidence_identity_changed:{path}")
         for block in iter(lambda: source.read(1024 * 1024), b""):
+            check()
             digest.update(block)
     after = path.lstat()
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
     ):
         raise ValueError(f"export_evidence_changed_during_hash:{path}")
     return {"sha256": digest.hexdigest(), "size": after.st_size}
@@ -149,6 +155,7 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as output, open_artifact(source) as input_file:
                 for block in iter(lambda: input_file.read(1024 * 1024), b""):
+                    check()
                     output.write(block)
                     digest.update(block)
                     size += len(block)
@@ -167,34 +174,76 @@ def _copy_sealed(source, target, expected, *, stage, key, target_before=None, fa
         _require(target, expected, "export_sealed_copy_readback_failed")
 
 
-def _render(item, root, *, fault=None, content_addressed=False, consume=None):
+class _ExportStream:
+    def __init__(self, stream, maximum_bytes, *, translate_newlines=False):
+        self.stream, self.maximum_bytes, self.size = stream, maximum_bytes, 0
+        self.translate_newlines = translate_newlines
+
+    def write(self, value):
+        check()
+        count = len(
+            (value.replace("\n", os.linesep) if self.translate_newlines else value).encode("utf-8")
+        )
+        if self.maximum_bytes is not None and self.size + count > self.maximum_bytes:
+            raise ValueError("bootstrap_export_byte_limit")
+        self.size += count
+        return self.stream.write(value)
+
+    def flush(self):
+        check()
+        return self.stream.flush()
+
+    def record_boundary(self):
+        check()
+        return getattr(self.stream, "record_boundary", lambda: None)()
+
+
+def _export(item, stream, maximum_bytes):
+    db = JobDatabase(item["database"], read_only=True)
+    try:
+        with db.connection_scope() as conn:
+            conn.set_progress_handler(lambda: int(expired(None)), 1000)
+            export_jobs(
+                db,
+                output_path=item["path"],
+                output_format=item["format"],
+                status=item["status"],
+                history_only=item["history_only"],
+                output_stream=_ExportStream(
+                    stream, maximum_bytes, translate_newlines=item["format"] == "json"
+                ),
+            )
+    except sqlite3.OperationalError as error:
+        if str(error) == "interrupted" and expired(None):
+            raise VerificationBudgetExceeded("publication export SQL deadline") from error
+        raise
+    check()
+
+
+def _render(item, root, *, fault=None, content_addressed=False, consume=None, maximum_bytes=None):
     # A separate directory avoids replacing unjournaled legacy preparation.
     prepared = root / "exports-v2" / Path(item["path"]).name
     ensure_directory(prepared.parent)
     if content_addressed:
         from jobagg.publication_artifacts import RecordWriter
 
-        writer = RecordWriter(prepared, translate_newlines=item["format"] == "json", consume=consume)
-        export_jobs(
-            JobDatabase(item["database"], read_only=True), output_path=prepared,
-            output_format=item["format"], status=item["status"],
-            history_only=item["history_only"], output_stream=writer,
+        writer = RecordWriter(
+            prepared, translate_newlines=item["format"] == "json", consume=consume
         )
+        _export(item, writer, maximum_bytes)
         _fault(fault, "before_export_prepared_seal", item["path"])
         return str(prepared), writer.seal()
     from jobagg.publication_storage import active
+
     if active():
         raise ValueError("admitted_publication_requires_record_chunk_exports")
     fd, temporary = tempfile.mkstemp(prefix="." + prepared.name + ".", dir=prepared.parent)
     os.close(fd)
     try:
-        export_jobs(
-            JobDatabase(item["database"], read_only=True),
-            output_path=temporary,
-            output_format=item["format"],
-            status=item["status"],
-            history_only=item["history_only"],
-        )
+        with open(
+            temporary, "w", encoding="utf-8", newline="" if item["format"] == "csv" else None
+        ) as stream:
+            _export(item, stream, maximum_bytes)
         with open(temporary, "rb") as handle:
             os.fsync(handle.fileno())
         expected = _fingerprint(temporary)
@@ -275,8 +324,17 @@ def _initialize_checkpoint(plan, item, receipt, prior_hashes, *, fault=None):
             "legacy_backup": _legacy_backup(plan, item, prior_hashes),
             "phase": "replaced_verified" if old == new else "replace_intent",
         }
-    content_addressed = plan.get("publication_policy", {}).get("export_storage") == "record_chunks_v1"
-    prepared, new = _render(item, root, fault=fault, content_addressed=content_addressed, consume=charge)
+    content_addressed = (
+        plan.get("publication_policy", {}).get("export_storage") == "record_chunks_v1"
+    )
+    prepared, new = _render(
+        item,
+        root,
+        fault=fault,
+        content_addressed=content_addressed,
+        consume=charge,
+        maximum_bytes=plan.get("bootstrap_max_export_bytes"),
+    )
     checkpoint = {
         "item": item,
         "prepared": prepared,
@@ -341,7 +399,10 @@ def _validate_checkpoint(checkpoint, item, root):
     if checkpoint.get("item") != item:
         raise ValueError("export_checkpoint_specification_changed")
     if checkpoint.get("phase") not in {
-        "prepared_verified", "backup_verified", "replace_intent", "replaced_verified"
+        "prepared_verified",
+        "backup_verified",
+        "replace_intent",
+        "replaced_verified",
     }:
         raise ValueError("export_checkpoint_phase_invalid")
     prepared = Path(checkpoint["prepared"])
@@ -357,6 +418,20 @@ def _validate_checkpoint(checkpoint, item, root):
 
 def publish_exports(plan, items, *, deadline_at=None, fault=None):
     """Return durable progress; caller keeps the API gate closed until complete."""
+    try:
+        with scope(deadline_at, check_after=False):
+            result = _publish_exports(plan, items, deadline_at=deadline_at, fault=fault)
+            if result["complete"]:
+                check()
+            return result
+    except VerificationBudgetExceeded:
+        # A selected export may have replaced bytes before expiry. Keep its
+        # exact journal/escrow for recovery; never report a provider failure or
+        # manufacture a count from an expired partial pass.
+        return {"complete": False, "exports": None, "reason": "deadline_during_export"}
+
+
+def _publish_exports(plan, items, *, deadline_at=None, fault=None):
     root = Path(plan["generation_root"])
     manifest_path, journal_path = root / "exports.json", root / JOURNAL_NAME
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
@@ -401,7 +476,8 @@ def publish_exports(plan, items, *, deadline_at=None, fault=None):
                 # A missing target after a recorded replace intent is repairable
                 # from sealed bytes, but unrelated new content must never vanish.
                 if current is not None or checkpoint["phase"] not in {
-                    "replace_intent", "replaced_verified"
+                    "replace_intent",
+                    "replaced_verified",
                 }:
                     raise ValueError("export_target_preimage_conflict")
             _backup(checkpoint, root, fault=fault)
@@ -415,8 +491,13 @@ def publish_exports(plan, items, *, deadline_at=None, fault=None):
             if observed != current:
                 raise ValueError("export_target_changed_before_replace")
             _copy_sealed(
-                checkpoint["prepared"], key, new, stage="export_target", key=key,
-                target_before=current, fault=fault
+                checkpoint["prepared"],
+                key,
+                new,
+                stage="export_target",
+                key=key,
+                target_before=current,
+                fault=fault,
             )
         checkpoint["phase"] = "replaced_verified"
         _save(journal_path, journal)

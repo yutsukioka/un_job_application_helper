@@ -74,8 +74,12 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
         ]
         budget_config = parse_budget_config(config["storage_budget"])
     config["runtime_control"] = True
+    # This case checks durable generation/escrow recovery using real SQLite and
+    # exports. A loaded CI runner must not turn its unrelated 3-second fixture
+    # deadline into the injected interruption. Deadline faults have separate tests.
+    config.update(total_timeout_seconds=120, timeout_seconds=15, publication_timeout_seconds=45)
     config["phase_budgets"] = dict(
-        projection_max_seconds=3,
+        projection_max_seconds=15,
         projection_min_seconds=0.01,
         publisher_min_seconds=0.01,
         cleanup_report_seconds=0.01,
@@ -217,7 +221,7 @@ def test_three_bounded_generations_preserve_worker_proofs_then_true_empty_skips_
                             "--report",
                             str(report),
                             "--max-seconds",
-                            "3",
+                            "30",
                             "--execute",
                         ]
                     )

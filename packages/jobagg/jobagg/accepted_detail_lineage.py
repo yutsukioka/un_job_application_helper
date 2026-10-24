@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import time
 
@@ -110,7 +109,9 @@ def matching_detail_attempts(conn, row, proof, *, deadline_at=None, timings=None
         _check(deadline_at)
         try:
             receipt = json.loads(attempt["evidence"] or "{}")
-            path = Path(receipt["detail_path"])
+            from jobagg import artifact_locations, runtime_authority
+            path = artifact_locations.resolve(conn, receipt["detail_path"], receipt["detail_sha256"],
+                                              strict=runtime_authority.state(conn) is not None)
             started = time.monotonic()
             is_file = path.is_file()
             _add(timings, "artifact_metadata_seconds", started)
