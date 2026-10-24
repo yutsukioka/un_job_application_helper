@@ -78,7 +78,8 @@ class _Reader:
             return True
         if self.eof:
             return False
-        block = os.read(self.fd, min(65536, self.maximum + 1 - self.bytes))
+        maximum = min(65536, self.maximum + 1 - self.bytes)
+        block = self.fd.read(maximum) if hasattr(self.fd, "read") else os.read(self.fd, maximum)
         self.bytes += len(block)
         if self.bytes > self.maximum:
             raise ValueError("historical_plan_byte_bound")
@@ -226,7 +227,7 @@ class _Reader:
         return value if selector is not None else None
 
 
-def read_plan(path, *, expected_sha256, deadline_at, max_bytes, retained_bytes=64 * 1024**2):
+def read_plan(path, *, expected_sha256, deadline_at, max_bytes, retained_bytes=64 * 1024**2, archive=None):
     if (
         type(max_bytes) is not int
         or not 0 < max_bytes <= 1024**3
@@ -240,6 +241,26 @@ def read_plan(path, *, expected_sha256, deadline_at, max_bytes, retained_bytes=6
     path = Path(path).absolute()
     if path.resolve() != path:
         raise ValueError("historical_plan_aliased")
+    if archive is not None:
+        if archive.value["kind"] != "plan":
+            raise ValueError("historical_plan_requires_plan_representation")
+        with archive.open(path, expected_sha256=expected_sha256,
+                          deadline_at=deadline_at, max_bytes=max_bytes) as stream:
+            reader = _Reader(stream, max_bytes, deadline_at, retained_bytes)
+            value = reader.value(PLAN_FIELDS)
+            reader.whitespace()
+            if reader.peek():
+                raise ValueError("historical_plan_trailing_content")
+            reader.check()
+            if reader.digest.hexdigest() != expected_sha256:
+                raise ValueError("historical_plan_hash_or_identity_changed")
+        if not isinstance(value, dict):
+            raise ValueError("historical_plan_object_required")
+        return value, {"path": str(path), "sha256": reader.digest.hexdigest(),
+                       "bytes": reader.bytes, "retained_characters": reader.retained,
+                       "identity": archive.value["original_identity"],
+                       "identity_kind": "original_pre_archive_provenance",
+                       "representation_grant_sha256": archive.sha256}
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
         raise ValueError("historical_plan_not_regular_or_oversized")

@@ -60,6 +60,19 @@ def location(reference, label):
     return physical
 
 
+def _dependency(reference, label, expected_identity, archives, deadline_at, error):
+    _check(deadline_at)
+    path = location(reference, label)
+    grant = (archives or {}).get(str(path))
+    if grant is not None:
+        if label != "plan" or grant.value["kind"] != "plan" or grant.path != path:
+            raise ValueError("historical_occurrence_wrong_representation_scope")
+        grant.check(deadline_at=deadline_at, expected_sha256=reference[label + "_sha256"],
+                    original_identity=expected_identity)
+    elif path.resolve() != path or list(_stamp(path.stat())) != expected_identity:
+        raise ValueError(error)
+
+
 def prepare(conn, *, references, mapping_sha256):
     if not isinstance(references, list) or not 0 < len(references) <= 512:
         raise ValueError("finite_historical_generation_inventory_required")
@@ -86,7 +99,7 @@ def prepare(conn, *, references, mapping_sha256):
     conn.execute("INSERT OR IGNORE INTO index_state VALUES(1,?,0)", (contract,))
 
 
-def step(conn, *, mapping, limit, deadline_at, max_plan_bytes):
+def step(conn, *, mapping, limit, deadline_at, max_plan_bytes, archives=None):
     if type(limit) is not int or not 0 < limit <= 64:
         raise ValueError("finite_historical_generation_page_required")
     contract = json.loads(conn.execute("SELECT contract FROM index_state WHERE id=1").fetchone()[0])
@@ -115,6 +128,7 @@ def step(conn, *, mapping, limit, deadline_at, max_plan_bytes):
                 expected_sha256=reference["plan_sha256"],
                 deadline_at=deadline_at,
                 max_bytes=max_plan_bytes,
+                archive=(archives or {}).get(str(location(reference, "plan"))),
             )
             bytes_read += record["bytes"]
             if (
@@ -228,9 +242,8 @@ def step(conn, *, mapping, limit, deadline_at, max_plan_bytes):
             }
             mapping.validate()
             for label in ("plan", "result"):
-                p = location(reference, label)
-                if p.resolve() != p or list(_stamp(p.stat())) != proof[label + "_identity"]:
-                    raise ValueError("historical_generation_dependency_changed_before_checkpoint")
+                _dependency(reference, label, proof[label + "_identity"], archives, deadline_at,
+                            "historical_generation_dependency_changed_before_checkpoint")
             with conn:
                 conn.executemany("INSERT INTO occurrences VALUES(?,?,?,?,?,?,?,?)", records)
                 conn.execute(
@@ -249,8 +262,9 @@ def step(conn, *, mapping, limit, deadline_at, max_plan_bytes):
 
 
 class Index:
-    def __init__(self, path, *, expected_sha256, mapping, deadline_at):
+    def __init__(self, path, *, expected_sha256, mapping, deadline_at, archives=None):
         self.path, self.mapping, self.deadline = Path(path), mapping, deadline_at
+        self.archives = dict(archives or {})
         if self.path.stat().st_size > 256 * 1024**2:
             raise ValueError("historical_occurrence_index_oversized")
         record = stable_file(self.path, deadline_at=deadline_at)
@@ -274,9 +288,8 @@ class Index:
                 _check(deadline_at)
                 proof = json.loads(raw)
                 for label in ("plan", "result"):
-                    p = location(proof["reference"], label)
-                    if p.resolve() != p or list(_stamp(p.stat())) != proof[label + "_identity"]:
-                        raise ValueError("historical_occurrence_index_dependency_changed")
+                    _dependency(proof["reference"], label, proof[label + "_identity"],
+                                self.archives, deadline_at, "historical_occurrence_index_dependency_changed")
         self.sha256 = expected_sha256
 
     def generation(self, generation_id, *, deadline_at):
@@ -293,9 +306,8 @@ class Index:
                 raise ValueError("historical_generation_not_indexed")
             proof = json.loads(row[0])
             for label in ("plan", "result"):
-                path = location(proof["reference"], label)
-                if list(_stamp(path.stat())) != proof[label + "_identity"]:
-                    raise ValueError("historical_occurrence_index_dependency_changed")
+                _dependency(proof["reference"], label, proof[label + "_identity"],
+                            self.archives, deadline_at, "historical_occurrence_index_dependency_changed")
             count, failures = conn.execute(
                 "SELECT count(*),coalesce(sum(journal_verified!=1),0) FROM occurrences WHERE generation_id=?",
                 (generation_id,),
@@ -328,9 +340,8 @@ class Index:
                     continue
                 proof = json.loads(raw)
                 for label in ("plan", "result"):
-                    p = location(proof["reference"], label)
-                    if p.resolve() != p or list(_stamp(p.stat())) != proof[label + "_identity"]:
-                        raise ValueError("historical_occurrence_index_dependency_changed")
+                    _dependency(proof["reference"], label, proof[label + "_identity"],
+                                self.archives, deadline_at, "historical_occurrence_index_dependency_changed")
                 inverse = {v["copy"]: k for k, v in self.mapping.rows.items()}
                 for path in wanted:
                     if path not in inverse or str(self.mapping.resolve(inverse[path])) != path:

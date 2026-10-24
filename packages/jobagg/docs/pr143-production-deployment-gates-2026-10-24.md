@@ -4,7 +4,7 @@ Observed Africa/Nairobi; latest preservation check **2026-10-24T10:34:37.132823+
 The user's instruction to implement steps 1–7 authorizes a conditional production
 cutover after its acceptance gates. No additional activation permission is being
 inferred from this document. The standing consultation on substantial code changes
-is pending for the [bounded archival reader/migration increment](pr143-storage-reader-migration-proposal-2026-10-24.md).
+was approved for the [bounded archival reader/migration increment](pr143-storage-reader-migration-proposal-2026-10-24.md). Its [additive implementation](pr143-archival-implementation-2026-10-24.md) preserves every original; the guarded source handoff and final deployment gates remain open.
 **Production remains fenced and deployment readiness is false.**
 
 ## 1. Complete capacity measurement; reader migration remains open

@@ -947,3 +947,16 @@ def reconcile_recovered_generation(
         ),
     )
     return reconciliation
+
+
+def read_archived_dependency(conn, path, *, expected_sha256, deadline_at, max_bytes):
+    """Explicit offline reader; an attestation never closes the original hold.
+
+    The ordinary catalogue and admission paths do not scan representation stores.
+    Preserve the original physical identity in the dependency row and bind the
+    new representation separately in the existing protected review ledger.
+    """
+    from jobagg.historical_storage import catalogue_grant
+    grant = catalogue_grant(conn, path, expected_sha256=expected_sha256, deadline_at=deadline_at)
+    return grant.open(path, expected_sha256=expected_sha256,
+                      deadline_at=deadline_at, max_bytes=max_bytes)
