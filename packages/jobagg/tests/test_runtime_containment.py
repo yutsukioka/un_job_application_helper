@@ -30,7 +30,7 @@ def write(path, value):
 
 
 @contextmanager
-def staged(setup, *, missing_charge=False):
+def staged(setup, *, missing_charge=False, production=False):
     outer = setup["root"]
     root = outer / "isolated"
     root.mkdir()
@@ -77,7 +77,7 @@ def staged(setup, *, missing_charge=False):
             },
         )
         policy = SharedPolicy(owner, [record.source_id], bootstrap)
-        policy.root = root / "policy"
+        policy.root = Path(str(owner) + ".worker-policy") if production else root / "policy"
         policy.marker = root / "legacy-policy.json"
         policy.initialize()
         if not missing_charge:
@@ -97,7 +97,9 @@ def staged(setup, *, missing_charge=False):
             {
                 "maintenance_file": str(marker),
                 "shared_lock_path": str(owner),
-                "publication_worker_database": str(original / "jobs.sqlite3"),
+                "publication_worker_database": str(
+                    new if production else original / "jobs.sqlite3"
+                ),
                 "state_dir": str(original / "runs"),
             },
         )
@@ -112,9 +114,29 @@ def staged(setup, *, missing_charge=False):
                 "fence_sha256": sha(marker),
             },
         )
+        if production:
+            snapshotsha = write(
+                snapshot,
+                {
+                    "schema": "jobagg-production-cutover-boundary-1",
+                    "production_root": str(root),
+                    "production_config": str(cfg),
+                    "production_config_sha256": cfgsha,
+                    "fence_sha256": sha(marker),
+                    "owner_identity": {"device": owner.stat().st_dev, "inode": owner.stat().st_ino},
+                },
+            )
         location = {"root": str(policy.root), "epoch": "fixture-policy"}
         configpath = root / "candidate.json"
-        configsha = write(configpath, {"policy_authority_location": location})
+        configsha = write(
+            configpath,
+            {
+                "policy_authority_location": location,
+                "publication_worker_database": str(new),
+                "shared_lock_path": str(owner),
+                "publication_argv": ["--output-dir", str(root / "output")],
+            },
+        )
         with setup["worker"].connect() as conn:
             evidence = root / "historical-controls"
             evidence.mkdir()
@@ -193,6 +215,8 @@ def staged(setup, *, missing_charge=False):
                     {"job_key": record.identity_key(), "path": str(result), "sha256": sha(result)}
                 ],
             }
+            if production:
+                review.update(production_boundary_path=str(snapshot), fence_sha256=sha(marker))
             yield conn, fd, root, review, record
 
 
@@ -345,3 +369,47 @@ def test_held_only_current_batch_can_finish_without_empty_credit_or_hiding_accep
             assert authority.validate(conn)["phase"] == "idle"
             assert not work.vector(conn, contract_sha256="contract", now=time.time())["empty"]
             assert catalogue.oldest_unresolved(conn) is not None
+
+
+@pytest.mark.parametrize("change", [None, "default", "fence", "root", "candidate", "owner"])
+def test_explicit_production_cutover_keeps_shared_guards(setup, change):
+    with staged(setup, production=True) as (conn, fd, root, value, record):
+        before = catalogue.receipt(conn)
+        if change == "fence":
+            value["fence_sha256"] = "b" * 64
+        elif change == "root":
+            value["snapshot_root"] = str(root.parent)
+        elif change == "candidate":
+            candidate = Path(value["configuration_path"])
+            data = json.loads(candidate.read_text())
+            data["publication_worker_database"] = str(root / "other.sqlite3")
+            value["config_sha256"] = write(candidate, data)
+        path = root / "production-review.json"
+        write(path, value)
+        with authority.controller(conn, run_id=None, owner_fd=fd):
+
+            def apply():
+                return containment.prepare(
+                    conn,
+                    review_path=path,
+                    review_sha256=sha(path),
+                    owner_fd=-1 if change == "owner" else fd,
+                    deadline_at=time.monotonic() + 20,
+                    production_cutover=change != "default",
+                )
+
+            if change:
+                with pytest.raises((ValueError, OSError)):
+                    apply()
+            else:
+                first = apply()
+                conn.commit()
+                assert apply() == first
+                conn.commit()
+                assert containment.approved(
+                    conn,
+                    config_sha256=value["config_sha256"],
+                    implementation_sha256=value["implementation_sha256"],
+                    policy_location=value["policy_location"],
+                )
+        assert catalogue.receipt(conn) == before

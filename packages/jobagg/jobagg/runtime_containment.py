@@ -119,10 +119,11 @@ def invalidate(conn, reason):
         )
 
 
-def prepare(conn, *, review_path, review_sha256, owner_fd, deadline_at):
+def prepare(conn, *, review_path, review_sha256, owner_fd, deadline_at, production_cutover=False):
     """Complete exact control inventory + current evidence/charge containment.
 
-    Caller holds the actual owner and native controller on an idle copied source.
+    Caller holds the actual owner and native controller on an idle source.
+    Production requires its own source-bound receipt; the default remains copy-only.
     All records remain auditable and no original disposition is rewritten here.
     """
     if not math.isfinite(deadline_at) or not 0 < deadline_at - time.monotonic() <= 300:
@@ -149,22 +150,44 @@ def prepare(conn, *, review_path, review_sha256, owner_fd, deadline_at):
         raise ValueError("containment_catalogue_review_changed")
     root = Path(review["snapshot_root"])
     database = Path(conn.execute("PRAGMA database_list").fetchone()[2])
-    if root.resolve() != root or database != root / "worker/jobs.sqlite3":
-        raise ValueError("containment_exact_staged_copy_required")
     bootstrap = json.loads(state["bootstrap_json"])
-    snapshot, _ = _read(
-        root / "snapshot.json", bootstrap["source_sha256"], deadline_at, maximum=64 * 1024**2
-    )
-    config, _ = _read(
-        snapshot["production_config"], snapshot["production_config_sha256"], deadline_at
-    )
-    if (
-        snapshot.get("snapshot_root") != str(root)
-        or snapshot.get("complete") is not True
-        or database.samefile(config["publication_worker_database"])
-        or state["owner_path"] != config["shared_lock_path"]
-    ):
-        raise ValueError("containment_source_boundary_changed")
+    if production_cutover:
+        boundary, _ = _read(
+            review["production_boundary_path"], bootstrap["source_sha256"], deadline_at
+        )
+        config, _ = _read(
+            boundary["production_config"], boundary["production_config_sha256"], deadline_at
+        )
+        if (
+            boundary.get("schema") != "jobagg-production-cutover-boundary-1"
+            or boundary.get("production_root") != str(root)
+            or root.resolve() != root
+            or database != Path(config["publication_worker_database"])
+            or database.resolve() != database
+            or database.stat().st_nlink != 1
+            or state["owner_path"] != config["shared_lock_path"]
+            or not database.is_relative_to(root)
+            or boundary.get("fence_sha256") != review.get("fence_sha256")
+            or boundary.get("owner_identity") != bootstrap.get("owner_identity")
+        ):
+            raise ValueError("containment_production_boundary_changed")
+        snapshot = boundary
+    else:
+        if root.resolve() != root or database != root / "worker/jobs.sqlite3":
+            raise ValueError("containment_exact_staged_copy_required")
+        snapshot, _ = _read(
+            root / "snapshot.json", bootstrap["source_sha256"], deadline_at, maximum=64 * 1024**2
+        )
+        config, _ = _read(
+            snapshot["production_config"], snapshot["production_config_sha256"], deadline_at
+        )
+        if (
+            snapshot.get("snapshot_root") != str(root)
+            or snapshot.get("complete") is not True
+            or database.samefile(config["publication_worker_database"])
+            or state["owner_path"] != config["shared_lock_path"]
+        ):
+            raise ValueError("containment_source_boundary_changed")
     marker = stable_file(Path(config["maintenance_file"]), deadline_at=deadline_at)
     if marker["sha256"] != snapshot["fence_sha256"]:
         raise ValueError("containment_production_fence_changed")
@@ -193,7 +216,9 @@ def prepare(conn, *, review_path, review_sha256, owner_fd, deadline_at):
         Path(config["shared_lock_path"]).parent,
         Path(config["state_dir"]),
     ):
-        if root == original or root in original.parents or original in root.parents:
+        if not production_cutover and (
+            root == original or root in original.parents or original in root.parents
+        ):
             raise ValueError("containment_overlaps_production_root")
     if any(
         source not in known_sources
@@ -201,8 +226,23 @@ def prepare(conn, *, review_path, review_sha256, owner_fd, deadline_at):
     ):
         raise ValueError("containment_unknown_current_source")
     policy = _policy(review["policy_location"], state["owner_path"])
-    if policy.policy.root != root / "policy":
-        raise ValueError("containment_requires_isolated_policy_copy")
+    expected_policy = (
+        Path(str(state["owner_path"]) + ".worker-policy") if production_cutover else root / "policy"
+    )
+    if policy.policy.root != expected_policy:
+        raise ValueError("containment_policy_root_differs")
+    if production_cutover:
+        argv = candidate.get("publication_argv", [])
+        if (
+            "--output-dir" not in argv
+            or Path(argv[argv.index("--output-dir") + 1]) != root / "output"
+        ):
+            raise ValueError("containment_production_output_differs")
+        if (
+            candidate.get("publication_worker_database") != str(database)
+            or candidate.get("shared_lock_path") != state["owner_path"]
+        ):
+            raise ValueError("containment_production_candidate_differs")
     with closing(sqlite3.connect(policy.path.as_uri() + "?mode=ro", uri=True)) as accounting:
         accounting.set_progress_handler(lambda: int(time.monotonic() >= deadline_at), 256)
         accounting.execute("ATTACH DATABASE ? AS worker", (database.as_uri() + "?mode=ro",))
