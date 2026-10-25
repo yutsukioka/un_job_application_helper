@@ -291,9 +291,23 @@ def _processes_absent(state, *, deadline_at):
         state[key] for key in ("wrapper_pid", "worker_pid", "publication_pid") if state.get(key)
     }
     reconciled = []
+    try:
+        finished = datetime.fromisoformat(state["finished_at"])
+    except (KeyError, TypeError, ValueError):
+        finished = None
+    boot = _boot_started_at() if pids and finished is not None and finished.tzinfo else None
     for pid in pids:
         if type(pid) is not int or pid <= 0:
             raise ValueError("legacy_process_identity_invalid")
+        if boot is not None and boot > finished.timestamp():
+            from jobagg.runtime_clock import domain
+
+            reconciled.append({
+                "pid": pid, "historical_finished_at": state["finished_at"],
+                "boot_started_at_epoch": boot, "boot_domain": domain(),
+                "disposition": "prior_boot_pid_reference",
+            })
+            continue
         if pid in groups:
             try:
                 os.killpg(pid, 0)
@@ -316,26 +330,8 @@ def _processes_absent(state, *, deadline_at):
             continue
         except PermissionError:
             pass  # EPERM proves neither drain nor ownership; inspect start identity.
-        try:
-            finished = datetime.fromisoformat(state["finished_at"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("legacy_process_still_present") from error
-        if finished.tzinfo is None:
+        if finished is None or finished.tzinfo is None:
             raise ValueError("legacy_process_still_present")
-        boot = _boot_started_at()
-        if boot > finished.timestamp():
-            from jobagg.runtime_clock import domain
-
-            reconciled.append(
-                {
-                    "pid": pid,
-                    "historical_finished_at": state["finished_at"],
-                    "boot_started_at_epoch": boot,
-                    "boot_domain": domain(),
-                    "disposition": "prior_boot_pid_reference",
-                }
-            )
-            continue
         started = _process_started_at(pid, deadline_at)
         if started <= finished.timestamp():
             raise ValueError("legacy_process_still_present")

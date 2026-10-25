@@ -44,3 +44,45 @@ def test_domain_inventory_ignores_only_new_listing_reference(operator):
     assert operator.domain(conn) == before
     conn.execute("UPDATE jobs SET payload='changed' WHERE identity='0'")
     assert operator.domain(conn) != before
+
+
+@pytest.mark.parametrize("change", [None, "cursor", "epoch"])
+def test_reviewed_reseal_preserves_completed_checkpoints(operator, tmp_path, change):
+    import json
+    database = tmp_path / "worker.sqlite3"
+    policy = tmp_path / "policy"
+    policy.mkdir()
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE jobagg_legacy_control_state(after_ordinal INTEGER)")
+        conn.execute("INSERT INTO jobagg_legacy_control_state VALUES(?)", (831 if change == "cursor" else 832,))
+    with sqlite3.connect(policy / "authority.sqlite3") as conn:
+        for table, count in (("attempts", 71888), ("evidence", 72357)):
+            conn.execute("CREATE TABLE " + table + "(n INTEGER)")
+            conn.execute("WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<?) INSERT INTO " + table + " SELECT n FROM rows", (count,))
+    old = {"epoch": "production", "operation_root": str(tmp_path), "implementation_sha256": "old"}
+    old_path = tmp_path / "old.json"
+    operator.save(old_path, old)
+    journal = tmp_path / "progress.json"
+    progress = {"descriptor_sha256": operator.sha(old_path), "completed": ["backups", "policy", "worker_schema"], "failure": {"message":"old guard"}}
+    operator.save(journal, progress)
+    operation = {**old, "implementation_sha256":"new", "resume_from": {
+        "descriptor":str(old_path), "sha256":operator.sha(old_path),
+        "progress_sha256":operator.sha(journal), "catalogue_after":832}}
+    if change == "epoch":
+        operation["epoch"] = "other"
+    descriptor = tmp_path / "new.json"
+    operator.save(descriptor, operation)
+    if change:
+        before = journal.read_bytes()
+        with pytest.raises(ValueError, match="checkpoint_changed|descriptor_changed"):
+            operator.resume_checkpoint(operation, descriptor, journal, progress, database,
+                {"policy_authority_location":{"root":str(policy)}})
+        assert journal.read_bytes() == before
+    else:
+        operator.resume_checkpoint(operation, descriptor, journal, progress, database,
+            {"policy_authority_location":{"root":str(policy)}})
+        actual = json.loads(journal.read_text())
+        assert actual["completed"] == ["backups", "policy", "worker_schema"]
+        assert actual["descriptor_sha256"] == operator.sha(descriptor)
+        with sqlite3.connect(database) as conn:
+            assert conn.execute("SELECT after_ordinal FROM jobagg_legacy_control_state").fetchone()[0] == 832

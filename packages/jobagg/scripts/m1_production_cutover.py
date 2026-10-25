@@ -75,6 +75,32 @@ def loop_pages(step, check):
             return result
 
 
+def resume_checkpoint(operation, descriptor, journal, progress, database, candidate):
+    root = journal.parent
+    if progress["descriptor_sha256"] != sha(Path(descriptor)):
+        resume = operation.get("resume_from", {})
+        old_path = Path(resume["descriptor"])
+        old = json.loads(old_path.read_text())
+        allowed = {"candidate_config", "candidate_config_sha256", "implementation_sha256",
+                   "source_commit", "runtime_contract_sha256", "resume_from"}
+        if (sha(old_path) != resume["sha256"] or sha(journal) != resume["progress_sha256"]
+            or progress["descriptor_sha256"] != resume["sha256"]
+            or {k:v for k,v in old.items() if k not in allowed} != {k:v for k,v in operation.items() if k not in allowed}
+            or progress["completed"] != ["backups", "policy", "worker_schema"]):
+            raise ValueError("cutover_resume_descriptor_changed")
+        with closing(sqlite3.connect(database)) as current:
+            if current.execute("SELECT after_ordinal FROM jobagg_legacy_control_state").fetchone()[0] != resume["catalogue_after"]:
+                raise ValueError("cutover_catalogue_checkpoint_changed")
+            with closing(sqlite3.connect(Path(candidate["policy_authority_location"]["root"]) / "authority.sqlite3")) as policy_db:
+                if (policy_db.execute("SELECT count(*) FROM attempts").fetchone()[0],
+                    policy_db.execute("SELECT count(*) FROM evidence").fetchone()[0]) != (71888, 72357):
+                    raise ValueError("cutover_completed_policy_changed")
+        save(root / "progress.before-boot-fix.json", progress)
+        progress.update(descriptor_sha256=sha(Path(descriptor)), resealed_from=resume["sha256"])
+        progress.pop("failure", None)
+        save(journal, progress)
+
+
 def execute(descriptor):
     operation = json.loads(Path(descriptor).read_text())
     root = Path(operation["operation_root"])
@@ -114,8 +140,6 @@ def execute(descriptor):
         if journal.exists()
         else {"descriptor_sha256": sha(Path(descriptor)), "completed": []}
     )
-    if progress["descriptor_sha256"] != sha(Path(descriptor)):
-        raise ValueError("cutover_resume_descriptor_changed")
 
     def check():
         if time.monotonic() >= deadline:
@@ -135,6 +159,7 @@ def execute(descriptor):
 
     with fenced_owner(config, operation["fence_sha256"]) as fd:
         check()
+        resume_checkpoint(operation, descriptor, journal, progress, database, candidate)
         boundary_path = root / "boundary.json"
         if "backups" not in progress["completed"]:
             backup = root / "backup"
@@ -269,6 +294,14 @@ def execute(descriptor):
 
                     loop_pages(work_page, check)
                     done("worker_schema")
+                if operation.get("resume_from") and "runtime_contract_rebound" not in progress["completed"]:
+                    def contract_page():
+                        with conn:
+                            return publication_work.revalidate_contract(conn,
+                                contract_sha256=operation["runtime_contract_sha256"], receipt_sha256=sha(Path(descriptor)),
+                                limit=1024, deadline_at=deadline)
+                    loop_pages(contract_page, check)
+                    done("runtime_contract_rebound")
                 if "catalogue" not in progress["completed"]:
                     manifest = json.loads(Path(operation["control_manifest"]).read_text())
                     manifest.update(epoch=epoch, writers=operation["writers"])

@@ -35,3 +35,25 @@ production/default binding, wrong fence/root/candidate/owner, idempotent
 containment, automatic page continuation, invariant failure, domain preservation,
 and existing policy/import/export/source-head regressions. Production execution
 results must come from the private operation journal, not these fixture results.
+
+## Boot-first correction and retained production checkpoints
+
+The 25 October execution stopped at catalogue ordinal 832 because a historical
+September process group number had been reused after the October reboot. Kernel
+boot identity now precedes PID/PGID probes. Prior-boot references receive an
+explicit boot-domain proof without inspecting current unrelated processes;
+same-boot leaderless groups and live/unknown identities still refuse admission.
+
+The operator explicitly authorized continuing the `ee6e8d9d` production
+checkpoint. The resumed descriptor pins the exact original descriptor and
+progress bytes, same operation root/epoch/inputs, completed backup/policy/schema
+stages, ordinal 832, and 71,888 charge / 72,357 evidence rows. Only the reviewed
+release/configuration bindings change. Existing dirty-contract revalidation
+updates the runtime seal without rerunning backups, policy import, schema
+preparation, or the first 832 historical catalogue records. This is a specific
+operator handoff, not automatic compatibility inference on future code edits.
+
+Regression checks: 26 passed in 0.34 seconds, including a prior-boot reused
+leaderless PGID that must perform no PID/PGID probes, and the same-boot case that
+must retain its refusal. Production dispatch remains conditional on completing
+the existing handoff checks and the operator-owned maintenance removal.

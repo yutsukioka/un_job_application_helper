@@ -676,3 +676,27 @@ def test_changed_unverified_identity_cannot_advance_import(tmp_path):
         assert (
             conn.execute("SELECT after_ordinal FROM jobagg_legacy_control_state").fetchone()[0] == 0
         )
+
+
+@pytest.mark.parametrize("boot,prior", [(200, True), (50, False)])
+def test_boot_identity_precedes_reused_leaderless_group_probe(monkeypatch, boot, prior):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(catalog, "_boot_started_at", lambda: boot)
+    calls = []
+    def group(pid, signal):
+        calls.append(("pgid", pid))
+    def leader(pid, signal):
+        calls.append(("pid", pid))
+        raise ProcessLookupError()
+    monkeypatch.setattr(catalog.os, "killpg", group)
+    monkeypatch.setattr(catalog.os, "kill", leader)
+    state = {"process_groups": [1276], "worker_pid": 1276,
+             "finished_at": datetime.fromtimestamp(100, timezone.utc).isoformat()}
+    if prior:
+        result = catalog._processes_absent(state, deadline_at=time.monotonic()+5)
+        assert calls == []
+        assert result[0]["disposition"] == "prior_boot_pid_reference"
+    else:
+        with pytest.raises(ValueError, match="group_identity_unresolved"):
+            catalog._processes_absent(state, deadline_at=time.monotonic()+5)
+        assert calls == [("pgid",1276), ("pid",1276)]
