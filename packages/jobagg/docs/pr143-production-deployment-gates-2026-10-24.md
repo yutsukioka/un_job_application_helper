@@ -1,5 +1,7 @@
 # PR #143 production deployment gates — 24 October 2026
 
+On 25 October the operator approved retaining the entire production tree above 100 GB and deferring archival migration. The [retained-originals handoff review](pr143-retained-originals-production-handoff-review-2026-10-25.md) supersedes the archival prerequisite below for this deployment. Fixed-budget activation and retirement remain disabled; the existing 20 GiB physical storage guard remains required. Native production bootstrap/handoff and runtime rehearsal are still prerequisites.
+
 The [authorized production preflight at 20:04 EAT](pr143-authorized-production-preflight-2026-10-24.md) supersedes this earlier status. Final activation is authorized, but the complete measured-artifact intersection demonstrates a remaining native catalogue/reader migration blocker. Production remains fenced.
 
 Observed Africa/Nairobi; latest preservation check **2026-10-24T10:34:37.132823+03:00**.
