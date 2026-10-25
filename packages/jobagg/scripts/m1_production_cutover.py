@@ -153,7 +153,9 @@ def execute(descriptor):
                         closing(sqlite3.connect(temporary)) as dst,
                     ):
                         src.backup(dst, pages=4096, progress=lambda *_: check(), sleep=0.01)
-                        if dst.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                        dst.execute("PRAGMA cache_size=-131072")
+                        dst.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                        if dst.execute("PRAGMA quick_check(jobs)").fetchone()[0] != "ok":
                             raise ValueError("cutover_backup_integrity_failed")
                     with temporary.open("rb") as stream:
                         os.fsync(stream.fileno())
@@ -501,7 +503,7 @@ def execute(descriptor):
                 check()
                 if domain(conn) != boundary["domain"]:
                     raise ValueError("cutover_retained_domain_data_changed")
-                if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                if conn.execute("PRAGMA quick_check(jobs)").fetchone()[0] != "ok":
                     raise ValueError("cutover_worker_integrity_failed")
                 if not runtime_containment.approved(
                     conn,
