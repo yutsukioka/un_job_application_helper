@@ -82,11 +82,12 @@ def resume_checkpoint(operation, descriptor, journal, progress, database, candid
         old_path = Path(resume["descriptor"])
         old = json.loads(old_path.read_text())
         allowed = {"candidate_config", "candidate_config_sha256", "implementation_sha256",
-                   "source_commit", "runtime_contract_sha256", "resume_from"}
+                   "source_commit", "runtime_contract_sha256", "resume_from", "sealing_baseline"}
         if (sha(old_path) != resume["sha256"] or sha(journal) != resume["progress_sha256"]
             or progress["descriptor_sha256"] != resume["sha256"]
             or {k:v for k,v in old.items() if k not in allowed} != {k:v for k,v in operation.items() if k not in allowed}
-            or progress["completed"] != ["backups", "policy", "worker_schema"]):
+            or progress["completed"] not in (["backups", "policy", "worker_schema"],
+                ["backups", "policy", "worker_schema", "runtime_contract_rebound"])):
             raise ValueError("cutover_resume_descriptor_changed")
         with closing(sqlite3.connect(database)) as current:
             if current.execute("SELECT after_ordinal FROM jobagg_legacy_control_state").fetchone()[0] != resume["catalogue_after"]:
@@ -95,10 +96,42 @@ def resume_checkpoint(operation, descriptor, journal, progress, database, candid
                 if (policy_db.execute("SELECT count(*) FROM attempts").fetchone()[0],
                     policy_db.execute("SELECT count(*) FROM evidence").fetchone()[0]) != (71888, 72357):
                     raise ValueError("cutover_completed_policy_changed")
-        save(root / "progress.before-boot-fix.json", progress)
+        save(root / ("progress.before-reseal-" + resume["sha256"][:12] + ".json"), progress)
+        # Rebind only derived dirty work to this exact release contract.
+        if "runtime_contract_rebound" in progress["completed"]:
+            progress["completed"].remove("runtime_contract_rebound")
         progress.update(descriptor_sha256=sha(Path(descriptor)), resealed_from=resume["sha256"])
         progress.pop("failure", None)
         save(journal, progress)
+
+
+def sealing_baseline(operation, policy):
+    """Read the pinned pre-seal hashes already verified against Step 3 copies."""
+    selected = operation.get("sealing_baseline")
+    if selected is None:
+        return {}
+    path = Path(selected["path"])
+    if sha(path) != selected["sha256"]:
+        raise ValueError("cutover_sealing_baseline_changed")
+    review = json.loads(path.read_text())
+    head = json.loads((policy.root / "authority.json").read_text())
+    result = {}
+    for item in review["identity_mismatches"]:
+        name = item["path"]
+        if (not item["original_bytes_match"]
+            or item["original_sha256"] != item["actual_sha256"]
+            or name not in head["immutable_controls"]):
+            raise ValueError("cutover_sealing_transition_not_native")
+        result[name] = {"identity": item["expected_identity"],
+            "size": item["expected_identity"][2], "sha256": item["original_sha256"],
+            "sealed_mode": int(item["mode"], 8)}
+    return result
+
+
+def verify_sealing_controls(controls, deadline):
+    return {path: catalogue.sealed_control_transition(
+        path, baseline["identity"], baseline, deadline_at=deadline)
+        for path, baseline in controls.items()}
 
 
 def execute(descriptor):
@@ -239,6 +272,8 @@ def execute(descriptor):
         }
         epoch = operation["epoch"]
         try:
+            sealed_controls = sealing_baseline(operation, policy)
+            verify_sealing_controls(sealed_controls, deadline)
             if "policy" not in progress["completed"]:
                 if not (policy.root / "evidence_locations.json").exists():
                     mapping = json.loads(Path(operation["evidence_locations"]).read_text())
@@ -362,6 +397,7 @@ def execute(descriptor):
                                 reviewed_implementations=set(
                                     operation["historical_implementations"]
                                 ),
+                                sealed_controls=sealed_controls,
                             )
 
                     loop_pages(control_page, check)
@@ -534,6 +570,7 @@ def execute(descriptor):
                         conn.commit()
                         done("containment", result)
                 check()
+                transitions = verify_sealing_controls(sealed_controls, deadline)
                 if domain(conn) != boundary["domain"]:
                     raise ValueError("cutover_retained_domain_data_changed")
                 if conn.execute("PRAGMA quick_check(jobs)").fetchone()[0] != "ok":
@@ -551,7 +588,7 @@ def execute(descriptor):
                     atomic_write_text(config_path, candidate_path.read_text())
                     if sha(config_path) != operation["candidate_config_sha256"]:
                         raise ValueError("cutover_configuration_install_failed")
-                done("handoff_verified", {"maintenance_preserved": True, "provider_requests": 0,
+                done("handoff_verified", {"sealing_transitions": transitions, "maintenance_preserved": True, "provider_requests": 0,
                     "writer_enabled": False, "configuration_installed": bool(operation.get("install_configuration")),
                     "runtime": runtime_authority.validate(conn)})
         except BaseException as error:

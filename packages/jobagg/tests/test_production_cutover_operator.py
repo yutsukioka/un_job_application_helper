@@ -46,15 +46,16 @@ def test_domain_inventory_ignores_only_new_listing_reference(operator):
     assert operator.domain(conn) != before
 
 
+@pytest.mark.parametrize("cursor,rebound", [(832,False),(6464,True)])
 @pytest.mark.parametrize("change", [None, "cursor", "epoch"])
-def test_reviewed_reseal_preserves_completed_checkpoints(operator, tmp_path, change):
+def test_reviewed_reseal_preserves_completed_checkpoints(operator, tmp_path, change, cursor, rebound):
     import json
     database = tmp_path / "worker.sqlite3"
     policy = tmp_path / "policy"
     policy.mkdir()
     with sqlite3.connect(database) as conn:
         conn.execute("CREATE TABLE jobagg_legacy_control_state(after_ordinal INTEGER)")
-        conn.execute("INSERT INTO jobagg_legacy_control_state VALUES(?)", (831 if change == "cursor" else 832,))
+        conn.execute("INSERT INTO jobagg_legacy_control_state VALUES(?)", (cursor - 1 if change == "cursor" else cursor,))
     with sqlite3.connect(policy / "authority.sqlite3") as conn:
         for table, count in (("attempts", 71888), ("evidence", 72357)):
             conn.execute("CREATE TABLE " + table + "(n INTEGER)")
@@ -64,10 +65,12 @@ def test_reviewed_reseal_preserves_completed_checkpoints(operator, tmp_path, cha
     operator.save(old_path, old)
     journal = tmp_path / "progress.json"
     progress = {"descriptor_sha256": operator.sha(old_path), "completed": ["backups", "policy", "worker_schema"], "failure": {"message":"old guard"}}
+    if rebound:
+        progress["completed"].append("runtime_contract_rebound")
     operator.save(journal, progress)
     operation = {**old, "implementation_sha256":"new", "resume_from": {
         "descriptor":str(old_path), "sha256":operator.sha(old_path),
-        "progress_sha256":operator.sha(journal), "catalogue_after":832}}
+        "progress_sha256":operator.sha(journal), "catalogue_after":cursor}}
     if change == "epoch":
         operation["epoch"] = "other"
     descriptor = tmp_path / "new.json"
@@ -85,4 +88,4 @@ def test_reviewed_reseal_preserves_completed_checkpoints(operator, tmp_path, cha
         assert actual["completed"] == ["backups", "policy", "worker_schema"]
         assert actual["descriptor_sha256"] == operator.sha(descriptor)
         with sqlite3.connect(database) as conn:
-            assert conn.execute("SELECT after_ordinal FROM jobagg_legacy_control_state").fetchone()[0] == 832
+            assert conn.execute("SELECT after_ordinal FROM jobagg_legacy_control_state").fetchone()[0] == cursor

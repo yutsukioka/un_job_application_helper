@@ -700,3 +700,57 @@ def test_boot_identity_precedes_reused_leaderless_group_probe(monkeypatch, boot,
         with pytest.raises(ValueError, match="group_identity_unresolved"):
             catalog._processes_absent(state, deadline_at=time.monotonic()+5)
         assert calls == [("pgid",1276), ("pid",1276)]
+
+
+@pytest.mark.parametrize("change", [None, "content", "writable", "inode"])
+def test_read_only_seal_preserves_baseline_but_rejects_real_changes(tmp_path, change):
+    import os
+    path = tmp_path / "control.json"
+    path.write_bytes(b"original")
+    st = path.stat()
+    expected = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+    baseline = {"identity": expected, "size": st.st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "sealed_mode": 0o400}
+    if change == "content":
+        path.write_bytes(b"modified")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    elif change == "inode":
+        replacement = tmp_path / "replacement"
+        replacement.write_bytes(b"original")
+        os.utime(replacement, ns=(st.st_atime_ns, st.st_mtime_ns))
+        replacement.replace(path)
+    path.chmod(0o600 if change == "writable" else 0o400)
+    if change:
+        with pytest.raises(ValueError, match="sealed_control_transition"):
+            catalog.sealed_control_transition(path, expected, baseline, deadline_at=time.monotonic()+5)
+    else:
+        proof = catalog.sealed_control_transition(path, expected, baseline, deadline_at=time.monotonic()+5)
+        assert proof["sealed_identity"][:4] == expected[:4]
+        assert proof["sha256"] == baseline["sha256"]
+
+
+def test_catalogue_resumes_read_only_seal_without_certifying_unverified_history(tmp_path):
+    owner = tmp_path / "owner.lock"
+    root = tmp_path / "controls"
+    root.mkdir()
+    path = root / "aux.json"
+    path.write_text("{}")
+    st = path.stat()
+    identity = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+    manifest = {"schema":catalog.SCHEMA, "epoch":"fixture", "shared_owner":str(owner),
+        "complete_control_root_inventory":True, "writers":[{"name":"fixture", "fenced":True}],
+        "runs":[{"path":str(root), "run_id":"held-"+hashlib.sha256(str(root).encode()).hexdigest(), "kind":"held_control_set", "controls":{},
+                 "unverified_files":{path.name:identity}}]}
+    baseline = {"identity":identity, "size":st.st_size,
+        "sha256":hashlib.sha256(path.read_bytes()).hexdigest(), "sealed_mode":0o400}
+    with shared_owner(owner) as fd, sqlite3.connect(":memory:") as conn:
+        catalog.prepare(conn, manifest=manifest, owner_fd=fd, owner_path=owner)
+        path.chmod(0o400)
+        args = dict(owner_fd=fd,owner_path=owner,limit=1,deadline_at=time.monotonic()+5,reviewed_implementations=set())
+        with pytest.raises(ValueError, match="identity_changed"):
+            catalog.step(conn, **args)
+        assert catalog.step(conn, **args, sealed_controls={str(path):baseline})["complete"]
+        assert conn.execute("SELECT sha256 FROM jobagg_legacy_dependencies").fetchone()[0] is None
+        proof = json.loads(conn.execute("SELECT proof_json FROM jobagg_legacy_controls").fetchone()[0])
+        assert str(path) in proof["sealing_transitions"]
+        assert conn.execute("SELECT disposition FROM jobagg_legacy_controls").fetchone()[0] == "repair_required"

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
 from datetime import datetime
@@ -348,7 +349,37 @@ def _processes_absent(state, *, deadline_at):
     return reconciled
 
 
-def step(conn, *, owner_fd, owner_path, limit, deadline_at, reviewed_implementations):
+def sealed_control_transition(path, expected, baseline, *, deadline_at):
+    """Accept only the reviewed read-only seal of unchanged baseline bytes.
+
+    This is an explicit migration input, not a tick-time identity exception.
+    Inode, size and mtime remain pinned; a content match never blesses a swap.
+    """
+    path = Path(path)
+    before = path.lstat()
+    identity = [before.st_dev, before.st_ino, before.st_size,
+                before.st_mtime_ns, before.st_ctime_ns]
+    mode = stat.S_IMODE(before.st_mode)
+    if (path.resolve() != path or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1 or mode & 0o222
+        or mode != baseline.get("sealed_mode")
+        or baseline.get("identity") != expected or identity[:4] != expected[:4]
+        or baseline.get("size") != before.st_size):
+        raise ValueError("sealed_control_transition_identity_changed")
+    record = stable_file(path, deadline_at=deadline_at)
+    if record["sha256"] != baseline.get("sha256"):
+        raise ValueError("sealed_control_transition_content_changed")
+    after = path.stat()
+    if (identity != [after.st_dev, after.st_ino, after.st_size,
+                     after.st_mtime_ns, after.st_ctime_ns]
+        or stat.S_IMODE(after.st_mode) != mode):
+        raise ValueError("sealed_control_transition_changed_during_verification")
+    return {"baseline_identity": expected, "sealed_identity": identity,
+            "sha256": record["sha256"], "sealed_mode": mode,
+            "reason": "native_policy_read_only_seal"}
+
+
+def step(conn, *, owner_fd, owner_path, limit, deadline_at, reviewed_implementations, sealed_controls=None):
     owner(owner_fd, owner_path)
     if type(limit) is not int or limit <= 0:
         raise ValueError("finite_legacy_control_import_page_required")
@@ -529,7 +560,12 @@ def step(conn, *, owner_fd, owner_path, limit, deadline_at, reviewed_implementat
                     info.st_ctime_ns,
                 ]
                 if identity != expected:
-                    raise ValueError("legacy_unverified_control_identity_changed")
+                    baseline = (sealed_controls or {}).get(str(path))
+                    if baseline is None:
+                        raise ValueError("legacy_unverified_control_identity_changed")
+                    transition = sealed_control_transition(
+                        path, expected, baseline, deadline_at=deadline_at)
+                    proof.setdefault("sealing_transitions", {})[str(path)] = transition
                 proof["unverified_controls"][str(path)] = identity
                 conn.execute(
                     "INSERT OR REPLACE INTO jobagg_legacy_dependencies VALUES(?,?,?,?)",
