@@ -236,6 +236,8 @@ def execute(descriptor):
                 )
                 done("policy")
             with closing(sqlite3.connect(database)) as conn:
+                publication_work.configure(conn)
+                task_headers.configure(conn)
                 conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
                 if "worker_schema" not in progress["completed"]:
                     with conn:
@@ -291,6 +293,8 @@ def execute(descriptor):
                             owner_path=config["shared_lock_path"],
                         )
                         for hold in operation.get("publication_holds", []):
+                            if conn.execute("SELECT 1 FROM jobagg_legacy_review_holds WHERE run_id=?", (hold["run_id"],)).fetchone():
+                                continue  # Same sealed descriptor; exact hold already committed.
                             if hold["kind"] == "relocated":
                                 catalogue.hold_relocated_publication(
                                     conn,
