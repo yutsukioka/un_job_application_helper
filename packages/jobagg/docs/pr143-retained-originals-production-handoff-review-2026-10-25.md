@@ -93,3 +93,31 @@ fresh-cycle results must be reported from their own receipts, not inferred here.
 The production counterpart above remains a substantial-change consultation. No
 production authority head, source database, live configuration or schedule has
 been changed by these preparations.
+
+## Completed component checks at 09:23 EAT
+
+The same policy journal completed through a separate policy-only continuation in
+126.695 seconds after the two preserved 600-second preparation expiries. The
+copied native authority retains all 71,888 charges, verifies 72,357 evidence
+records and remains at revision zero. The 469 relocated HDD evidence files were
+verified in place against their original hashes; no HDD payload was copied.
+This receipt combines no invented successful worker exit or aggregate rehearsal
+success with the earlier timeout reports.
+
+A separate complete copied publication bootstrap certified all 50 destination
+stores and all 200 exports, totaling 3,609,807,203 bytes under the 4 GiB export
+bound, in 289.043 seconds within its 600-second preparation allowance. These are
+current copied export bindings, not historical acceptance, provider coverage or
+production cutover receipts.
+
+The immutable supervised dispatcher then stopped at the new copy's maintenance
+marker with `maintenance_paused`, exit 75, in 0.094 seconds. The copied worker
+database family and both markers were unchanged. No worker or publisher was
+dispatched by that entry check.
+
+All these operations used the network/production-write-denying sandbox and a
+copy-owned temporary directory. The source runtime authority is not activated in
+this new copy; complete native admitted-cycle/watchdog/recovery/rollback validation
+still remains. The existing accepted native rehearsal batch is untouched. The
+production-bound authority procedure remains awaiting the operator's substantial
+code-change consultation decision. Production remains fenced.
