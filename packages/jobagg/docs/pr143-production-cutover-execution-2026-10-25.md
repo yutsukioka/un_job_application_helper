@@ -83,3 +83,18 @@ after collection and is not chmodded later. Those guards require no generic ctim
 mode, WAL or header exemption. The maintenance marker remains until the native
 handoff verifies; Step 6 then uses the actual owner lock to remove only this
 operation's marker and executes one normally bounded production invocation.
+
+Step 5 completed on production with the retained domain unchanged, all 6,471
+catalogue records, 50 stores/200 exports (3,609,807,203 bytes), and 7,265 current
+observations reviewed. Three original recovered generations used a six-file
+hash-verified HDD device-only re-attestation; no payload was copied and the
+original index remains intact. All 51 backups and the policy import were reused.
+
+The first Step 6 invocation dispatched neither worker nor publisher: selection
+subtracted its 180-second publisher floor from the separate 180-second projection
+window. Maintenance was restored. The dispatcher correction accounts for the
+already reserved publisher floor in selection's clock while its enclosing
+projection deadline remains unchanged. Projection/publisher/entry limits and the
+package implementation seal are unchanged. Resume keeps the exact accepted,
+unstarted publication and uses the existing paged dirty-contract revalidation;
+no backup, policy, catalogue, export or accepted-evidence import is repeated.

@@ -2285,6 +2285,15 @@ PUBLICATION_BINDINGS = (
 )
 
 
+def publication_selection_deadline(config, projection_deadline, policy):
+    # Selection's viable publisher floor is already reserved by phase_remaining.
+    # The enclosing entry_deadlines still caps all projection work separately.
+    floor = policy["minimum_seconds"]
+    require(floor <= config["phase_budgets"]["publisher_min_seconds"],
+            "publication admission floor exceeds reserved publisher budget")
+    return time.monotonic() + max(0, projection_deadline.timestamp()-time.time()) + floor
+
+
 def publication_request(config, request, report_path, worker_status, deadline, owner_fd):
     if not runtime_enabled(config):
         return _publication_request(config, request, report_path, worker_status, deadline, owner_fd)
@@ -2339,7 +2348,7 @@ def _publication_request(config, request, report_path, worker_status, deadline, 
                     work.advance_time(conn, now=time.time(), limit=policy['max_candidates'])
                 selection = work.select(conn, policy=policy, contract_sha256=runtime_publication_contract(config)['sha256'],
                     output_root=scope['output_root'], source_paths=package_helper(config, 'publication_fence').source_paths(config['_registry_path'], scope['output_root']),
-                    deadline_at=time.monotonic() + max(0, deadline.timestamp()-time.time()))
+                    deadline_at=publication_selection_deadline(config, deadline, policy))
                 require(selection['units'] or selection['held'], 'no selected publication unit; work remains held')
         if selection is not None:
             pending_value = package_helper(config, 'pending_publication').record_selection(config['state_dir'], selection)
