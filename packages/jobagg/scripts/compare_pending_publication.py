@@ -73,6 +73,7 @@ def compare(inspection_path, *, max_units=10000, page_size=100, max_seconds=5):
         if inventory.file_identity(path) != source["database_identity"]:
             raise ValueError("Worker database file identity differs from Step 1")
         conn = inventory.open_reader(path, deadline)
+        report["reader_mode"] = "private_filesystem_clone"
         initial = None
         while True:
             if time.monotonic() >= deadline:
@@ -87,7 +88,7 @@ def compare(inspection_path, *, max_units=10000, page_size=100, max_seconds=5):
                     raise ValueError("Authority epoch/configuration/contract changed since Step 1")
                 if not current["bootstrap_complete"]:
                     raise ValueError("Publication bootstrap is incomplete")
-            if current != initial:
+            if current != initial or not inventory.reader_unchanged(conn):
                 conn.rollback()
                 report["stop_reason"] = "database_changed"
                 break
@@ -122,7 +123,7 @@ def compare(inspection_path, *, max_units=10000, page_size=100, max_seconds=5):
             report["comparisons"].extend(page)
             report["compared_units"] += len(page)
             counts.update(row["category"] for row in page)
-            if (inventory.boundary(conn) != initial
+            if (inventory.boundary(conn) != initial or not inventory.reader_unchanged(conn)
                     or inventory.file_identity(path) != source["database_identity"]):
                 report["stop_reason"] = "database_changed"
                 break

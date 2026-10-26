@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import shutil
+import sys
 import stat
 from unittest.mock import patch
 
@@ -27,6 +29,10 @@ def private_reports(tmp_path, monkeypatch):
     report_root = tmp_path / "reports"
     report_root.mkdir()
     monkeypatch.setattr(inspector, "REPORT_ROOT", report_root)
+    if sys.platform != "darwin":
+        # Tiny fixture copies simulate CoW on CI filesystems without reflinks.
+        # Production clone_file never falls back to copying payload bytes.
+        monkeypatch.setattr(inspector, "clone_file", shutil.copyfile)
 
 
 @pytest.fixture
@@ -186,9 +192,10 @@ def test_locked_database_returns_prompt_partial_error(tmp_path):
         writer.execute("CREATE TABLE placeholder(x)")
         writer.commit()
         writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO placeholder VALUES (1)")
         result = inspector.inspect(path, max_seconds=1)
-        assert result["stop_reason"] == "database_error"
-        assert not result["complete"] and "locked" in result["error"]
+        assert result["stop_reason"] == "invalid_metadata"
+        assert not result["complete"] and "journal" in result["error"]
     finally:
         writer.close()
 
@@ -207,8 +214,10 @@ def test_missing_wal_sidecars_are_not_created(database, tmp_path, capsys):
     writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     closed = tmp_path / "closed.sqlite3"
     closed.write_bytes(path.read_bytes())
-    assert inspector.main(["--database", str(closed)]) == 2
-    assert json.loads(capsys.readouterr().out)["stop_reason"] == "input_error"
+    before = inspector.source_signature(closed)
+    assert inspector.main(["--database", str(closed)]) == 0
+    assert json.loads(capsys.readouterr().out)["observed_pending_units"] == 9
+    assert inspector.source_signature(closed) == before
     assert not Path(str(closed) + "-wal").exists()
     assert not Path(str(closed) + "-shm").exists()
 
@@ -344,3 +353,58 @@ def test_report_write_error_is_visible(database, monkeypatch, capsys):
     monkeypatch.setattr(inspector, "REPORT_ROOT", database[0] / "not-a-directory")
     assert inspector.main(["--database", str(database[0])]) == 2
     assert json.loads(capsys.readouterr().out)["stop_reason"] == "report_write_error"
+
+
+def test_snapshot_capture_race_is_rejected_and_private_clone_removed(database, monkeypatch):
+    native_clone = inspector.clone_file
+
+    def clone_then_commit(source, target):
+        native_clone(source, target)
+        database[1].execute("UPDATE jobagg_runtime_state SET source_transaction_id='capture-race'")
+        database[1].commit()
+
+    monkeypatch.setattr(inspector, "clone_file", clone_then_commit)
+    result = inspector.inspect(database[0])
+    assert not result["complete"] and result["observed_pending_units"] == 0
+    assert "changed during snapshot" in result["error"]
+    assert not list(inspector.REPORT_ROOT.glob(".jobagg-readonly-*"))
+
+
+def test_no_sqlite_connection_opens_production_path(database, monkeypatch):
+    native_connect = inspector.sqlite3.connect
+    opened = []
+
+    def private_only(location, *args, **kwargs):
+        assert str(database[0]) not in location
+        assert ".jobagg-readonly-" in location
+        opened.append(location)
+        return native_connect(location, *args, **kwargs)
+
+    monkeypatch.setattr(inspector.sqlite3, "connect", private_only)
+    before = inspector.source_signature(database[0])
+    result = inspector.inspect(database[0])
+    assert result["complete"] and opened
+    assert inspector.source_signature(database[0]) == before
+    assert not list(inspector.REPORT_ROOT.glob(".jobagg-readonly-*"))
+
+
+def test_clone_unsupported_does_not_fall_back_to_byte_copy(database, monkeypatch, capsys):
+    def unavailable(source, target):
+        raise OSError("CoW unavailable")
+
+    monkeypatch.setattr(inspector, "clone_file", unavailable)
+    assert inspector.main(["--database", str(database[0])]) == 2
+    assert json.loads(capsys.readouterr().out)["stop_reason"] == "input_error"
+    assert not list(inspector.REPORT_ROOT.glob(".jobagg-readonly-*"))
+
+
+def test_wal_without_shm_is_read_from_private_snapshot(database, tmp_path):
+    path, _ = database
+    isolated = tmp_path / "without-shm.sqlite3"
+    isolated.write_bytes(path.read_bytes())
+    Path(str(isolated) + "-wal").write_bytes(Path(str(path) + "-wal").read_bytes())
+    before = inspector.source_signature(isolated)
+    result = inspector.inspect(isolated)
+    assert result["complete"] and result["observed_pending_units"] == 9
+    assert inspector.source_signature(isolated) == before
+    assert not Path(str(isolated) + "-shm").exists()

@@ -35,8 +35,13 @@ To additionally save the Terminal summary, use a separate new private file:
  python3 -B packages/jobagg/scripts/inspect_pending_publication.py \
    --config /absolute/path/to/dispatcher.proposed.json \
    > /private/tmp/jobagg-pending-inspection.json)
-```
 
+(umask 077; set -C
+python3 -B \
+  /Users/yutsukioka2/.codex/worktrees/jobagg-reconciliation-pending/un_job_application_helper/packages/jobagg/scripts/inspect_pending_publication.py \
+  --config /Users/yutsukioka2/git/un_job_application_helper/reports/jobagg-deterministic-fetch-2026-09-14/dispatcher.proposed.json \
+  > /private/tmp/jobagg-pending-inspection.json)
+```
 The command creates only its private observer report and directory. It creates no
 production checkpoints, maintenance markers or owner locks. It does not contact
 providers, read historical payloads,
@@ -46,20 +51,29 @@ internal unit identities and versions even when `--sample` is zero.
 
 ## Read behavior and limits
 
-SQLite opens with `mode=ro`, `query_only=ON`, zero busy wait, and an authorizer
-restricted to the four native metadata tables and read operations. It never uses
-`immutable=1` on a live WAL database, since that could miss committed WAL state.
-For a WAL database it requires readable, pre-existing WAL and SHM sidecars; missing
-sidecars cause a saved input-error report rather than a deliberate sidecar-creation
-attempt. An idle WAL-mode database can legitimately have no sidecars; such an error
-report is not Step 2 input. Do not create the sidecars manually. Run the inspector
-when an ordinary production connection has made them available, or review access
-separately; this tool will not open a writer just to make inspection work.
-As with any normal SQLite reader, brief SQLite reader locks and shared-memory
-bookkeeping are possible. This is not the JobAgg owner lock or an application write;
-read-only access still consumes some I/O and cannot promise zero runtime impact.
-Do not change filesystem permissions, checkpoint the live database, or copy the
-production database to work around an access error.
+Both stages query private filesystem copy-on-write clones, opened with `mode=ro`,
+`query_only=ON`, zero busy wait and a restricted SQL authorizer. They never open a
+production SQLite connection and never use `immutable=1`. An idle WAL-mode source
+without sidecars works: SQLite creates any necessary WAL/SHM bookkeeping only
+beside the private clone. Existing WAL files are cloned too, so committed WAL-only
+state is retained even if SHM is missing. No production owner or SQLite locks are
+taken by the tool.
+
+Capture checks source database/WAL/SHM/journal device, inode, size and nanosecond
+mtime/ctime before and after cloning. A rollback journal or changing source rejects
+the capture. Source signatures are checked again between pages. The clones are
+removed when the connection closes, including error paths. Read access still uses
+some I/O and cannot promise zero runtime impact.
+
+Cloning uses macOS `clonefile` or Linux `FICLONE`; there is **no full byte-copy
+fallback**. Unsupported filesystems produce a saved error. Working clones live in
+a private `.jobagg-readonly-*` directory under the OS temp root if it is on the
+source filesystem. Otherwise they live in a private directory at the source volume
+root, outside the production application subtree. macOS production therefore uses
+`/Volumes/MacbookAirM2/.jobagg-readonly-*`, removed after inspection, while JSON
+reports remain under `/private/tmp`. Cloning shares data blocks; it does not copy
+4 GB of database payload. The command needs permission to create its private
+working directory, but no write permission to the production data directory.
 
 The pending index supplies ordered pages, joined to exact native dirty versions.
 Each page ends its read transaction before processing and a 25 ms pause. There is
@@ -99,6 +113,10 @@ schema-2 report. Use the exact `report_file` path printed by Step 1:
 ```sh
 python3 -B packages/jobagg/scripts/compare_pending_publication.py \
   --inspection /private/tmp/jobagg-pending-inspection-REPLACE/report.json
+
+python3 -B /Users/yutsukioka2/.codex/worktrees/jobagg-reconciliation-pending/un_job_application_helper/packages/jobagg/scripts/compare_pending_publication.py \
+  --inspection /private/tmp/jobagg-pending-inspection.json
+  
 ```
 
 Step 2 reads that file (at most 32 MiB), records its SHA-256, checks the worker
