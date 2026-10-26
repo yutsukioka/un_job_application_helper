@@ -72,8 +72,9 @@ def test_native_backfill_requires_idle_owner_and_retained_capture_without_manufa
 
 
 @pytest.mark.parametrize("changed", [False, True])
+@pytest.mark.parametrize("locator", ["original", "reviewed", "unreviewed", "retargeted"])
 def test_retained_listing_head_survives_later_task_failure_but_changed_frame_cannot_import(
-    setup, changed
+    setup, changed, locator
 ):
     import json
     import hashlib
@@ -127,6 +128,29 @@ def test_retained_listing_head_survives_later_task_failure_but_changed_frame_can
                 },
             )
             conn.commit()
+            if locator != "original":
+                from jobagg import artifact_locations
+
+                physical = frame.with_name("retained-listing.json")
+                frame.rename(physical)
+                frame.symlink_to(physical)
+                if locator != "unreviewed":
+                    with authority.controller(conn, run_id=None, owner_fd=fd):
+                        artifact_locations.bind(
+                            conn,
+                            attempt_id="listing-accepted",
+                            role="artifact",
+                            physical_path=physical,
+                            owner_fd=fd,
+                            review_sha256="a" * 64,
+                            deadline_at=time.monotonic() + 5,
+                        )
+                        conn.commit()
+                if locator == "retargeted":
+                    other = frame.with_name("other-listing.json")
+                    other.write_bytes(physical.read_bytes())
+                    frame.unlink()
+                    frame.symlink_to(other)
             if changed:
                 frame.write_text("{}")
             with authority.controller(conn, run_id=None, owner_fd=fd):
@@ -138,7 +162,7 @@ def test_retained_listing_head_survives_later_task_failure_but_changed_frame_can
             head = conn.execute("SELECT listing_event_version FROM remediation_sources").fetchone()[
                 0
             ]
-            if changed:
+            if changed or locator in {"unreviewed", "retargeted"}:
                 assert head is None
                 assert (
                     result["records"][0]["disposition"] == "current_event_evidence_requires_review"
@@ -154,6 +178,8 @@ def test_retained_listing_head_survives_later_task_failure_but_changed_frame_can
                 assert proof["contract"] == "legacy-accepted-event-1"
                 assert proof["transaction_id"] is None
                 assert proof["acceptance_proof"]["kind"] == "verified_worker_exit"
+                assert proof["artifact"]["path"] == str(frame)
+                assert proof["attempt"]["evidence"] == json.dumps(receipt)
             assert (
                 conn.execute(
                     "SELECT status FROM remediation_tasks WHERE task_id='listing-1'"

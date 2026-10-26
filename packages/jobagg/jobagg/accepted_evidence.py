@@ -459,11 +459,14 @@ def record_event(
     version = digest(proof)
     listing_head = None
     if task["kind"] == "listing":
-        from pathlib import Path
+        from jobagg.artifact_locations import resolve
         from jobagg.publication_snapshot import _json_document
         from jobagg.remediation_worker import epoch
 
-        frame, artifact = _json_document(Path(receipt["frame_path"]))
+        frame, artifact = _json_document(
+            resolve(conn, receipt["frame_path"], receipt["frame_sha256"], strict=active is not None),
+            deadline_at=deadline_at,
+        )
         if (
             artifact["sha256"] != receipt["frame_sha256"]
             or frame.get("source_id") != task["source_id"]

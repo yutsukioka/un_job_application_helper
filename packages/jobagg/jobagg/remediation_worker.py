@@ -66,6 +66,8 @@ VERSION = "deterministic-fetch-v1"
 # startup integrity and every new receipt still use the full current binding.
 # Registry, robots, owner and semantic-input changes are never aliased.
 RETRY_EQUIVALENT_IMPLEMENTATIONS = (
+    # PR #143 deployed predecessor; reviewed offline evidence fixes preserve retries.
+    "ab4ec954db6f68b7964bb2d4672e561e5ed5a4d971d25dcafb46dcf0870932e9",
     # M0 reconciled production predecessor; M1 preserves charged retry semantics.
     "4642596ad8c19900a6d2cf474c144d22907df89b90e26ee78aa7d0c709f70c39",
     # Exact active local repair; standalone compression preserves task retry meaning.
@@ -82,7 +84,7 @@ RETRY_EQUIVALENT_IMPLEMENTATIONS = (
 # Applicability seal for this one reviewed successor. Only this literal is
 # normalized when checking scope, avoiding a self-referential hash. The full
 # implementation fingerprint below still includes every byte of every module.
-RETRY_SUCCESSOR_SCOPE_SHA256 = "1a47defd43ef3484fe7d2e050f67b3ad173836a862bc69e6ca04c5ce71be9462"
+RETRY_SUCCESSOR_SCOPE_SHA256 = "8815ed5c61d8de508aeb9b4bfae1495a38d5e1784079b6935a45309acb16fc98"
 # Exact local guard exception types, not error-message matching. These remain
 # failed/held attempts, but are not evidence of fresh site or runtime pressure.
 LOCAL_POLICY_ERRORS = frozenset({"HostIneligible", "SSRFProtectionError"})

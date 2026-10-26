@@ -17,7 +17,58 @@ from m1_stage_snapshot import disjoint, fenced_owner, sha
 from m1_reconcile_history import save
 from jobagg import runtime_authority
 from jobagg import historical_destinations as destinations, historical_occurrences as occurrences
-from jobagg.publication_snapshot import _stamp
+from jobagg.publication_snapshot import _stamp, stable_file
+
+
+def sealed_receipt(path, *, review, review_sha256, mapping, total, deadline):
+    """Certify an already completed immutable index, without any SQLite writes."""
+    record = stable_file(path, deadline_at=deadline)
+    index = occurrences.Index(
+        path, expected_sha256=record["sha256"], mapping=mapping, deadline_at=deadline
+    )
+    expected = {
+        "schema": occurrences.SCHEMA,
+        "references": review["references"],
+        "mapping_sha256": mapping.receipt["sha256"],
+    }
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True)) as conn:
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 256)
+        contract = json.loads(
+            conn.execute("SELECT contract FROM index_state WHERE id=1").fetchone()[0]
+        )
+        if contract != expected:
+            raise ValueError("historical_index_sealed_contract_changed")
+        plans = dict(conn.execute("SELECT generation_id,proof_json FROM plans"))
+        references = {Path(ref["plan_path"]).parent.name: ref for ref in review["references"]}
+        if (
+            not references
+            or len(references) != len(review["references"])
+            or plans.keys() != references.keys()
+            or any(json.loads(plans[key])["reference"] != ref for key, ref in references.items())
+        ):
+            raise ValueError("historical_index_sealed_plan_inventory_changed")
+        counts = dict(
+            conn.execute(
+                "SELECT journal_verified,count(*) FROM occurrences GROUP BY journal_verified"
+            )
+        )
+    mapping.validate()
+    if (
+        _stamp(path.stat()) != index.signature
+        or stable_file(path, deadline_at=deadline)["sha256"] != index.sha256
+    ):
+        raise ValueError("historical_index_changed_during_finalization")
+    return {
+        "schema": occurrences.SCHEMA,
+        "review_sha256": review_sha256,
+        "mapping_sha256": mapping.receipt["sha256"],
+        "database_sha256": index.sha256,
+        "plans": len(plans),
+        "original_plan_bytes": total,
+        "journal_status_counts": counts,
+        "production_activated": False,
+        "payloads_copied": 0,
+    }
 
 
 def execute(
@@ -175,33 +226,23 @@ def execute(
             if receipt["review_sha256"] != review_sha256 or receipt["database_sha256"] != sha(path):
                 raise ValueError("historical_index_sealed_receipt_changed")
             return {"complete": True, "already_sealed": True, "receipt": receipt}
-        with closing(sqlite3.connect(path)) as c:
-            occurrences.prepare(
-                c, references=review["references"], mapping_sha256=mapping_receipt["sha256"]
-            )
-            result = occurrences.step(
-                c, mapping=mapping, limit=limit, deadline_at=deadline, max_plan_bytes=max_plan_bytes
-            )
-            if result["complete"]:
-                counts = dict(
-                    c.execute(
-                        "SELECT journal_verified,count(*) FROM occurrences GROUP BY journal_verified"
-                    )
+        if resume and path.exists() and not path.stat().st_mode & 0o222:
+            result = {"processed": 0, "complete": True, "plan_bytes_read": 0}
+        else:
+            with closing(sqlite3.connect(path)) as c:
+                occurrences.prepare(
+                    c, references=review["references"], mapping_sha256=mapping_receipt["sha256"]
                 )
-                plans = c.execute("SELECT count(*) FROM plans").fetchone()[0]
+                result = occurrences.step(
+                    c, mapping=mapping, limit=limit, deadline_at=deadline, max_plan_bytes=max_plan_bytes
+                )
         if result["complete"]:
-            path.chmod(0o400)
-            receipt = {
-                "schema": occurrences.SCHEMA,
-                "review_sha256": review_sha256,
-                "mapping_sha256": mapping_receipt["sha256"],
-                "database_sha256": sha(path),
-                "plans": plans,
-                "original_plan_bytes": total,
-                "journal_status_counts": counts,
-                "production_activated": False,
-                "payloads_copied": 0,
-            }
+            if path.stat().st_mode & 0o222:
+                path.chmod(0o400)
+            receipt = sealed_receipt(
+                path, review=review, review_sha256=review_sha256, mapping=mapping,
+                total=total, deadline=deadline,
+            )
             save(operation / "index-receipt.json", receipt)
             (operation / "index-receipt.json").chmod(0o400)
             result["receipt"] = receipt
