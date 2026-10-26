@@ -16,8 +16,19 @@ python3 -B packages/jobagg/scripts/inspect_pending_publication.py \
 
 Alternatively use `--database /absolute/path/to/jobs.sqlite3`. The config option reads
 only `publication_worker_database`; a relative database path resolves against the
-config's directory. The command prints JSON to standard output. To save a report,
-redirect it to a new private file **outside production**, for example:
+config's directory. Every invocation saves a full private report outside production,
+including partial and error results. It prints a JSON summary containing `report_file` to Terminal.
+All observed exact unit/version records are in the saved file, regardless of the
+optional sample size. The summary omits the potentially long full record list.
+
+On macOS the report is `/private/tmp/jobagg-pending-inspection-<random>/report.json`;
+on Linux it is `/tmp/jobagg-pending-inspection-<random>/report.json`. The directory
+has mode 0700 and the file mode 0600. Each invocation gets a new directory, so old
+reports are not overwritten. The location uses the OS temp root rather than a
+possibly production-owned `TMPDIR`. These are temporary files: retain an important
+report privately elsewhere, outside production and Git, before OS cleanup.
+
+To additionally save the Terminal summary, use a separate new private file:
 
 ```sh
 (umask 077; set -C
@@ -26,11 +37,12 @@ redirect it to a new private file **outside production**, for example:
    > /private/tmp/jobagg-pending-inspection.json)
 ```
 
-The command itself creates no report files, directories, checkpoints, maintenance
-markers or owner locks. It does not contact providers, read historical payloads,
+The command creates only its private observer report and directory. It creates no
+production checkpoints, maintenance markers or owner locks. It does not contact
+providers, read historical payloads,
 compute content hashes, invoke publication, acknowledge work, release holds, or
-change cron/configuration/authority. Keep reports private: source names and an
-optional `--sample 10` may expose internal unit identities and versions.
+change cron/configuration/authority. Keep reports private: the saved report contains
+internal unit identities and versions even when `--sample` is zero.
 
 ## Read behavior and limits
 
@@ -38,7 +50,11 @@ SQLite opens with `mode=ro`, `query_only=ON`, zero busy wait, and an authorizer
 restricted to the four native metadata tables and read operations. It never uses
 `immutable=1` on a live WAL database, since that could miss committed WAL state.
 For a WAL database it requires readable, pre-existing WAL and SHM sidecars; missing
-sidecars cause an input error rather than a deliberate sidecar-creation attempt.
+sidecars cause a saved input-error report rather than a deliberate sidecar-creation
+attempt. An idle WAL-mode database can legitimately have no sidecars; such an error
+report is not Step 2 input. Do not create the sidecars manually. Run the inspector
+when an ordinary production connection has made them available, or review access
+separately; this tool will not open a writer just to make inspection work.
 As with any normal SQLite reader, brief SQLite reader locks and shared-memory
 bookkeeping are possible. This is not the JobAgg owner lock or an application write;
 read-only access still consumes some I/O and cannot promise zero runtime impact.
@@ -48,7 +64,8 @@ production database to work around an access error.
 The pending index supplies ordered pages, joined to exact native dirty versions.
 Each page ends its read transaction before processing and a 25 ms pause. There is
 no whole-scan snapshot pinning the WAL. Defaults: 100 rows/page, 10,000 observed
-units, five seconds, no identity sample. Maximums: 500 rows/page, 100,000 units,
+units, five seconds, no Terminal identity sample. Every observed record is saved.
+Maximums: 500 rows/page, 100,000 units,
 30 seconds and 100 sample identities. A SQLite progress handler bounds query work;
 the time limit is cooperative, not a hard operating-system I/O deadline.
 
@@ -67,19 +84,65 @@ Counts then describe only the observed prefix; zero is not an empty-queue proof.
 There is no automatic retry or background process. A busy or moving result can be
 inspected later without disturbing the current cron owner.
 
-Even a complete report has `publication_verified=false` and
+Even a complete Step 1 report has `publication_verified=false` and
 `acknowledgement_authorized=false`. It does not inspect destination stores or export
 readback, prove main-text completeness, certify safe acknowledgement, or produce an
-executable write plan. A later reconciliation stage would need exact current-version
-publication evidence and the normal owner-held publication gates; this tool grants
-no permission to clear pending work.
+executable write plan. It is input to the read-only Step 2 comparison below; neither
+stage grants permission to clear pending work.
+
+## Step 2: compare the saved inventory with the current queue
+
+Yes, Step 2 requires the **saved Step 1 report**, including exact identities and
+versions. The old schema-1 summary/sample is insufficient; rerun Step 1 to obtain a
+schema-2 report. Use the exact `report_file` path printed by Step 1:
+
+```sh
+python3 -B packages/jobagg/scripts/compare_pending_publication.py \
+  --inspection /private/tmp/jobagg-pending-inspection-REPLACE/report.json
+```
+
+Step 2 reads that file (at most 32 MiB), records its SHA-256, checks the worker
+file identity, epoch/configuration/publication-contract bindings, and rechecks the
+saved units in short read-only pages. It does not import worker runtime code or
+perform schema migration. It uses the same time/page/row limits and SQLite reader
+protections as Step 1. Its detailed report is saved in a new private
+`jobagg-pending-comparison-<random>/report.json` directory in the OS temp root;
+Terminal shows `report_file` and category counts.
+
+| Category | Meaning / next action |
+| --- | --- |
+| `already_acknowledged_in_native_queue` | Cron has already acknowledged that exact version. No additional queue write is proposed. This is a queue-state observation, not new destination verification. |
+| `pending_requires_publication_or_verified_readback` | Same version remains pending. It needs ordinary publication or an independent destination/export readback proof before any acknowledgement could be considered. |
+| `held_requires_review` | Same version is now held; retain the hold and review its reason. |
+| `version_changed_reinspect` | Version changed; the old inspection cannot authorize action on the replacement. |
+| `missing_requires_review` / `identity_changed_requires_review` | Missing or inconsistent unit identity; retain uncertainty, not an inferred successful publication or closure. |
+| `unknown_disposition_requires_review` | Unrecognized state; do not infer eligibility or success. |
+
+Cron may legitimately advance between the two commands. Revision, phase and
+transaction-token changes **between Step 1 and Step 2** are therefore allowed;
+epoch/configuration/contract/file-identity changes require a new Step 1 inspection.
+A change **during Step 2** stops its comparison and marks it partial.
+
+`complete=true` in Step 2 means all **saved input units** were compared without a
+detected intervening commit. It never means the whole production backlog is zero
+or all destination content matches. `input_inventory_complete=false` explicitly
+preserves a partial Step 1 scope; Step 2 can still inspect those exact records.
+The result always has `publication_verified=false` and
+`acknowledgement_authorized=false`.
+
+This increment implements queue-state comparison, not independent public row,
+main-text, document and consolidated-export certification. It contains **no guarded
+writer**. Pending metadata alone cannot identify a safe bulk acknowledgement set;
+those destination proofs and normal owner-held gates remain prerequisites to any
+later write stage. Do not use the category counts to update the queue manually.
 
 ## Validation
 
 Focused tests use tiny synthetic databases, including a concurrent WAL writer,
 changing metadata without a revision increment, bounded partial enumeration,
-malformed authority/version metadata, and denied SQL mutations. No live production
-run, provider access, or A8 validation is part of this change.
+malformed authority/version metadata, denied SQL mutations, private saved output,
+Step 1-to-Step 2 scope preservation, and exact-version comparison across natural
+queue progress. These tests do not establish destination content completeness or A8.
 
 ```sh
 python3 -B -m pytest -q packages/jobagg/tests/test_inspect_pending_publication.py

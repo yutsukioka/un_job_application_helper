@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import stat
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +14,19 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "inspect_pending_publ
 spec = importlib.util.spec_from_file_location("pending_inspector", SCRIPT)
 inspector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(inspector)
+comparison_spec = importlib.util.spec_from_file_location(
+    "pending_comparison", SCRIPT.with_name("compare_pending_publication.py")
+)
+comparison = importlib.util.module_from_spec(comparison_spec)
+with patch.dict("sys.modules", {"inspect_pending_publication": inspector}):
+    comparison_spec.loader.exec_module(comparison)
+
+
+@pytest.fixture(autouse=True)
+def private_reports(tmp_path, monkeypatch):
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    monkeypatch.setattr(inspector, "REPORT_ROOT", report_root)
 
 
 @pytest.fixture
@@ -61,6 +76,8 @@ def test_complete_counts_and_bounded_sample_preserve_database_and_wal(database):
     }
     assert [r["version"] for r in result["sample"]] == [0, 1, 2]
     assert result["oldest_pending_at_unix"] == 0
+    assert len(result["units"]) == 9
+    assert [row["version"] for row in result["units"]] == list(range(9))
     assert not result["publication_verified"] and not result["acknowledgement_authorized"]
     assert (path.read_bytes(), wal.read_bytes()) == before
     assert writer.execute("SELECT disposition FROM jobagg_dirty_current WHERE unit='unit-09'").fetchone() == ("held",)
@@ -194,3 +211,136 @@ def test_missing_wal_sidecars_are_not_created(database, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["stop_reason"] == "input_error"
     assert not Path(str(closed) + "-wal").exists()
     assert not Path(str(closed) + "-shm").exists()
+
+
+def saved_inspection(path, **limits):
+    report = inspector.inspect(path, **limits)
+    return inspector.save_report(report, "synthetic-inventory-")
+
+
+def test_cli_saves_full_private_inventory_and_summary(database, capsys):
+    assert inspector.main(["--database", str(database[0]), "--sample", "1"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    report_file = Path(summary["report_file"])
+    saved = json.loads(report_file.read_text())
+    assert len(saved["units"]) == 9 and len(saved["sample"]) == 1
+    assert "units" not in summary
+    assert stat.S_IMODE(report_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(report_file.parent.stat().st_mode) == 0o700
+    assert report_file.parent.parent == inspector.REPORT_ROOT
+
+
+def test_partial_inventory_is_also_saved(database, capsys):
+    assert inspector.main(["--database", str(database[0]), "--max-units", "2"]) == 2
+    summary = json.loads(capsys.readouterr().out)
+    report = json.loads(Path(summary["report_file"]).read_text())
+    assert not report["complete"] and len(report["units"]) == 2
+
+
+def test_step2_compares_exact_versions_and_keeps_queue_untouched(database):
+    path, writer = database
+    source = saved_inspection(path)
+    writer.execute("UPDATE jobagg_dirty_current SET disposition='acknowledged' WHERE version=0")
+    writer.execute("UPDATE jobagg_dirty_current SET disposition='held',reason='integrity_review' WHERE version=1")
+    writer.execute("UPDATE jobagg_dirty_current SET version=100 WHERE version=2")
+    writer.execute("DELETE FROM jobagg_dirty_current WHERE version=3")
+    writer.execute("UPDATE jobagg_dirty_current SET source_id='other' WHERE version=4")
+    writer.execute("UPDATE jobagg_dirty_current SET disposition='unknown' WHERE version=5")
+    writer.execute("UPDATE jobagg_runtime_state SET source_transaction_id='tx-after-step1'")
+    writer.commit()
+    before = path.read_bytes(), Path(str(path) + "-wal").read_bytes()
+    report = comparison.compare(source, page_size=2)
+    assert report["complete"] and report["compared_units"] == 9
+    assert report["counts"] == {
+        "already_acknowledged_in_native_queue": 1, "held_requires_review": 1,
+        "version_changed_reinspect": 1, "missing_requires_review": 1,
+        "identity_changed_requires_review": 1, "unknown_disposition_requires_review": 1,
+        "pending_requires_publication_or_verified_readback": 3,
+    }
+    assert not report["publication_verified"] and not report["acknowledgement_authorized"]
+    assert report["comparisons"][2]["inspected_version"] == 2
+    assert report["comparisons"][2]["current_version"] == 100
+    assert (path.read_bytes(), Path(str(path) + "-wal").read_bytes()) == before
+
+
+def test_step2_partial_input_remains_scoped_not_global(database):
+    source = saved_inspection(database[0], max_units=2)
+    report = comparison.compare(source)
+    assert report["complete"] and not report["input_inventory_complete"]
+    assert report["input_observed_units"] == report["compared_units"] == 2
+
+
+def test_step2_row_limit_retains_unvisited_suffix(database):
+    source = saved_inspection(database[0])
+    report = comparison.compare(source, max_units=2)
+    assert not report["complete"] and report["stop_reason"] == "unit_limit"
+    assert report["compared_units"] == len(report["comparisons"]) == 2
+
+
+@pytest.mark.parametrize("sql", [
+    "UPDATE jobagg_runtime_state SET epoch='other'",
+    "UPDATE jobagg_runtime_state SET config_sha256='changed'",
+    "UPDATE jobagg_dirty_state SET contract_sha256='changed'",
+    "UPDATE jobagg_dirty_state SET bootstrap_complete=0",
+])
+def test_step2_binding_changes_require_new_inspection(database, sql):
+    source = saved_inspection(database[0])
+    database[1].execute(sql)
+    database[1].commit()
+    report = comparison.compare(source)
+    assert not report["complete"] and report["stop_reason"] == "binding_error"
+    assert report["compared_units"] == 0
+
+
+def test_step2_concurrent_commit_stops_without_long_read_lock(database, monkeypatch):
+    source = saved_inspection(database[0])
+    writer = database[1]
+
+    def commit_during_comparison(seconds):
+        writer.execute("UPDATE jobagg_runtime_state SET source_transaction_id='changed'")
+        writer.commit()
+        assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+
+    monkeypatch.setattr(inspector.time, "sleep", commit_during_comparison)
+    result = comparison.compare(source, page_size=2)
+    assert not result["complete"] and result["stop_reason"] == "database_changed"
+    assert result["compared_units"] == 2
+
+
+@pytest.mark.parametrize("damage", ["old_schema", "sample_only", "duplicate", "count", "identity"])
+def test_step2_rejects_invalid_step1_input(database, damage, capsys):
+    source = saved_inspection(database[0])
+    report = json.loads(source.read_text())
+    if damage == "old_schema":
+        report["schema"] = "jobagg-pending-inspection-1"
+    elif damage == "sample_only":
+        del report["units"]
+    elif damage == "duplicate":
+        report["units"][1] = report["units"][0]
+    elif damage == "count":
+        report["observed_pending_units"] = 100
+    elif damage == "identity":
+        report["database_identity"]["inode"] += 1
+    source.write_text(json.dumps(report))
+    assert comparison.main(["--inspection", str(source)]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert not result["complete"]
+    assert result["stop_reason"] in {"input_error", "binding_error"}
+
+
+def test_step2_cli_saves_report_and_does_not_overwrite_step1(database, capsys):
+    source = saved_inspection(database[0])
+    before = source.read_bytes()
+    assert comparison.main(["--inspection", str(source)]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    saved = json.loads(Path(summary["report_file"]).read_text())
+    assert saved["input_inventory_complete"] and saved["compared_units"] == 9
+    assert len(saved["comparisons"]) == 9
+    assert "comparisons" not in summary
+    assert source.read_bytes() == before
+
+
+def test_report_write_error_is_visible(database, monkeypatch, capsys):
+    monkeypatch.setattr(inspector, "REPORT_ROOT", database[0] / "not-a-directory")
+    assert inspector.main(["--database", str(database[0])]) == 2
+    assert json.loads(capsys.readouterr().out)["stop_reason"] == "report_write_error"

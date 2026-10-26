@@ -5,10 +5,15 @@ import argparse
 from collections import Counter
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 import time
+
+
+REPORT_ROOT = Path("/private/tmp" if sys.platform == "darwin" else "/tmp")
 
 
 TABLES = {
@@ -67,35 +72,24 @@ def inspect(database, *, max_units=10000, page_size=100, max_seconds=5, sample=0
             and 0 < max_seconds <= 30 and 0 <= sample <= 100):
         raise ValueError("Limits: units 1..100000, page 1..500, seconds (0,30], sample 0..100")
     path = Path(database).resolve(strict=True)
-    # A normal live WAL reader uses existing SQLite shared-memory reader slots.
-    # Refuse a missing-sidecar setup rather than deliberately creating sidecars.
-    with path.open("rb") as handle:
-        wal_mode = handle.read(20)[18:20] == b"\x02\x02"
-    if wal_mode:
-        for suffix in ("-wal", "-shm"):
-            with Path(str(path) + suffix).open("rb"):
-                pass
     started = time.monotonic()
     deadline = started + max_seconds
     report = {
-        "schema": "jobagg-pending-inspection-1", "started_at_utc": utc_now(),
+        "schema": "jobagg-pending-inspection-2", "started_at_utc": utc_now(),
         "database": str(path), "scope": "current pending publication metadata only",
         "publication_verified": False, "acknowledgement_authorized": False,
         "complete": False, "atomic_observation": False, "observed_pending_units": 0,
         "limits": {"max_units": max_units, "page_size": page_size,
                    "max_seconds": max_seconds, "sample": sample},
-        "sample": [],
+        "sample": [], "units": [],
+        "database_identity": file_identity(path),
     }
     groups = Counter()
     cursor = None
     initial = None
     conn = None
     try:
-        # Never immutable=1: a live WAL contains committed state absent from the DB file.
-        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0)
-        conn.execute("PRAGMA query_only=ON")
-        conn.set_authorizer(authorize)
-        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        conn = open_reader(path, deadline)
         while True:
             if time.monotonic() >= deadline:
                 report["stop_reason"] = "time_limit"
@@ -123,17 +117,19 @@ def inspect(database, *, max_units=10000, page_size=100, max_seconds=5, sample=0
                     raise ValueError("Pending metadata is missing its ordering/version provenance")
                 groups[(source, kind, reason, operation)] += 1
                 report["observed_pending_units"] += 1
+                record = {
+                    "unit": unit, "version": version, "source_id": source,
+                    "kind": kind, "first_changed_at": changed,
+                    "reason": reason, "operation": operation,
+                }
+                report["units"].append(record)
                 if len(report["sample"]) < sample:
-                    report["sample"].append({
-                        "unit": unit, "version": version, "source_id": source,
-                        "kind": kind, "first_changed_at": changed,
-                        "reason": reason, "operation": operation,
-                    })
+                    report["sample"].append(record)
                 if "oldest_pending_at_unix" not in report:
                     report["oldest_pending_at_unix"] = changed
                 cursor = (changed, unit)
             # A commit between the last page snapshot and this check invalidates the census.
-            if boundary(conn) != initial:
+            if boundary(conn) != initial or file_identity(path) != report["database_identity"]:
                 report["stop_reason"] = "database_changed"
                 break
             if time.monotonic() >= deadline:
@@ -168,6 +164,49 @@ def inspect(database, *, max_units=10000, page_size=100, max_seconds=5, sample=0
     return report
 
 
+def file_identity(path):
+    value = Path(path).stat()
+    return {"device": value.st_dev, "inode": value.st_ino}
+
+
+def open_reader(path, deadline):
+    # A normal live WAL reader uses existing SQLite shared-memory reader slots.
+    # Refuse a missing-sidecar setup rather than deliberately creating sidecars.
+    with path.open("rb") as handle:
+        wal_mode = handle.read(20)[18:20] == b"\x02\x02"
+    if wal_mode:
+        for suffix in ("-wal", "-shm"):
+            with Path(str(path) + suffix).open("rb"):
+                pass
+    # Never immutable=1: committed live state may exist only in the WAL.
+    conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.set_authorizer(authorize)
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        return conn
+    except BaseException:
+        conn.close()
+        raise
+
+
+def save_report(report, prefix):
+    """Create a private report in the OS temp root, independent of a live TMPDIR."""
+    directory = Path(tempfile.mkdtemp(prefix=prefix, dir=REPORT_ROOT))
+    target = directory / "report.json"
+    with target.open("x", encoding="utf-8") as handle:
+        os.chmod(target, 0o600)
+        json.dump(report, handle, indent=2, allow_nan=False)
+        handle.write("\n")
+    return target
+
+
+def print_saved_report(report, prefix):
+    target = save_report(report, prefix)
+    summary = {key: value for key, value in report.items() if key not in {"units", "comparisons"}}
+    print(json.dumps({**summary, "report_file": str(target)}, indent=2, allow_nan=False), flush=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -188,9 +227,15 @@ def main(argv=None):
         report = inspect(database, max_units=args.max_units, page_size=args.page_size,
                          max_seconds=args.max_seconds, sample=args.sample)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        print(json.dumps({"complete": False, "stop_reason": "input_error", "error": str(exc)}))
+        report = {"schema": "jobagg-pending-inspection-2", "complete": False,
+                  "finished_at_utc": utc_now(), "units": [],
+                  "stop_reason": "input_error", "error": str(exc)}
+    try:
+        print_saved_report(report, "jobagg-pending-inspection-")
+    except OSError as exc:
+        print(json.dumps({"complete": False, "stop_reason": "report_write_error",
+                          "error": str(exc)}), flush=True)
         return 2
-    print(json.dumps(report, indent=2, allow_nan=False))
     return 0 if report["complete"] else 2
 
 
