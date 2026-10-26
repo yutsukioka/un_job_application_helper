@@ -1,6 +1,7 @@
 """Synthetic tests only: no live JobAgg paths, payloads, or network access."""
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -22,6 +23,13 @@ comparison_spec = importlib.util.spec_from_file_location(
 comparison = importlib.util.module_from_spec(comparison_spec)
 with patch.dict("sys.modules", {"inspect_pending_publication": inspector}):
     comparison_spec.loader.exec_module(comparison)
+verification_spec = importlib.util.spec_from_file_location(
+    "pending_verification", SCRIPT.with_name("verify_pending_publication.py")
+)
+verification = importlib.util.module_from_spec(verification_spec)
+with patch.dict("sys.modules", {"inspect_pending_publication": inspector,
+                                "compare_pending_publication": comparison}):
+    verification_spec.loader.exec_module(verification)
 
 
 @pytest.fixture(autouse=True)
@@ -408,3 +416,171 @@ def test_wal_without_shm_is_read_from_private_snapshot(database, tmp_path):
     assert result["complete"] and result["observed_pending_units"] == 9
     assert inspector.source_signature(isolated) == before
     assert not Path(str(isolated) + "-shm").exists()
+
+
+def digest_record(record, compact=False):
+    options = {"sort_keys": True}
+    if compact:
+        options["separators"] = (",", ":")
+    record["sha256"] = hashlib.sha256(json.dumps(record, **options).encode()).hexdigest()
+    return record
+
+
+@pytest.fixture
+def native_publication(database, tmp_path):
+    original = saved_inspection(database[0])
+    compared = comparison.compare(original)
+    compared_file = inspector.save_report(compared, "synthetic-comparison-")
+    root = (tmp_path / "output").resolve()
+    root.mkdir()
+    destination = root / "all_jobs.sqlite3"
+    conn = sqlite3.connect(destination)
+    conn.executescript("""
+        CREATE TABLE jobs(job_key TEXT PRIMARY KEY,description TEXT);
+        CREATE TABLE jobagg_publication_receipts(publication_key TEXT PRIMARY KEY,generation_id TEXT);
+        INSERT INTO jobagg_publication_receipts VALUES ('key','generation');
+        CREATE TABLE jobagg_publication_revision(id INTEGER PRIMARY KEY,schema,epoch,store_id,
+            revision,schema_sha256);
+    """)
+    schema = list(conn.execute("SELECT name,type,sql FROM sqlite_master ORDER BY name"))
+    schema_digest = hashlib.sha256(json.dumps(schema).encode()).hexdigest()
+    conn.execute("INSERT INTO jobagg_publication_revision VALUES (1,?,?,?,?,?)",
+                 ("publication-revision-2", "public-epoch", "store", 7, schema_digest))
+    conn.commit()
+    conn.close()
+    store = {"path": str(destination), **inspector.file_identity(destination),
+             "schema": "publication-revision-2", "epoch": "public-epoch", "store_id": "store",
+             "revision": 7, "schema_sha256": schema_digest}
+    exports = []
+    for suffix in ("current.json", "current.csv", "history.json", "history.csv"):
+        path = root / ("all_jobs_" + suffix)
+        path.write_bytes(b"verified export\n")
+        path.chmod(0o400)
+        exports.append({**verification.export_identity(path),
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    inventory_report = json.loads(original.read_text())
+    selected = [{**row, "job_key": "job" if row["kind"] == "job" else None}
+                for row in inventory_report["units"][:2]]
+    selection = digest_record({"schema": "publication-work-3", "epoch": "epoch",
+                               "contract_sha256": "contract", "units": selected,
+                               "target_paths": [str(destination)]}, compact=True)
+    processed = [{"unit": row["unit"], "version": row["version"]} for row in selected]
+    plan = {"generation_id": "generation", "publication_selection": selection,
+            "processed_units": processed, "output_dir": str(root),
+            "changes": [{"publication_key": "key", "destinations": [{"path": str(destination)}]}],
+            "listing_frames": []}
+    plan_dir = tmp_path / "generations" / "generation"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "plan.json"
+    plan_path.write_text(json.dumps(plan))
+    gate = {"generation_id": "generation", "state": "complete", "status": "published",
+            "readback_verified": True, "database_transactions_complete": True,
+            "publication_selection": selection, "processed_units": processed, "rejected": [],
+            "plan_path": str(plan_path), "plan_sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+            "publication_boundary": digest_record({"schema": "publication-boundary-1",
+                                                   "output_root": str(root),
+                                                   "databases": [store], "exports": exports})}
+    gate_path = root / ".jobagg-publication-state.json"
+    gate_path.write_text(json.dumps(gate))
+    return compared_file, root, gate_path, destination
+
+
+def test_step3_checks_native_store_receipts_and_export_bytes_without_writes(native_publication, database):
+    source, root, gate_path, destination = native_publication
+    paths = [database[0], destination, gate_path, *root.glob("*.json"), *root.glob("*.csv")]
+    before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+              for path in paths}
+    result = verification.verify(source, root)
+    assert result["complete"] and result["preview_count"] == 2
+    assert result["checked_stores"] == 1 and result["checked_exports"] == 4
+    assert result["checked_publication_receipts"] == 1
+    assert result["destination_boundary_verified"] and result["export_hashes_verified"]
+    assert not result["acknowledgement_authorized"] and result["owner_held_recheck_required"]
+    assert result["counts"]["no_exact_version_readback_proof_retain_pending"] == 7
+    assert {str(path): (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+            for path in paths} == before
+
+
+@pytest.mark.parametrize("damage", ["gate_in_progress", "plan", "export_hash", "export_missing",
+                                    "revision", "receipt", "scope", "selection", "processed"])
+def test_step3_never_previews_with_missing_or_changed_proof(native_publication, damage):
+    source, root, gate_path, destination = native_publication
+    gate = json.loads(gate_path.read_text())
+    if damage == "gate_in_progress":
+        gate["state"] = "publishing"
+    elif damage == "plan":
+        Path(gate["plan_path"]).write_text("{}")
+    elif damage == "export_hash":
+        gate["publication_boundary"]["exports"][0]["sha256"] = "0" * 64
+        del gate["publication_boundary"]["sha256"]
+        digest_record(gate["publication_boundary"])
+    elif damage == "export_missing":
+        Path(gate["publication_boundary"]["exports"][0]["path"]).unlink()
+    elif damage in {"revision", "receipt"}:
+        conn = sqlite3.connect(destination)
+        conn.execute("UPDATE jobagg_publication_revision SET revision=8" if damage == "revision"
+                     else "DELETE FROM jobagg_publication_receipts")
+        conn.commit()
+        conn.close()
+    elif damage == "scope":
+        gate["publication_boundary"]["exports"].pop()
+        del gate["publication_boundary"]["sha256"]
+        digest_record(gate["publication_boundary"])
+    elif damage == "selection":
+        gate["publication_selection"]["sha256"] = "0" * 64
+    elif damage == "processed":
+        gate["processed_units"].append({"unit": "forged", "version": 100})
+    gate_path.write_text(json.dumps(gate))
+    result = verification.verify(source, root)
+    assert not result["complete"] and result["preview"] == []
+    assert not result["acknowledgement_authorized"]
+
+
+def test_step3_changed_current_version_is_not_in_preview(native_publication, database):
+    source, root, _, _ = native_publication
+    database[1].execute("UPDATE jobagg_dirty_current SET version=100 WHERE version=0")
+    database[1].commit()
+    result = verification.verify(source, root)
+    assert result["complete"] and result["preview_count"] == 1
+    assert result["counts"]["needs_fresh_inspection"] == 1
+
+
+def test_step3_byte_limit_keeps_zero_preview(native_publication):
+    source, root, _, _ = native_publication
+    result = verification.verify(source, root, max_bytes=1)
+    assert not result["complete"] and result["preview_count"] == 0
+    assert "byte limit" in result["error"]
+
+
+def test_step3_worker_change_during_verification_clears_preview(native_publication, database, monkeypatch):
+    source, root, _, _ = native_publication
+    original_identity = verification.export_identity
+    changed = []
+
+    def mutate_once(path):
+        if not changed:
+            database[1].execute("UPDATE jobagg_runtime_state SET source_transaction_id='new'")
+            database[1].commit()
+            changed.append(True)
+        return original_identity(path)
+
+    monkeypatch.setattr(verification, "export_identity", mutate_once)
+    result = verification.verify(source, root)
+    assert not result["complete"] and result["preview_count"] == 0
+    assert "changed during verification" in result["error"]
+
+
+def test_step3_cli_saves_private_preview(native_publication, capsys):
+    source, root, _, _ = native_publication
+    assert verification.main(["--comparison", str(source), "--output-root", str(root)]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    result = json.loads(Path(summary["report_file"]).read_text())
+    assert result["preview_count"] == 2 and len(result["units"]) == 9
+    assert "preview" not in summary and "units" not in summary
+
+
+def test_step3_time_limit_is_explicit_and_preview_empty(native_publication):
+    source, root, _, _ = native_publication
+    result = verification.verify(source, root, max_seconds=0.000001)
+    assert not result["complete"] and result["stop_reason"] == "time_limit"
+    assert result["preview"] == []

@@ -116,7 +116,7 @@ python3 -B packages/jobagg/scripts/compare_pending_publication.py \
 
 python3 -B /Users/yutsukioka2/.codex/worktrees/jobagg-reconciliation-pending/un_job_application_helper/packages/jobagg/scripts/compare_pending_publication.py \
   --inspection /private/tmp/jobagg-pending-inspection.json
-  
+
 ```
 
 Step 2 reads that file (at most 32 MiB), records its SHA-256, checks the worker
@@ -154,13 +154,70 @@ writer**. Pending metadata alone cannot identify a safe bulk acknowledgement set
 those destination proofs and normal owner-held gates remain prerequisites to any
 later write stage. Do not use the category counts to update the queue manually.
 
+## Step 3: verify retained destination/export evidence and preview matches
+
+Use the Step 2 `report_file` path:
+
+```sh
+python3 -B packages/jobagg/scripts/verify_pending_publication.py \
+  --comparison /private/tmp/jobagg-pending-comparison-REPLACE/report.json \
+  --output-root /absolute/path/to/jobagg/output \
+  --max-seconds 60
+```
+
+This stage requires a completed native publication generation with verified readback.
+If the ordinary publisher is exporting, the tool saves a deferred/incomplete report
+with an empty preview. It never pauses cron, waits on the owner, resumes a publisher,
+or repairs the publication gate. Rerun after normal publication completes.
+
+Verification reads the native generation plan (bounded to 32 MiB), checks its exact
+file hash and generation/selection bindings, verifies the native selection/boundary
+digests and complete four-export-per-store coverage, and opens destination CoW
+clones to compare store identities, schema hashes and revision clocks. Required
+publication receipts named by the plan must remain in their destinations. Export
+bytes are freshly SHA-256 checked against the retained native readback receipts;
+file identities and read-only seals must also match. Gate, plan, source worker,
+destination clocks and export identities are rechecked before accepting the result.
+No live SQLite connection or owner lock is used.
+
+The default budget is 60 seconds and 4 GiB of export reads, with a maximum of
+300 seconds. At most 64 stores and 256 exports are accepted. The byte cap applies to
+export payload hashing; metadata/JSON/SQLite reads are separately bounded by their
+input sizes and deadline. This is a single foreground read-only operation, not a
+background monitor. It can add disk I/O while cron runs. On timeout, changed state,
+missing files, integrity mismatch or incomplete proof, the preview is empty and the
+report remains incomplete. Detailed reports are saved privately under
+`jobagg-pending-preview-<random>/report.json` in the OS temp root.
+
+The preview includes an exact `(unit, version)` only when it is still pending,
+was explicitly processed by that verified native generation under the same contract,
+and was not rejected. Already acknowledged or held work is retained as observed;
+changed identities/versions need fresh inspection. All pending versions absent from
+the exact native proof remain pending, even if a similar vacancy is visible publicly.
+An older observation, different version, job count or unchanged-looking text is
+insufficient to clear current contract/time-transition work.
+
+This verifies retention of the publisher's exact readback proof against unchanged
+store boundaries and independently hashed exports. It does not newly certify that
+all source public text was fetched, reconstruct missing historical proof, or compare
+all worker/public job fields independently of the native producer. The report keeps
+`acknowledgement_authorized=false`, `owner_held_recheck_required=true` and
+`global_backlog_empty_proven=false`. A preview is evidence for review, not an executable
+write plan. There is no writer in this PR; any later acknowledgement must recheck
+versions, proof, publication gates and scoped holds under the actual owner lock.
+
 ## Validation
 
 Focused tests use tiny synthetic databases, including a concurrent WAL writer,
 changing metadata without a revision increment, bounded partial enumeration,
 malformed authority/version metadata, denied SQL mutations, private saved output,
 Step 1-to-Step 2 scope preservation, and exact-version comparison across natural
-queue progress. These tests do not establish destination content completeness or A8.
+queue progress, missing-sidecar capture, active-WAL preservation and source races.
+Step 3 fixtures cover exact native plan/selection/store/export bindings, missing
+receipts, export corruption/coverage gaps, changed current versions, byte/time limits
+and concurrent changes clearing the preview. Linux CI uses tiny fixture copies to
+simulate cloning where its filesystem lacks reflinks; production has no byte-copy
+fallback. These tests do not establish all-source text completeness or A8.
 
 ```sh
 python3 -B -m pytest -q packages/jobagg/tests/test_inspect_pending_publication.py

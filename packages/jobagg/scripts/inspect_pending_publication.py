@@ -232,7 +232,7 @@ def reader_unchanged(conn):
     return source_signature(conn.source_path) == conn.source_signature
 
 
-def open_reader(path, deadline):
+def open_reader(path, deadline, *, tables=None):
     # Clone only while all source file clocks are stable. No SQLite connection
     # ever opens production, so missing WAL/SHM files are never created there.
     before = source_signature(path)
@@ -257,7 +257,12 @@ def open_reader(path, deadline):
         conn.source_path = path
         conn.source_signature = before
         conn.execute("PRAGMA query_only=ON")
-        conn.set_authorizer(authorize)
+        def read_only(action, first, second, database, trigger):
+            if action == sqlite3.SQLITE_READ and tables is not None:
+                return sqlite3.SQLITE_OK if first in tables else sqlite3.SQLITE_DENY
+            return authorize(action, first, second, database, trigger)
+
+        conn.set_authorizer(read_only)
         conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
         return conn
     except BaseException:
@@ -280,7 +285,7 @@ def save_report(report, prefix):
 
 def print_saved_report(report, prefix):
     target = save_report(report, prefix)
-    summary = {key: value for key, value in report.items() if key not in {"units", "comparisons"}}
+    summary = {key: value for key, value in report.items() if key not in {"units", "comparisons", "preview"}}
     print(json.dumps({**summary, "report_file": str(target)}, indent=2, allow_nan=False), flush=True)
 
 
