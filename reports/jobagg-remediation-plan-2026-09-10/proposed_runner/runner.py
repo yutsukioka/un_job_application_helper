@@ -32,6 +32,7 @@ _CLOCK_SPEC = importlib.util.spec_from_file_location('_jobagg_entry_clock', Path
 RUNTIME_CLOCK = importlib.util.module_from_spec(_CLOCK_SPEC)
 _CLOCK_SPEC.loader.exec_module(RUNTIME_CLOCK)
 _ENTRY_CLOCK = None
+_ENTRY_BOOTSTRAP_SECONDS = 1800
 
 
 def check_entry_budget():
@@ -3465,7 +3466,8 @@ def locked_tick(config, expected, lock_descriptor, recovered=None, *, storage_co
 def _main(argv=None):
     global _ENTRY_DEADLINES, _ENTRY_CLOCK
     entry_monotonic, entry_wall = time.monotonic(), time.time()
-    _ENTRY_DEADLINES = (entry_monotonic + 840, entry_wall + 840)
+    _ENTRY_DEADLINES = (entry_monotonic + _ENTRY_BOOTSTRAP_SECONDS,
+                        entry_wall + _ENTRY_BOOTSTRAP_SECONDS)
     OBSERVABILITY.DEADLINE_CHECK = check_entry_budget
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -3594,7 +3596,8 @@ def main(argv=None):
     global _ENTRY_DEADLINES, _ENTRY_CLOCK
     original_clock = os.environ.get(RUNTIME_CLOCK.ENVIRONMENT)
     try:
-        _ENTRY_CLOCK = RUNTIME_CLOCK.budget(840, parent=RUNTIME_CLOCK.inherited())
+        # Configuration may select a longer cycle; inherited deadlines still win.
+        _ENTRY_CLOCK = RUNTIME_CLOCK.budget(_ENTRY_BOOTSTRAP_SECONDS, parent=RUNTIME_CLOCK.inherited())
         os.environ[RUNTIME_CLOCK.ENVIRONMENT] = json.dumps(_ENTRY_CLOCK)
         check_entry_budget()
         return _main(argv)
