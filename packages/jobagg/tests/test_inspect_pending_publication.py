@@ -1,0 +1,196 @@
+"""Synthetic tests only: no live JobAgg paths, payloads, or network access."""
+
+import importlib.util
+import json
+from pathlib import Path
+import sqlite3
+
+import pytest
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "inspect_pending_publication.py"
+spec = importlib.util.spec_from_file_location("pending_inspector", SCRIPT)
+inspector = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(inspector)
+
+
+@pytest.fixture
+def database(tmp_path):
+    path = tmp_path / "jobs.sqlite3"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE jobagg_runtime_state(id INTEGER PRIMARY KEY,schema,epoch,revision,
+            phase,config_sha256,source_transaction_id);
+        INSERT INTO jobagg_runtime_state VALUES
+            (1,'jobagg-runtime-authority-3','epoch',10,'accepted','config','tx1');
+        CREATE TABLE jobagg_dirty_state(id INTEGER PRIMARY KEY,schema,epoch,
+            contract_sha256,bootstrap_complete);
+        INSERT INTO jobagg_dirty_state VALUES (1,'publication-work-3','epoch','contract',1);
+        CREATE TABLE jobagg_dirty_current(unit TEXT PRIMARY KEY,version INTEGER,source_id,
+            kind,first_changed_at REAL,disposition,reason);
+        CREATE INDEX jobagg_dirty_pending
+            ON jobagg_dirty_current(disposition,first_changed_at,unit);
+        CREATE TABLE jobagg_dirty_versions(version INTEGER PRIMARY KEY,unit,operation);
+    """)
+    for i in range(11):
+        conn.execute("INSERT INTO jobagg_dirty_versions VALUES (?,?,?)",
+                     (i, f"unit-{i:02}", "contract_revalidation" if i < 5 else "time_transition"))
+        conn.execute("INSERT INTO jobagg_dirty_current VALUES (?,?,?,?,?,?,?)",
+                     (f"unit-{i:02}", i, "a" if i < 5 else "b",
+                      "listing" if i == 0 else "job", i // 3,
+                      "pending" if i < 9 else ("held" if i == 9 else "acknowledged"),
+                      "needs_publication"))
+    conn.commit()
+    yield path, conn
+    conn.close()
+
+
+def test_complete_counts_and_bounded_sample_preserve_database_and_wal(database):
+    path, writer = database
+    wal = Path(str(path) + "-wal")
+    before = path.read_bytes(), wal.read_bytes()
+    result = inspector.inspect(path, page_size=2, sample=3)
+    assert result["complete"] and result["atomic_observation"]
+    assert result["observed_pending_units"] == 9
+    assert sum(g["observed_units"] for g in result["groups"]) == 9
+    assert {(g["source_id"], g["kind"], g["operation"], g["observed_units"])
+            for g in result["groups"]} == {
+        ("a", "listing", "contract_revalidation", 1),
+        ("a", "job", "contract_revalidation", 4), ("b", "job", "time_transition", 4),
+    }
+    assert [r["version"] for r in result["sample"]] == [0, 1, 2]
+    assert result["oldest_pending_at_unix"] == 0
+    assert not result["publication_verified"] and not result["acknowledgement_authorized"]
+    assert (path.read_bytes(), wal.read_bytes()) == before
+    assert writer.execute("SELECT disposition FROM jobagg_dirty_current WHERE unit='unit-09'").fetchone() == ("held",)
+
+
+def test_limit_is_partial_not_false_zero(database):
+    result = inspector.inspect(database[0], max_units=3, page_size=2)
+    assert result["observed_pending_units"] == 3
+    assert not result["complete"] and result["stop_reason"] == "unit_limit"
+    assert result["sample"] == []
+
+
+def test_exact_limit_can_complete(database):
+    assert inspector.inspect(database[0], max_units=9, page_size=3)["complete"]
+
+
+def test_writer_commits_and_checkpoints_between_pages(database, monkeypatch):
+    path, writer = database
+    writes = []
+
+    def between_pages(seconds):
+        # Metadata acknowledgement changes the transaction token without changing revision.
+        writer.execute("UPDATE jobagg_runtime_state SET source_transaction_id='tx2'")
+        writer.commit()
+        busy, _, _ = writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        assert busy == 0  # No inspector snapshot pins the writer's WAL.
+        writes.append(True)
+
+    monkeypatch.setattr(inspector.time, "sleep", between_pages)
+    result = inspector.inspect(path, page_size=2)
+    assert writes == [True]
+    assert result["stop_reason"] == "database_changed" and not result["complete"]
+    assert result["observed_pending_units"] == 2
+
+
+def test_time_limit_during_query_is_partial(database, monkeypatch):
+    ticks = iter([0, 0, 10, 10, 10])
+    monkeypatch.setattr(inspector.time, "monotonic", lambda: next(ticks, 10))
+    result = inspector.inspect(database[0], max_seconds=1)
+    assert result["stop_reason"] == "time_limit" and not result["complete"]
+
+
+@pytest.mark.parametrize("sql", [
+    "UPDATE jobagg_dirty_current SET disposition='acknowledged'",
+    "DELETE FROM jobagg_dirty_versions", "CREATE TABLE oops(x)",
+    "ATTACH DATABASE ':memory:' AS other", "PRAGMA wal_checkpoint(TRUNCATE)",
+    "SELECT * FROM sqlite_master",
+])
+def test_sql_authorizer_rejects_noninspection_operations(database, sql):
+    conn = sqlite3.connect(database[0].as_uri() + "?mode=ro", uri=True)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.set_authorizer(inspector.authorize)
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute(sql)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("damage", [
+    "DROP TABLE jobagg_runtime_state", "DROP INDEX jobagg_dirty_pending",
+    "UPDATE jobagg_dirty_current SET first_changed_at=NULL WHERE unit='unit-00'",
+    "DELETE FROM jobagg_dirty_versions WHERE version=0",
+    "UPDATE jobagg_runtime_state SET schema='unknown'",
+])
+def test_missing_or_incompatible_metadata_fails_closed(database, damage):
+    path, writer = database
+    writer.execute(damage)
+    writer.commit()
+    result = inspector.inspect(path)
+    assert not result["complete"] and "error" in result
+
+
+def test_cli_config_is_read_only_and_missing_db_is_not_created(database, tmp_path, capsys):
+    path, _ = database
+    config = tmp_path / "dispatcher.json"
+    config.write_text(json.dumps({"publication_worker_database": path.name}))
+    assert inspector.main(["--config", str(config)]) == 0
+    assert json.loads(capsys.readouterr().out)["observed_pending_units"] == 9
+    missing = tmp_path / "missing.sqlite3"
+    assert inspector.main(["--database", str(missing)]) == 2
+    assert not missing.exists()
+    assert json.loads(capsys.readouterr().out)["stop_reason"] == "input_error"
+
+
+def test_zero_is_only_complete_empty_pending_set(database):
+    path, writer = database
+    writer.execute("UPDATE jobagg_dirty_current SET disposition='held'")
+    writer.commit()
+    result = inspector.inspect(path)
+    assert result["complete"] and result["observed_pending_units"] == 0
+    assert result["groups"] == []
+
+
+@pytest.mark.parametrize("limits", [{"max_units": 0}, {"page_size": 501},
+                                     {"sample": 101}, {"max_seconds": 31}])
+def test_invalid_limits_rejected_before_open(limits):
+    with pytest.raises(ValueError, match="Limits"):
+        inspector.inspect("missing.sqlite3", **limits)
+
+
+def test_locked_database_returns_prompt_partial_error(tmp_path):
+    path = tmp_path / "locked.sqlite3"
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE placeholder(x)")
+        writer.commit()
+        writer.execute("BEGIN EXCLUSIVE")
+        result = inspector.inspect(path, max_seconds=1)
+        assert result["stop_reason"] == "database_error"
+        assert not result["complete"] and "locked" in result["error"]
+    finally:
+        writer.close()
+
+
+def test_corrupt_database_is_not_repaired(tmp_path):
+    path = tmp_path / "corrupt.sqlite3"
+    path.write_bytes(b"not a database")
+    result = inspector.inspect(path)
+    assert not result["complete"] and result["stop_reason"] == "database_error"
+    assert path.read_bytes() == b"not a database"
+
+
+def test_missing_wal_sidecars_are_not_created(database, tmp_path, capsys):
+    # A checkpointed WAL-mode database with no open writer has no sidecars.
+    path, writer = database
+    writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    closed = tmp_path / "closed.sqlite3"
+    closed.write_bytes(path.read_bytes())
+    assert inspector.main(["--database", str(closed)]) == 2
+    assert json.loads(capsys.readouterr().out)["stop_reason"] == "input_error"
+    assert not Path(str(closed) + "-wal").exists()
+    assert not Path(str(closed) + "-shm").exists()
