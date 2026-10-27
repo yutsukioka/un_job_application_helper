@@ -152,6 +152,9 @@ def build_projection(origin, destination, *, deadline_at=None, max_bytes=None, s
     }
     try:
         origin.execute("BEGIN")
+        if selection is not None:
+            from jobagg.runtime_holds import require_selection
+            require_selection(origin, selection)
         origin.set_progress_handler(progress, 1000)
         destination.set_progress_handler(progress, 1000)
         if max_bytes is not None:

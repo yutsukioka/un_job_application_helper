@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 
 
 def _check(deadline):
@@ -33,8 +33,28 @@ def _control(path, deadline):
 def reconcile_run(*args, deadline_at, **kwargs):
     from jobagg.verification_budget import scope
 
-    with scope(deadline_at):
-        return _reconcile_run(*args, deadline_at=deadline_at, **kwargs)
+    readbacks = {}
+    try:
+        with scope(deadline_at):
+            return _reconcile_run(*args, deadline_at=deadline_at, readbacks=readbacks, **kwargs)
+    finally:
+        for conn in readbacks.values():
+            conn.close()
+
+
+@contextmanager
+def _readback(path, deadline, cache):
+    """Reuse at most 128 read-only destination handles within one finite run."""
+    _check(deadline)
+    key = str(Path(path).absolute())
+    if key not in cache:
+        if len(cache) >= 128:
+            raise ValueError("historical_readback_destination_bound")
+        conn = sqlite3.connect(Path(key).as_uri() + "?mode=ro", uri=True, timeout=1)
+        conn.row_factory = sqlite3.Row
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 256)
+        cache[key] = conn
+    yield cache[key]
 
 
 def _reconcile_run(
@@ -47,6 +67,9 @@ def _reconcile_run(
     expected_publication_scope=None,
     generation_references=(),
     reviewed_generation_sha256=(),
+    historical_index=None,
+    readbacks,
+    stop_on_unresolved=False,
 ):
     run = Path(run).absolute()
     request, request_sha = _control(run / "request.json", deadline_at)
@@ -72,6 +95,7 @@ def _reconcile_run(
         }
     records = []
     unresolved = []
+    assessment_exhaustive = True
     with closing(
         sqlite3.connect(Path(worker_database).absolute().as_uri() + "?mode=ro", uri=True, timeout=1)
     ) as conn:
@@ -79,6 +103,9 @@ def _reconcile_run(
         conn.set_progress_handler(lambda: int(time.monotonic() >= deadline_at), 256)
         for interval in intervals:
             _check(deadline_at)
+            if stop_on_unresolved and unresolved:
+                assessment_exhaustive = False
+                break
             outcome = interval.get("outcome", {})
             if not any(
                 key in outcome for key in ("detail_stored", "listing_observed", "document_captured")
@@ -108,7 +135,7 @@ def _reconcile_run(
                 else destinations
             )
             if row["kind"] != "detail":
-                record = _reconcile_other(conn, row, receipt, target_paths, deadline_at)
+                record = _reconcile_other(conn, row, receipt, target_paths, deadline_at, readbacks)
                 records.append(record)
                 if not record["exact_readback"]:
                     if not _historical_occurrence(
@@ -118,6 +145,7 @@ def _reconcile_run(
                         reviewed_generation_sha256,
                         target_paths,
                         deadline_at,
+                        historical_index,
                     ):
                         unresolved.append(
                             {
@@ -149,13 +177,7 @@ def _reconcile_run(
             targets = []
             for destination in target_paths:
                 _check(deadline_at)
-                with closing(
-                    sqlite3.connect(
-                        Path(destination).absolute().as_uri() + "?mode=ro", uri=True, timeout=1
-                    )
-                ) as live:
-                    live.row_factory = sqlite3.Row
-                    live.set_progress_handler(lambda: int(time.monotonic() >= deadline_at), 256)
+                with _readback(destination, deadline_at, readbacks) as live:
                     rows = live.execute(
                         "SELECT source_id,external_id,description,raw_json FROM jobs WHERE source_id=? AND external_id=?",
                         (job["source_id"], str(job["external_id"])),
@@ -189,6 +211,7 @@ def _reconcile_run(
                 reviewed_generation_sha256,
                 target_paths,
                 deadline_at,
+                historical_index,
             ):
                 unresolved.append(
                     {
@@ -217,18 +240,20 @@ def _reconcile_run(
         "acceptance_sha256": report_sha,
         "worker_result_sha256": worker_sha,
         "accepted_details": records,
+        "assessment_exhaustive": assessment_exhaustive,
         "unresolved": unresolved,
         "reconciled": not unresolved,
         "exports_reconciled": exports_verified,
         "activation_reconciled": not unresolved and exports_verified,
         "publication_boundary": publication_boundary,
         "expected_publication_scope": expected_publication_scope,
+        "historical_index_sha256": historical_index.sha256 if historical_index is not None else None,
         "verification_deadline_at": deadline_at,
         "scope": "Exact accepted occurrence/current readback or reviewed generation proof; current full-scope export cursor is required independently.",
     }
 
 
-def _reconcile_other(worker, attempt, receipt, destinations, deadline):
+def _reconcile_other(worker, attempt, receipt, destinations, deadline, readbacks):
     kind = attempt["kind"]
     source = attempt["source_id"]
     targets = []
@@ -251,11 +276,7 @@ def _reconcile_other(worker, attempt, receipt, destinations, deadline):
         raise ValueError("accepted_listing_document_task_crosswalk_differs")
     for destination in destinations:
         _check(deadline)
-        with closing(
-            sqlite3.connect(Path(destination).absolute().as_uri() + "?mode=ro", uri=True, timeout=1)
-        ) as live:
-            live.row_factory = sqlite3.Row
-            live.set_progress_handler(lambda: int(time.monotonic() >= deadline), 256)
+        with _readback(destination, deadline, readbacks) as live:
             exact = False
             try:
                 if kind == "listing":
@@ -317,7 +338,7 @@ def _reconcile_other(worker, attempt, receipt, destinations, deadline):
     }
 
 
-def _historical_occurrence(attempt, receipt, references, reviewed, destinations, deadline):
+def _historical_occurrence(attempt, receipt, references, reviewed, destinations, deadline, historical_index=None):
     """Explicit finite reviewed receipts; never discover history or choose latest.
 
     A producer's exact completed readback/transaction receipt proves a superseded
@@ -333,6 +354,10 @@ def _historical_occurrence(attempt, receipt, references, reviewed, destinations,
     artifact, sha = _control(receipt[field], deadline)
     if sha != receipt[hash_field]:
         return False
+    if historical_index is not None and historical_index.matches(
+        attempt, artifact, sha, destinations, deadline_at=deadline
+    ):
+        return True
     for reference in references:
         _check(deadline)
         if reference.get("result_sha256") not in reviewed:

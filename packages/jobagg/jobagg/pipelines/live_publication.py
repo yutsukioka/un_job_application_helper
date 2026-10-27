@@ -147,6 +147,10 @@ def _capture(path, expected_sha=None):
 
 
 def _accepted_detail(conn, row, observation):
+    from jobagg.runtime_holds import find as scoped_integrity_hold
+    hold = scoped_integrity_hold(conn, source=row["source_id"], unit="job:" + row["job_key"])
+    if hold:
+        raise ValueError("publication_scope_integrity_hold: " + hold["reason"])
     proof = json.loads(observation["proof"])
     from jobagg.accepted_evidence import legacy_rejection
     if reason := legacy_rejection(conn, row['job_key'], proof):
@@ -205,6 +209,10 @@ def _documents(conn, row, proof):
         "SELECT * FROM remediation_documents WHERE job_key=? ORDER BY task_id", (row["job_key"],)
     ):
         try:
+            from jobagg.runtime_holds import find as scoped_integrity_hold
+            hold = scoped_integrity_hold(conn, source=row["source_id"], task=record["task_id"], unit="job:" + row["job_key"])
+            if hold:
+                raise ValueError("publication_scope_integrity_hold: " + hold["reason"])
             doc = json.loads(record["manifest"])
             if (
                 record["source_id"] != row["source_id"]

@@ -1,0 +1,238 @@
+import json
+from pathlib import Path
+import time
+
+import pytest
+
+from jobagg import historical_artifacts
+from test_live_publication import setup, add_detail  # noqa: F401
+
+# ruff: noqa: F811
+
+
+def selected(setup):
+    add_detail(setup)
+    with setup["worker"].connect() as conn:
+        return conn.execute(
+            "SELECT attempt_id,evidence FROM remediation_attempts LIMIT 1"
+        ).fetchone()
+
+
+def test_surviving_bytes_do_not_manufacture_exit_publication_or_completeness(setup):
+    attempt, evidence = selected(setup)
+    with setup["worker"].connect() as conn:
+        before = conn.total_changes
+        result = historical_artifacts.assess(conn, attempt, deadline_at=time.monotonic() + 5)
+        assert conn.total_changes == before
+    assert result["disposition"] == "retained_detail_bytes_and_task_crosswalk_verified"
+    assert result["body_bytes_read"] > 0
+    for key in (
+        "historical_worker_exit_verified",
+        "publication_verified",
+        "completeness_certified",
+        "authorizes_recovery_or_retirement",
+    ):
+        assert result[key] is False
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "artifact_missing",
+        "capture_missing",
+        "artifact_changed",
+        "body_changed",
+        "crosswalk",
+        "byte_bound",
+    ],
+)
+def test_lost_or_changed_evidence_stays_explicitly_held(setup, change):
+    attempt, evidence = selected(setup)
+    path = Path(json.loads(evidence)["detail_path"])
+    value = json.loads(path.read_text())
+    meta_path = Path(value["proof"]["captures"][0]["path"])
+    meta = json.loads(meta_path.read_text())
+    if change == "artifact_missing":
+        path.unlink()
+    elif change == "capture_missing":
+        Path(meta["artifact"]).unlink()
+    elif change == "artifact_changed":
+        path.write_text("{}")
+    elif change == "body_changed":
+        Path(meta["artifact"]).write_bytes(b"corrupt gzip")
+    with setup["worker"].connect() as conn:
+        if change == "crosswalk":
+            conn.execute("UPDATE remediation_tasks SET external_id='another identity'")
+        result = historical_artifacts.assess(
+            conn,
+            attempt,
+            deadline_at=time.monotonic() + 5,
+            max_body_bytes=1 if change == "byte_bound" else 64 * 1024**2,
+        )
+    assert result["disposition"] in {"missing_evidence", "held"}
+    assert not result["historical_worker_exit_verified"] and not result["publication_verified"]
+
+
+def test_expired_artifact_review_cannot_report_success(setup):
+    attempt, _ = selected(setup)
+    with setup["worker"].connect() as conn, pytest.raises(TimeoutError):
+        historical_artifacts.assess(conn, attempt, deadline_at=time.monotonic() - 1)
+
+
+@pytest.mark.parametrize("status", [302, 400])
+def test_recorded_bodyless_redirect_or_error_does_not_hide_successful_capture(setup, status):
+    import hashlib
+
+    attempt, evidence = selected(setup)
+    artifact_path = Path(json.loads(evidence)["detail_path"])
+    value = json.loads(artifact_path.read_text())
+    metadata = setup["root"] / "bodyless.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "status_code": status,
+                "body_captured": False,
+                "source_binding": {"source_id": value["job"]["source_id"]},
+            }
+        )
+    )
+    value["proof"]["captures"].insert(
+        0, {"path": str(metadata), "sha256": hashlib.sha256(metadata.read_bytes()).hexdigest()}
+    )
+    artifact_path.write_text(json.dumps(value))
+    receipt = json.loads(evidence)
+    receipt["detail_sha256"] = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    with setup["worker"].connect() as conn:
+        conn.execute(
+            "UPDATE remediation_attempts SET evidence=? WHERE attempt_id=?",
+            (json.dumps(receipt), attempt),
+        )
+        result = historical_artifacts.assess(conn, attempt, deadline_at=time.monotonic() + 5)
+    assert result["disposition"] == "retained_detail_bytes_and_task_crosswalk_verified"
+    assert result["captures"][0]["body_recorded"] is False
+    assert not result["captures"][0]["identity_bound_detail"]
+    assert result["captures"][1]["identity_bound_detail"]
+    assert not result["historical_worker_exit_verified"] and not result["completeness_certified"]
+
+
+def test_bodyless_record_alone_or_successful_capture_missing_cannot_certify_detail(setup):
+    import hashlib
+
+    attempt, evidence = selected(setup)
+    p = Path(json.loads(evidence)["detail_path"])
+    value = json.loads(p.read_text())
+    m = Path(value["proof"]["captures"][0]["path"])
+    metadata = json.loads(m.read_text())
+    metadata["body_captured"] = False
+    for status in [302, 200]:
+        metadata["status_code"] = status
+        for key in ("artifact", "body_bytes", "body_sha256"):
+            metadata.pop(key, None)
+        m.write_text(json.dumps(metadata))
+        value["proof"]["captures"][0]["sha256"] = hashlib.sha256(m.read_bytes()).hexdigest()
+        p.write_text(json.dumps(value))
+        receipt = json.loads(evidence)
+        receipt["detail_sha256"] = hashlib.sha256(p.read_bytes()).hexdigest()
+        with setup["worker"].connect() as conn:
+            conn.execute(
+                "UPDATE remediation_attempts SET evidence=? WHERE attempt_id=?",
+                (json.dumps(receipt), attempt),
+            )
+            result = historical_artifacts.assess(conn, attempt, deadline_at=time.monotonic() + 5)
+        assert result["disposition"] == "held"
+        assert result["reason"] == (
+            "retained_identity_bound_detail_capture_missing"
+            if status == 302
+            else "retained_capture_incomplete_or_byte_bound"
+        )
+
+
+@pytest.mark.parametrize("change", ["retained", "only_error", "changed_error_bytes"])
+def test_retained_negative_response_bytes_are_verified_without_proving_detail_success(
+    setup, change
+):
+    import gzip
+    import hashlib
+
+    attempt, evidence = selected(setup)
+    detail_path = Path(json.loads(evidence)["detail_path"])
+    value = json.loads(detail_path.read_text())
+    metadata = setup["root"] / "error.json"
+    body = metadata.with_suffix(".body.gz")
+    raw = b"retained robots-route denial"
+    body.write_bytes(gzip.compress(raw))
+    metadata.write_text(
+        json.dumps(
+            {
+                "status_code": 400,
+                "body_captured": False,
+                "body_bytes": len(raw),
+                "body_sha256": hashlib.sha256(raw).hexdigest(),
+                "artifact": str(body),
+                "phase": {"kind": "robots", "job_id": "001"},
+            }
+        )
+    )
+    ref = {"path": str(metadata), "sha256": hashlib.sha256(metadata.read_bytes()).hexdigest()}
+    value["proof"]["captures"] = (
+        [ref] if change == "only_error" else [ref, *value["proof"]["captures"]]
+    )
+    detail_path.write_text(json.dumps(value))
+    receipt = json.loads(evidence)
+    receipt["detail_sha256"] = hashlib.sha256(detail_path.read_bytes()).hexdigest()
+    if change == "changed_error_bytes":
+        body.write_bytes(gzip.compress(b"changed"))
+    with setup["worker"].connect() as conn:
+        conn.execute(
+            "UPDATE remediation_attempts SET evidence=? WHERE attempt_id=?",
+            (json.dumps(receipt), attempt),
+        )
+        result = historical_artifacts.assess(conn, attempt, deadline_at=time.monotonic() + 5)
+    if change == "retained":
+        assert result["disposition"] == "retained_detail_bytes_and_task_crosswalk_verified"
+        assert result["captures"][0]["body_recorded"]
+        assert not result["captures"][0]["accepted_response"]
+        assert not result["captures"][0]["identity_bound_detail"]
+    else:
+        assert result["disposition"] == "held"
+    assert not result["historical_worker_exit_verified"] and not result["completeness_certified"]
+
+
+@pytest.mark.parametrize("change", [None, "blob", "text", "missing_original", "bound"])
+def test_current_document_bytes_remain_distinct_from_original_exit_and_fidelity(setup, change):
+    from test_live_publication import add_document, sha
+
+    record, proof = add_detail(setup)
+    manifest, data = add_document(setup, record, proof)
+    path = setup["root"] / "document_capture/document.json"
+    receipt = {"manifest": str(path), "sha256": sha(path)}
+    with setup["worker"].connect() as conn:
+        conn.execute(
+            "INSERT INTO remediation_attempts VALUES('doc-attempt','doc1','test_custom_html','document',1,2,'done',?)",
+            (json.dumps(receipt),),
+        )
+        if change == "blob":
+            conn.execute("UPDATE attachment_blobs SET content=?", (b"corrupt",))
+        if change == "text":
+            value = {**manifest, "extracted_text": "changed"}
+            conn.execute("UPDATE remediation_documents SET manifest=?", (json.dumps(value),))
+        if change == "missing_original":
+            path.unlink()
+        before = conn.total_changes
+        result = historical_artifacts.assess_current_document(
+            conn,
+            "doc1",
+            deadline_at=time.monotonic() + 5,
+            max_body_bytes=1 if change == "bound" else 64 * 1024**2,
+        )
+        assert conn.total_changes == before
+    assert not result["historical_worker_exit_verified"] and not result["completeness_certified"]
+    if change is None:
+        assert (
+            result["disposition"] == "retained_current_document_bytes_and_task_crosswalk_verified"
+        )
+        assert (
+            result["body_bytes_read"] == len(data) and result["extraction_fidelity_review_required"]
+        )
+    else:
+        assert result["disposition"] == "held"

@@ -366,6 +366,7 @@ def classify_run(run, *, allow_missing_generation_result=False, deadline_at=None
     def finish():
         controls.verify()
         answer["controls"] = list(controls.records)
+        answer["control_sha256"] = {str(path): record[1] for path, record in controls.records.items()}
         return answer
 
     def deficit(path, code="missing_control"):

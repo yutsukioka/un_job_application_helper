@@ -3,8 +3,10 @@
 `jobagg.storage_compression` is a standalone storage foundation. It resolves exact
 legacy bytes, versioned compressed representations, and existing dispatcher cold
 archive entries without changing logical paths or hashes. Publication, capture
-and retention readers still use their existing paths; they have not been migrated
-to this API. Do not retire their originals until their readers and dependency
+and retention readers still use their existing paths. Explicit offline historical
+plan/occurrence and catalogue readers can use independently pinned grants through
+[`historical_storage`](pr143-archival-implementation-2026-10-24.md); this does not
+migrate ordinary publication/recovery readers. Do not retire their originals until their readers and dependency
 checks support the new manifest. No automatic compression or migration is enabled.
 
 Gzip uses the standard library. Install `packages/jobagg[compression]` for the
@@ -57,6 +59,7 @@ copy read-only and immutable. Scratch is removed unless `--keep` is selected;
 API callers must close connections and clean up the returned snapshot.
 
 Byte limits and cooperative time checks bound processing stages. They do not
-interrupt blocking filesystem operations or SQLite integrity checks, and are not
+interrupt blocking filesystem operations. SQLite restore integrity checks use a
+cooperative progress handler when an absolute deadline is supplied. These are not
 a strict end-to-end wall-clock guarantee. Tests use synthetic artifacts; no live
 migration, deployed fingerprint reseal, or provider request is part of this change.

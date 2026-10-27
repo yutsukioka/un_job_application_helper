@@ -15,6 +15,7 @@ import test_remediation_worker as fixtures
 
 
 REVIEWED_PREDECESSORS = (
+    "ab4ec954db6f68b7964bb2d4672e561e5ed5a4d971d25dcafb46dcf0870932e9",
     "ca42922ee7982fdc51cd05a3a1d3e9911f23760feaa0bba6e1b3b049e40e30e0",
     "985d89ddc9b99e0e6d869b8d9175adc69818b216f5b9261fcb04cbd3fc760f3b",
     "7ec4f5b4d37797599eed3ae04af4c18992dd8a2d7e3c01db742e6d3a8c34362b",

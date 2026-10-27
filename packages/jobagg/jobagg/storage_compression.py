@@ -31,6 +31,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -273,9 +274,19 @@ def _check_deadline(deadline_at: float | None) -> None:
 def _deadline(max_seconds: float | None) -> float | None:
     if max_seconds is None:
         return None
-    if max_seconds <= 0:
-        raise ArtifactContractError("max_seconds must be positive")
+    if type(max_seconds) not in (int, float) or not math.isfinite(max_seconds) or max_seconds <= 0:
+        raise ArtifactContractError("max_seconds must be finite and positive")
     return time.monotonic() + max_seconds
+
+
+def _operation_deadline(max_seconds, deadline_at=None):
+    relative = _deadline(max_seconds)
+    if deadline_at is not None:
+        if type(deadline_at) not in (int, float) or not math.isfinite(deadline_at):
+            raise ArtifactContractError("Absolute storage deadline must be finite")
+        relative = min(relative, deadline_at) if relative is not None else deadline_at
+    _check_deadline(relative)
+    return relative
 
 
 def normalize_codec(codec: str = DEFAULT_CODEC, level: int | None = None) -> CodecSpec:
@@ -871,7 +882,11 @@ def _read_manifest(path: Path, root: Path) -> dict[str, Any]:
         return _empty_manifest()
     _regular(path)
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as stream:
+            payload = stream.read(32 * 1024**2 + 1)
+        if len(payload) > 32 * 1024**2:
+            raise ArtifactContractError("Storage representation manifest exceeds byte bound")
+        value = json.loads(payload)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ArtifactContractError("Storage representation manifest is unreadable") from exc
     return _validate_manifest(root, value)
@@ -1629,6 +1644,7 @@ def stream_artifact(
     dictionary_path: str | Path | None = None,
     max_output_bytes: int = DEFAULT_MAX_OBJECT_BYTES,
     max_seconds: float | None = None,
+    deadline_at: float | None = None,
     manifest_path: str | Path | None = None,
 ) -> ArtifactStream:
     """Open one logical artifact through legacy, manifested or cold storage."""
@@ -1636,7 +1652,7 @@ def stream_artifact(
     manifest = (
         Path(manifest_path).absolute() if manifest_path is not None else _default_manifest_path(root_path)
     )
-    deadline_at = _deadline(max_seconds)
+    deadline_at = _operation_deadline(max_seconds, deadline_at)
     descriptor, iterator, attempts = _open_logical_artifact(
         root_path,
         path,
@@ -1700,9 +1716,11 @@ def copy_artifact(
     dictionary_path: str | Path | None = None,
     max_output_bytes: int = DEFAULT_MAX_OBJECT_BYTES,
     max_seconds: float | None = None,
+    deadline_at: float | None = None,
     manifest_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Stream a verified artifact to a destination without installing partial bytes."""
+    deadline_at = _operation_deadline(max_seconds, deadline_at)
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor: ObjectDescriptor | None = None
@@ -1717,6 +1735,7 @@ def copy_artifact(
             dictionary_path=dictionary_path,
             max_output_bytes=max_output_bytes,
             max_seconds=max_seconds,
+            deadline_at=deadline_at,
             manifest_path=manifest_path,
         ) as stream:
             descriptor = stream.descriptor
@@ -1757,12 +1776,23 @@ def copy_artifact(
 
 
 @contextmanager
-def _shared_owner(shared_lock: str | Path | None) -> Iterator[None]:
+def _shared_owner(shared_lock: str | Path | None, *, owner_fd: int | None = None) -> Iterator[None]:
     """Acquire the existing dispatcher/worker owner before touching storage."""
     if shared_lock is None:
         raise ArtifactContractError("Execution requires the actual shared owner lock path")
     path = Path(shared_lock).absolute()
     before = _regular(path)
+    if owner_fd is not None:
+        from jobagg.runtime_source_head import owner
+        if path.resolve() != path:
+            raise ArtifactContractError("Shared owner path is aliased")
+        owner(owner_fd, path)
+        opened = os.fstat(owner_fd)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ArtifactIntegrityError("Borrowed shared owner differs")
+        yield
+        owner(owner_fd, path)
+        return
     descriptor = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
     with os.fdopen(descriptor, "r+b") as handle:
         opened = os.fstat(handle.fileno())
@@ -1890,7 +1920,9 @@ def preview_artifact(
     max_object_bytes: int = DEFAULT_MAX_OBJECT_BYTES,
     max_measure_bytes: int = DEFAULT_MAX_MEASURE_BYTES,
     max_seconds: float | None = None,
+    deadline_at: float | None = None,
     manifest_path: str | Path | None = None,
+    scratch_parent: str | Path | None = None,
 ) -> dict[str, Any]:
     """Measure a prospective representation without writing into the store.
 
@@ -1912,7 +1944,7 @@ def preview_artifact(
                 "Zstandard dictionaries cannot be used with gzip compression"
             )
         spec = CodecSpec(spec.name, spec.level, dictionary_sha256)
-    deadline_at = _deadline(max_seconds)
+    deadline_at = _operation_deadline(max_seconds, deadline_at)
     manifest = (
         Path(manifest_path).absolute()
         if manifest_path is not None
@@ -1947,6 +1979,7 @@ def preview_artifact(
         dictionary_path=dictionary_path,
         max_output_bytes=max_measure_bytes,
         max_seconds=max_seconds,
+        deadline_at=deadline_at,
         manifest_path=manifest,
     ) as stream:
         descriptor = stream.descriptor
@@ -1993,6 +2026,7 @@ def preview_artifact(
             dictionary_path=dictionary_path,
             deadline_at=deadline_at,
             max_object_bytes=max_object_bytes,
+            scratch_parent=scratch_parent,
         )
     report["scratch_bytes"] = block["scratch_bytes"]
     report["compressed_bytes"] = block["physical_bytes"]
@@ -2039,6 +2073,7 @@ def _measure_representation(
     dictionary_path: str | Path | None,
     deadline_at: float | None,
     max_object_bytes: int,
+    scratch_parent: str | Path | None = None,
 ) -> dict[str, Any]:
     """Round-trip a prospective object in scratch and prove it reconstructs."""
     descriptor = stream.descriptor
@@ -2048,7 +2083,7 @@ def _measure_representation(
         dictionary_path=dictionary_path,
         deadline_at=deadline_at,
     )
-    with tempfile.TemporaryDirectory(prefix="jobagg-preview-") as scratch_name:
+    with tempfile.TemporaryDirectory(prefix="jobagg-preview-", dir=scratch_parent) as scratch_name:
         scratch = Path(scratch_name)
         source = scratch / "source.bin"
         written = 0
@@ -2111,9 +2146,12 @@ def compress_artifact(
     max_object_bytes: int = DEFAULT_MAX_OBJECT_BYTES,
     max_measure_bytes: int = DEFAULT_MAX_MEASURE_BYTES,
     max_seconds: float | None = None,
+    deadline_at: float | None = None,
     manifest_path: str | Path | None = None,
+    scratch_parent: str | Path | None = None,
     owner_lock_seconds: float = 30.0,
     shared_lock: str | Path | None = None,
+    owner_fd: int | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """Preview by default; install a representation only with ``execute=True``.
@@ -2126,6 +2164,7 @@ def compress_artifact(
     supply the actual existing dispatcher/worker ``shared_lock`` path; the
     separate manifest lock only serializes representation writers.
     """
+    deadline_at = _operation_deadline(max_seconds, deadline_at)
     if retire_legacy and not (readers_support_manifest and retirement_approved):
         raise ArtifactContractError(
             "Legacy retirement requires reader-compatibility and dependency approval"
@@ -2150,6 +2189,8 @@ def compress_artifact(
         max_object_bytes=max_object_bytes,
         max_measure_bytes=max_measure_bytes,
         max_seconds=max_seconds,
+        deadline_at=deadline_at,
+        scratch_parent=scratch_parent,
         manifest_path=manifest,
     )
     report = {
@@ -2168,10 +2209,12 @@ def compress_artifact(
             f"Artifact cannot be installed: {preview['blocked_reason'] or 'measurement failed'}"
         )
     spec = CodecSpec(preview["codec"], preview["codec_level"], preview["dictionary_sha256"])
-    deadline_at = _deadline(max_seconds)
-    with _shared_owner(shared_lock):
+    _check_deadline(deadline_at)
+    owner_scope = (_shared_owner(shared_lock) if owner_fd is None
+                   else _shared_owner(shared_lock, owner_fd=owner_fd))
+    with owner_scope:
         layout = _ensure_store(root_path, manifest)
-        with _store_lock(manifest, wait_seconds=owner_lock_seconds):
+        with _store_lock(manifest, wait_seconds=min(owner_lock_seconds, max(0, deadline_at-time.monotonic())) if deadline_at is not None else owner_lock_seconds):
             installed = _install_representation(
                 root_path, layout, preview, spec,
                 retire_legacy=retire_legacy, readers_support_manifest=readers_support_manifest,
@@ -2534,6 +2577,7 @@ def _commit_representation(
             # the intent open for journal reconciliation instead of deleting evidence.
             committed = False
             recovered_sha = ""
+            reread_unknown = False
             try:
                 current = _read_manifest(layout["manifest"], root)
                 item = current["artifacts"].get(relative)
@@ -2554,8 +2598,8 @@ def _commit_representation(
                     ).hexdigest()
                     manifest_sha = recovered_sha
             except Exception:
-                committed = False
-            if committed:
+                reread_unknown = True
+            if committed or reread_unknown:
                 try:
                     _append_journal(
                         layout["journal"],
@@ -3001,8 +3045,12 @@ def restore_sqlite(
     path: str | Path,
     *,
     scratch_parent: str | Path | None = None,
+    expected_sha256: str | None = None,
+    expected_bytes: int | None = None,
+    max_output_bytes: int = DEFAULT_MAX_OBJECT_BYTES,
     reserve_bytes: int = DEFAULT_RESTORE_RESERVE_BYTES,
     max_seconds: float | None = None,
+    deadline_at: float | None = None,
     manifest_path: str | Path | None = None,
     dictionaries: Mapping[str, bytes] | None = None,
     dictionary_path: str | Path | None = None,
@@ -3013,6 +3061,7 @@ def restore_sqlite(
     manager).  The scratch directory is created with owner-only permissions and
     the restored file is opened ``mode=ro&immutable=1``.
     """
+    deadline_at = _operation_deadline(max_seconds, deadline_at)
     root_path = Path(root).absolute()
     relative = _relative(root_path, path)
     if not _is_sqlite(relative):
@@ -3028,9 +3077,13 @@ def restore_sqlite(
     with stream_artifact(
         root_path,
         path,
+        expected_sha256=expected_sha256,
+        expected_bytes=expected_bytes,
+        max_output_bytes=max_output_bytes,
         dictionaries=dictionaries,
         dictionary_path=dictionary_path,
         max_seconds=max_seconds,
+        deadline_at=deadline_at,
         manifest_path=manifest,
     ) as stream:
         descriptor = stream.descriptor
@@ -3050,10 +3103,13 @@ def restore_sqlite(
             root_path,
             path,
             target,
+            expected_sha256=expected_sha256,
+            expected_bytes=expected_bytes,
             dictionaries=dictionaries,
             dictionary_path=dictionary_path,
             max_output_bytes=descriptor.logical_bytes,
             max_seconds=max_seconds,
+            deadline_at=deadline_at,
             manifest_path=manifest,
         )
         if result["sha256"] != descriptor.logical_sha256:
@@ -3069,11 +3125,14 @@ def restore_sqlite(
             sha256=result["sha256"],
             size=result["size_bytes"],
         )
+        _check_deadline(deadline_at)
         connection = snapshot.open_readonly()
+        connection.set_progress_handler(lambda: int(deadline_at is not None and time.monotonic() >= deadline_at), 256)
         try:
             row = connection.execute("PRAGMA quick_check").fetchone()
         finally:
             connection.close()
+        _check_deadline(deadline_at)
         if row is None or row[0] != "ok":
             raise ArtifactIntegrityError("Restored SQLite database failed PRAGMA quick_check")
         return snapshot

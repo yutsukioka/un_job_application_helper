@@ -305,3 +305,20 @@ def test_json_starts_writing_before_fetching_next_row(tmp_path):
 
     export_jobs(Rows(), output_path=target)
     assert len(json.loads(target.read_text())) == 2
+
+
+
+def test_inner_export_expiry_is_resumable_pending_with_original_intact(export_case, monkeypatch):
+    from jobagg.verification_budget import VerificationBudgetExceeded
+    plan, item, target, old = export_case
+    original = publication.export_jobs
+    def expire(*args, **kwargs):
+        kwargs["output_stream"].write("partial")
+        raise VerificationBudgetExceeded("bounded export expired")
+    monkeypatch.setattr(publication, "export_jobs", expire)
+    result = publication.publish_exports(plan, [item])
+    assert result == {"complete": False, "exports": None, "reason": "deadline_during_export"}
+    assert target.read_bytes() == old
+    monkeypatch.setattr(publication, "export_jobs", original)
+    assert publication.publish_exports(plan, [item])["complete"]
+    assert json.loads(target.read_text())[0]["description"] == "Full public text"

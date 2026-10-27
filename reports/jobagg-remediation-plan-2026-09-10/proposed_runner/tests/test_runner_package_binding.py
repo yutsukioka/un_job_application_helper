@@ -312,3 +312,30 @@ sys.exit(code)
     assert outcome["publication_status"] == "published"
     request = json.loads((Path(outcome["run_dir"]) / "publication_request.json").read_text())
     assert Path(request["publication_snapshot"]["path"]).is_file()
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_nested_policy_helper_resolves_only_inside_selected_release(tmp_path, foreign):
+    selected = package(tmp_path / "selected-release", "selected")
+    nested = selected / "jobagg/pipelines"
+    nested.mkdir()
+    (nested / "__init__.py").write_text("")
+    helper = nested / "worker_policy.py"
+    if foreign:
+        outside = tmp_path / "foreign_policy.py"
+        outside.write_text("raise AssertionError('foreign policy executed')\n")
+        helper.symlink_to(outside)
+    else:
+        helper.write_text("from jobagg.selected_dependency import RELEASE\n")
+    result = probe(tmp_path, selected, f"""
+config = {{'worker_cwd': selected}}
+try:
+    module = runner.package_helper(config, 'pipelines.worker_policy')
+except ValueError as error:
+    assert {foreign!r} and 'Reviewed package helper is missing' in str(error), str(error)
+else:
+    assert not {foreign!r}
+    assert module.RELEASE == 'selected'
+    assert Path(module.__file__) == selected / 'jobagg/pipelines/worker_policy.py'
+""")
+    assert result.returncode == 0, result.stderr

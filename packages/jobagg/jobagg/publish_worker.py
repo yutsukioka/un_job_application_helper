@@ -133,6 +133,15 @@ def _run(args, started):
             deadline = min(
                 deadline, time.monotonic() + max(0, float(request["deadline_epoch"]) - time.time())
             )
+        if request.get("publication_selection") is not None:
+            # Check the authoritative source under the shared owner immediately
+            # before publication, including replay of a sealed projection.
+            from contextlib import closing
+            import sqlite3
+            from jobagg.runtime_holds import require_selection
+            with closing(sqlite3.connect(Path(args.worker_database).as_uri() + "?mode=ro", uri=True)) as source:
+                source.set_progress_handler(lambda: int(time.monotonic() >= deadline), 256)
+                require_selection(source, request["publication_selection"])
         recovery = None
         if request.get("recover_publication") is True:
             recovery = validate_recovery_generation(

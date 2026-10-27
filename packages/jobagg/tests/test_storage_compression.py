@@ -1102,3 +1102,63 @@ def test_unavailable_zstd_representation_falls_back_to_gzip(
         assert tuple(stream.attempts) == (expected_skip, "gzip:selected")
         assert stream.descriptor.codec == "gzip"
         assert b"".join(stream) == payload
+
+
+def test_unreadable_manifest_after_uncertain_commit_keeps_object_and_open_intent(tmp_path, monkeypatch):
+    path, payload = _write_json(tmp_path)
+    store = tmp_path / storage.STORAGE_DIRECTORY
+    manifest = store / storage.MANIFEST_NAME
+    real_sync, real_read = storage._sync_dir, storage._read_manifest
+    failed = False
+
+    def uncertain_sync(parent):
+        nonlocal failed
+        if parent == store and manifest.exists() and not failed:
+            failed = True
+            raise RuntimeError("uncertain fsync")
+        return real_sync(parent)
+
+    def unreadable_reread(*args, **kwargs):
+        if failed:
+            raise OSError("manifest temporarily unreadable")
+        return real_read(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "_sync_dir", uncertain_sync)
+        patch.setattr(storage, "_read_manifest", unreadable_reread)
+        with pytest.raises(RuntimeError, match="uncertain fsync"):
+            _compress(tmp_path, path, retire=False)
+    records = [json.loads(line) for line in (store/storage.JOURNAL_NAME).read_text().splitlines()]
+    assert any(r["kind"] == "commit_uncertain" for r in records)
+    assert not any(r["kind"] == "failed" for r in records)
+    entry = _representation(tmp_path, "artifact.json")
+    assert all((tmp_path/r["physical_path"]).exists() for r in entry["representations"])
+    assert _reconcile(tmp_path)["completed"] == 1
+    assert storage.resolve_artifact(tmp_path,path).data == payload
+
+
+def test_preview_time_is_charged_to_installation_absolute_deadline(tmp_path, monkeypatch):
+    path, _ = _write_json(tmp_path)
+    real_preview = storage.preview_artifact
+    clock = [10.0]
+    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
+
+    def finish_at_deadline(*args, **kwargs):
+        result = real_preview(*args, **kwargs)
+        clock[0] = 11.0
+        return result
+
+    monkeypatch.setattr(storage, "preview_artifact", finish_at_deadline)
+    with pytest.raises(TimeoutError, match="budget exhausted"):
+        storage.compress_artifact(tmp_path,path,codec="gzip",execute=True,
+            shared_lock=_owner_path(tmp_path),deadline_at=11.0)
+    assert path.exists()
+    assert not (tmp_path/storage.STORAGE_DIRECTORY).exists()
+
+
+def test_manifest_read_is_bounded_before_json_parse(tmp_path):
+    manifest = tmp_path/"oversized.json"
+    with manifest.open("wb") as stream:
+        stream.truncate(32*1024**2+1)
+    with pytest.raises(storage.ArtifactContractError, match="bound|large|size"):
+        storage._read_manifest(manifest,tmp_path)

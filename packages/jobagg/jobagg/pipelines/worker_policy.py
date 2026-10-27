@@ -43,10 +43,20 @@ def save(path, value):
 
 
 class SharedPolicy:
-    def __init__(self, owner, source_ids, bootstrap=None):
+    def __init__(self, owner, source_ids, bootstrap=None, *, native_location=None):
         self.owner = Path(owner).absolute()
         self.root = Path(str(self.owner) + ".worker-policy")
         self.marker = Path(str(self.owner) + ".worker-policy.json")
+        self.native_epoch = None
+        if native_location is not None:
+            if (bootstrap is not None or not isinstance(native_location, dict)
+                    or set(native_location) != {"root", "epoch"} or not native_location["epoch"]):
+                raise ValueError("existing_native_policy_location_required")
+            root = Path(native_location["root"])
+            if not root.is_absolute() or root.resolve() != root or not (root / "authority.json").is_file():
+                raise ValueError("existing_native_policy_location_required")
+            self.root, self.native_epoch = root, native_location["epoch"]
+            self.marker = root / "legacy-policy-marker-disabled.json"
         self.source_ids = set(source_ids)
         self.bootstrap = Path(bootstrap).resolve() if bootstrap else None
         with _STORE_LOCKS_GUARD:
@@ -250,6 +260,8 @@ class SharedPolicy:
 
     def native_authority(self):
         from jobagg.policy_authority import PolicyAuthority
+        if self.native_epoch is not None and not (self.root / 'authority.json').exists():
+            raise ValueError('native_policy_location_head_missing_review_required')
         if (self.root / 'authority.json').exists():
             value = getattr(self, '_native', None)
             if value is None:
