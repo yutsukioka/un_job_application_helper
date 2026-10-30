@@ -444,8 +444,9 @@ def failure_hold(config, fingerprint, *, stage=None):
     if end_to_end.get('unchanged_failures', 0) >= 3 and stage_failures < 3:
         selected = 'end_to_end'
     circuit = prior.get("circuits", {}).get(selected)
-    # Preserve pre-M1 holds until explicitly reviewed; a release change isn't recovery.
-    if circuit is None and prior.get("unchanged_failures", 0) >= 3:
+    # The structured circuit table is authoritative. Its top-level summary is
+    # not a hold on other stages. Keep the fallback only for pre-M1 records.
+    if "circuits" not in prior and circuit is None and prior.get("unchanged_failures", 0) >= 3:
         circuit = prior
     held_episode = max([circuit, *circuit.get("class_episodes", {}).values()],
                        key=lambda item: item.get("unchanged_failures", 0)) if circuit else None
