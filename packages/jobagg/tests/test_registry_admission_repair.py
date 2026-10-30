@@ -29,3 +29,20 @@ def test_rejects_changed_or_accepted_admission(change, accepted):
     m.check_failed_admission(state, outcome, False)
     with pytest.raises(ValueError):
         m.check_failed_admission({**state, **change}, outcome, accepted)
+
+
+def test_due_preflight_retains_debt_and_rejects_other_gaps():
+    import copy
+    vector = {'pending': None, 'unscoped_held': None, 'held': ['held-unit'],
+              'revalidation_reasons': ['time_transition_due'], 'next_transition_at': 123}
+    before = copy.deepcopy(vector)
+    m.allow_due_preflight_closure(vector, approved=True, boundary_verified=True)
+    assert vector == before
+    for changes in ({'pending': ['pending-unit']}, {'unscoped_held': ['unknown']},
+                    {'revalidation_reasons': []}, {'revalidation_reasons': ['contract_epoch_changed']},
+                    {'revalidation_reasons': ['time_transition_due', 'contract_epoch_changed']}):
+        with pytest.raises(ValueError):
+            m.allow_due_preflight_closure({**vector, **changes}, approved=True, boundary_verified=True)
+    for approved, verified in ((False, True), (True, False)):
+        with pytest.raises(ValueError):
+            m.allow_due_preflight_closure(vector, approved=approved, boundary_verified=verified)

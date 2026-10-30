@@ -34,6 +34,9 @@ def encoded(value):
 
 def save(path, data):
     payload = data if isinstance(data, bytes) else encoded(data)
+    if path.exists():
+        require(path.read_bytes() == payload, 'Existing evidence differs: ' + str(path))
+        return
     with path.open('xb') as stream:
         stream.write(payload)
         stream.flush()
@@ -59,10 +62,16 @@ def check_failed_admission(state, outcome, accepted):
             and outcome['publication_status'] == 'not_started', 'Not a preflight process failure')
 
 
+def allow_due_preflight_closure(vector, *, approved, boundary_verified):
+    require(approved and boundary_verified, 'Containment or publication boundary invalid')
+    require(vector['pending'] is None and vector.get('unscoped_held') is None, 'Publication work requires repair')
+    require(vector['revalidation_reasons'] == ['time_transition_due'], 'Unexpected revalidation debt')
+
+
 def protected(conn, containment):
     result = {}
     for table in ('jobagg_dirty_current', 'jobagg_dirty_versions', 'jobagg_dirty_cohorts',
-                  'jobagg_legacy_controls', 'jobagg_legacy_dependencies'):
+                  'jobagg_legacy_controls', 'jobagg_legacy_dependencies', 'jobagg_dirty_transitions'):
         h = hashlib.sha256()
         count = 0
         for row in conn.execute('SELECT * FROM ' + table + ' ORDER BY 1'):
@@ -71,6 +80,7 @@ def protected(conn, containment):
         result[table] = {'rows': count, 'sha256': h.hexdigest()}
     rows = conn.execute('SELECT * FROM jobagg_legacy_review_holds WHERE run_id!=? ORDER BY run_id',
                         (containment.KEY,)).fetchall()
+    result['next_transition_at'] = conn.execute('SELECT next_transition_at FROM jobagg_dirty_state WHERE id=1').fetchone()[0]
     result['unrelated_holds'] = sha(json.dumps(rows).encode())
     return result
 
@@ -153,16 +163,23 @@ def main():
                 continue
             raise ValueError('Recorded worker/wrapper PID is live; inspect boot/process identity')
         require(d.stat().st_dev == Path(config['publication_worker_database']).stat().st_dev, 'Backup requires same-volume operation directory')
-        save(fence, token)  # Exclusive creation; never replace another operator's fence.
-        save(d / 'fence-owned.json', token)
+        if fence.exists():
+            require((d / 'fence-owned.json').exists(), 'Existing fence belongs to another operation')
+            token = (d / 'fence-owned.json').read_bytes()
+            require(fence.read_bytes() == token, 'Fence ownership changed')
+        else:
+            require(not (d / 'fence-owned.json').exists(), 'Previous operation fence was removed; inspect first')
+            save(fence, token)  # Exclusive creation; never replace another operator's fence.
+            save(d / 'fence-owned.json', token)
         database = Path(config['publication_worker_database'])
         for suffix in ('', '-wal', '-shm'):
             source = Path(str(database) + suffix)
-            if source.exists():
+            if source.exists() and not (d / ('worker.before.sqlite3' + suffix)).exists():
                 clone_file(source, d / ('worker.before.sqlite3' + suffix))
         for name in ('request.json', 'outcome.json', 'state.json', 'stdout.log'):
             save(d / ('failed-' + name), (run / name).read_bytes())
-        save(d / 'health.before.json', health_path.read_bytes())
+        if not (d / 'health.before.json').exists():
+            save(d / 'health.before.json', health_path.read_bytes())
         with closing(sqlite3.connect(database, timeout=1)) as conn:
             work.configure(conn)
             state = authority.validate(conn)
@@ -172,7 +189,16 @@ def main():
             proof = dict(accepted_progress=0, contract_sha256=old_contract['sha256'],
                          config_sha256=old_contract['config_sha256'], implementation_sha256=a.expected_seal,
                          policy_location=config['policy_authority_location'])
-            require(containment.can_close_scoped_noop(conn, a.run_id, **proof), 'Native scoped-noop proof failed')
+            scoped_noop = containment.can_close_scoped_noop(conn, a.run_id, **proof)
+            if not scoped_noop:
+                import time
+                from jobagg.publication_fence import verify_boundary
+                control = json.loads(state['control_json'])
+                allow_due_preflight_closure(work.vector(conn, contract_sha256=old_contract['sha256'], now=time.time()),
+                    approved=containment.approved(conn, config_sha256=old_contract['config_sha256'],
+                        implementation_sha256=a.expected_seal, policy_location=config['policy_authority_location']),
+                    boundary_verified=control.get('publication_scope') is not None and verify_boundary(
+                        control.get('publication_cursor'), expected_scope=control['publication_scope']))
             before = protected(conn, containment)
             review_text = conn.execute('SELECT review_json FROM jobagg_legacy_review_holds WHERE run_id=?', (containment.KEY,)).fetchone()[0]
             review = json.loads(review_text)
@@ -206,7 +232,12 @@ def main():
                 for sql, args in statements + [('UPDATE jobagg_runtime_state SET phase=? WHERE id=1', ('idle',))]:
                     conn.execute('EXPLAIN ' + sql, args).fetchall()
                 with conn:
-                    containment.close_scoped_noop(conn, a.run_id, **proof)
+                    if scoped_noop:
+                        containment.close_scoped_noop(conn, a.run_id, **proof)
+                    else:
+                        # Retire only the proven zero-effects failed admission.
+                        # Due work stays untouched for the next natural publication.
+                        authority.finish_publication(conn, a.run_id)
                     for sql, args in statements:
                         require(conn.execute(sql, args).rowcount == 1, 'Binding update missed row')
                     after = authority.validate(conn)
@@ -216,7 +247,7 @@ def main():
                             implementation_sha256=a.expected_seal, policy_location=config['policy_authority_location']), 'New containment binding failed')
             save(d / 'binding-sql-complete.json', {'complete': True, 'phase': after['phase'],
                  'revision': after['revision'], 'protected_unchanged': True, 'failed_run': a.run_id,
-                 'worker_success_credit': False, 'new_contract': contract['sha256']})
+                 'worker_success_credit': False, 'due_transitions_preserved': True, 'new_contract': contract['sha256']})
         require(fence.read_bytes() == token, 'Fence ownership changed')
         temporary = a.config.with_name('.registry-repair-config.tmp')
         save(temporary, (d / 'dispatcher.after.json').read_bytes())
