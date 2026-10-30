@@ -393,3 +393,20 @@ def test_audit_requires_finite_reviewable_clock_and_lag_without_mutation(native,
         authority.audit(**kwargs)
     assert authority.head.read_bytes() == before
     assert authority.revision() == 0
+
+
+def test_worker_batch_does_not_audit_and_retains_native_rate_limits(native, monkeypatch):
+    policy, owner = native
+    clock = time.time()
+    policy.reserve('retained-charge', 'example', 'detail', clock - 1, policy.root, 'task')
+    authority = activate(policy, owner)
+    policy._native = authority
+    monkeypatch.setattr(policy, 'native_authority', lambda: authority)
+    monkeypatch.setattr(authority, 'audit', lambda **_: pytest.fail('audit must be separate'))
+    before = authority.revision()
+    policy.begin_batch(owner_fd=owner.fileno(), audit={'max_objects': 1024, 'maximum_lag_seconds': 1})
+    assert authority.revision() == before
+    assert authority.due('example', clock, minimum=30, jitter=0, batch=0, pause=120) > clock
+    with authority.connect() as conn:
+        assert conn.execute('SELECT count(*) FROM attempts').fetchone()[0] == 1
+    policy.finish_batch()

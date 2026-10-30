@@ -279,21 +279,18 @@ class SharedPolicy:
 
     @_synchronized
     def begin_batch(self, *, check_deadline=None, owner_fd=None, audit=None, storage=None):
-        """One full audit under the shared owner; subsequent claims use this revision.
+        """Check the policy authority before claims; evidence audit is separate.
 
-        Every cooperating writer uses reserve/finish, which update this same
-        process-wide projection under the root lock. Final audit detects external
-        history interference before a successful worker report can be emitted.
+        Native reservations and quota checks continue to use the same indexed
+        authority under the owner lock. Evidence audit is an explicit operation.
         """
         authority = self.native_authority()
         if authority:
             authority.owner_fd = owner_fd
             authority.storage = storage
             authority.check_deadline = check_deadline or (lambda: None)
-            if not audit:
-                raise ValueError('reviewed_policy_audit_bounds_required')
-            authority.audit(limit=audit['max_objects'], now=time.time(),
-                            maximum_lag_seconds=audit['maximum_lag_seconds'])
+            # Evidence auditing is an explicit separate operation. Do not reset
+            # audit progress or remove policy charges when starting a batch.
             authority.revision()
             self._batch_events = {}
             return
